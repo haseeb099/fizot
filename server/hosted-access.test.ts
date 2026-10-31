@@ -1,6 +1,6 @@
 // The HTTPS backchannel is injected, never redirected to a real portal.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { request, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,6 +12,8 @@ import { SessionRegistry } from "./sessions.ts";
 import { HOSTED_CONTRACT_HEADER, HOSTED_CONTRACT_METADATA } from "./hosted-contract.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// PATCH-2: these cases import enterprise/server/workspace-access.ts. This fork does not carry that file.
+const enterpriseLayerMissing = !existsSync(join(ROOT, "enterprise"));
 let PORT: number;
 const HOST = "acme.example.test";
 const EMAIL = "member@example.test";
@@ -152,7 +154,7 @@ afterAll(async () => {
 });
 
 describe("hosted bridge in the full server", () => {
-  it("loads the optional hook before listening, redirects hosted navigation, and disables legacy sign-in", async () => {
+  it.skipIf(enterpriseLayerMissing)("loads the optional hook before listening, redirects hosted navigation, and disables legacy sign-in", async () => {
     expect(log).toContain("enterprise edition for Fixture");
     expect((await call("/")).location).toBe("/api/auth/hosted/start");
     expect((await call("/pair")).location).toBe("/api/auth/hosted/start");
@@ -165,7 +167,7 @@ describe("hosted bridge in the full server", () => {
     expect((await call("/api/auth/session", { local: true })).body.kind).toBe("loopback");
     expect((await call("/api/health/hosted")).status).toBe(503);
   });
-  it("accepts a portal session, enforces outages/demotion, and issues only current permissions on reauthentication", async () => {
+  it.skipIf(enterpriseLayerMissing)("accepts a portal session, enforces outages/demotion, and issues only current permissions on reauthentication", async () => {
     const cookie = await login();
     expect((await call("/api/auth/session", { cookie })).body).toMatchObject({ scopes: ["admin", "client"], hosted: true });
     expect((await call("/", { cookie })).body).toContain("Fixture workspace");
@@ -179,7 +181,7 @@ describe("hosted bridge in the full server", () => {
     expect((await call("/api/auth/session", { cookie: memberCookie })).body).toMatchObject({ scopes: ["client"], hosted: true });
     expect((await call("/api/auth/sessions", { cookie: memberCookie })).status).toBe(403);
   });
-  it("closes an existing quiet event stream within fifteen seconds of remote revocation", async () => {
+  it.skipIf(enterpriseLayerMissing)("closes an existing quiet event stream within fifteen seconds of remote revocation", async () => {
     state();
     const cookie = await login();
     const response = await new Promise<IncomingMessage>((resolve, reject) => {
@@ -194,7 +196,7 @@ describe("hosted bridge in the full server", () => {
     expect(Date.now() - revokedAt).toBeLessThan(15_000);
     expect((await call("/api/auth/session", { cookie })).status).toBe(401);
   }, 17_000);
-  it("grants only new local Full tasks under the explicit hosted policy and preserves defaults and existing tasks", async () => {
+  it.skipIf(enterpriseLayerMissing)("grants only new local Full tasks under the explicit hosted policy and preserves defaults and existing tasks", async () => {
     state();
     await restart({ OMB_ADMIN_MEMBERSHIP: "portal" });
     await policyHealth(false);
@@ -243,7 +245,7 @@ describe("hosted bridge in the full server", () => {
     expect((await call("/api/auth/email/verify", { method: "POST" })).status).toBe(403);
     expect((await call("/api/auth/session", { local: true })).body.kind).toBe("loopback");
   }, 25_000);
-  it("uses explicit portal membership without local allow-list synchronization and still revokes quiet streams", async () => {
+  it.skipIf(enterpriseLayerMissing)("uses explicit portal membership without local allow-list synchronization and still revokes quiet streams", async () => {
     await waitForExit(child, { signal: "SIGTERM" });
     state();
     writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({ signIn: { admins: [], members: [] }, instances: INSTANCES }));
@@ -321,7 +323,7 @@ describe("hosted bridge in the full server", () => {
     await policyHealth(false);
     await refuseFullTask();
   }, 25_000);
-  it("offers the Slack management link for real agents to hosted admins and members, without sharing credentials", async () => {
+  it.skipIf(enterpriseLayerMissing)("offers the Slack management link for real agents to hosted admins and members, without sharing credentials", async () => {
     state();
     await restart({ OMB_ADMIN_MEMBERSHIP: "portal" });
     const botId = await policyBot();
@@ -351,7 +353,7 @@ describe("hosted bridge in the full server", () => {
     expect((await call(path, { local: true })).body).toEqual({ available: false });
     policyEvidence.push({ slackManagement: management.body, memberStatus: asMember.status, localMembershipAvailable: false });
   }, 30_000);
-  it("treats a session-less local caller as a service by default: the Slack worker's calls work, admin changes need a session", async () => {
+  it.skipIf(enterpriseLayerMissing)("treats a session-less local caller as a service by default: the Slack worker's calls work, admin changes need a session", async () => {
     state();
     await restart({ OMB_ADMIN_MEMBERSHIP: "portal", OMB_SHARED_WORKSPACE_FULL_ACCESS: "1", OMB_LOOPBACK_TRUST: undefined });
     expect(log).toContain("local requests: service trust (hosted workspace)");

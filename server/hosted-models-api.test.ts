@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,6 +8,8 @@ import { launchVerificationServer, runControlOmb, verificationServerEnvironment,
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+// PATCH-2: this case imports enterprise/server/workspace-access.ts. This fork does not carry that file.
+const enterpriseLayerMissing = !existsSync(join(ROOT, "enterprise"));
 const TOKEN = `omb_workspace_${"s".repeat(43)}`;
 const ORIGINAL_TEXT = "Preserve this synthetic conversation through model changes.";
 const INITIAL = {
@@ -188,7 +190,7 @@ afterAll(async () => {
 });
 
 describe("hosted model policy in the full runtime", () => {
-  it("advertises only assignments and reconciles saved choices without changing conversation history", async () => {
+  it.skipIf(enterpriseLayerMissing)("advertises only assignments and reconciles saved choices without changing conversation history", async () => {
     await expectCatalog(INITIAL);
     const health = await api("GET", "/api/health/hosted");
     expect(health.status).toBe(200);
