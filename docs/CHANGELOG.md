@@ -4,7 +4,7 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15.
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 
@@ -67,3 +67,19 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. No product behaviour change.
 - Files / Patch IDs: PATCH-3 (`docs/CHANGELOG.md`, `docs/PATCH_REGISTRY.md`). PATCH-4 notes `vite.config.ts`, `.github/workflows/docker.yml`, `scripts/bundle-server.mjs` and `scripts/ci-scope.test.ts`, which were not edited. `server/enterprise.ts` still loads the layer only when the folder is present.
 - Rollback: Revert this docs commit. The test-skip commit stays. Do not edit `upstream-mirror`.
+
+## CL-13 Add tests/matrix.csv and the TM-U and TM-I checks
+
+- Type: Code
+- Date: 2026-10-31
+- Area: CI & tests
+- Risk: Low
+- Related task: T0.4 (FZ-4)
+- Logged by: Cursor
+- Commit: `d9a59cb1fc775ab304d1f2c13b424567f8afb1e3`
+- Why we changed it: Page 06 lists a unit, integration and end-to-end check for each build step. Those 42 rows were not in the repo, so a missing gate could not fail CI.
+- How it works: `tests/matrix.csv` has the 42 rows from page 06. Columns are `id`, `step`, `layer`, `test`, `journey_or_tc`, `gate`, `status`. The cost-sheet integration row CS-I says the sheet reads measured Fly staging usage after Gate 0b. `scripts/testing/matrix-plan.test.ts` fails if a row is missing an id, layer, gate or journey (TM-U) and if G0, G0b, G1, G2, G3, G4, G5 or G6 has no row (TM-I). The static CI job runs that file with the other fast checks.
+- Why it is necessary: A gate that names a test has to point at a row, and CI has to fail when a row or a gate is missing.
+- Impact (cost / risk / timeline): No spend. Lint passed (`oxlint --deny-warnings`, exit 0). Typecheck passed (`tsc -b && tsc -p tsconfig.server.json`, exit 0). `pnpm exec vitest run scripts/testing/matrix-plan.test.ts scripts/ci-workflow.test.ts scripts/ci-scope.test.ts scripts/testing/duration-sequencer.test.ts`: 4 files passed; 143 passed, 2 skipped (145); duration 153.92s; exit 0. The permission-broker ids PB-U, PB-I and PB-E follow the same two-letter pattern as the other steps. No task page named that prefix.
+- Files / Patch IDs: PATCH-5 (`.github/workflows/ci.yml`, `scripts/ci-workflow.test.ts`). PATCH-6 (`tests/matrix.csv`, `scripts/testing/matrix-plan.test.ts`).
+- Rollback: Revert `d9a59cb1fc775ab304d1f2c13b424567f8afb1e3`. The static CI command returns to the three files it ran before. Do not edit `upstream-mirror`.
