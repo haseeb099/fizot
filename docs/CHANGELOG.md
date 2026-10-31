@@ -83,3 +83,19 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. Lint passed (`oxlint --deny-warnings`, exit 0). Typecheck passed (`tsc -b && tsc -p tsconfig.server.json`, exit 0). `pnpm exec vitest run scripts/testing/matrix-plan.test.ts scripts/ci-workflow.test.ts scripts/ci-scope.test.ts scripts/testing/duration-sequencer.test.ts`: 4 files passed; 143 passed, 2 skipped (145); duration 153.92s; exit 0. The permission-broker ids PB-U, PB-I and PB-E follow the same two-letter pattern as the other steps. No task page named that prefix.
 - Files / Patch IDs: PATCH-5 (`.github/workflows/ci.yml`, `scripts/ci-workflow.test.ts`). PATCH-6 (`tests/matrix.csv`, `scripts/testing/matrix-plan.test.ts`).
 - Rollback: Revert `d9a59cb1fc775ab304d1f2c13b424567f8afb1e3`. The static CI command returns to the three files it ran before. Do not edit `upstream-mirror`.
+
+## CL-14 Stop the matrix checks from passing on a copied id or a stuffed gate
+
+- Type: Code
+- Date: 2026-10-31
+- Area: CI & tests
+- Risk: Low
+- Related task: T0.4 (FZ-4)
+- Logged by: Cursor
+- Commit: `fdf994087e21ac586ecfa5e3c5765912b44e304e`
+- Why we changed it: The review of `d32de4b7f` found that 28 journey cells copied the row id, and that the three CI rows listed every gate so the gate check could not fail.
+- How it works: `journey_or_tc` is a J1 to J11 id, a TC id, or the literal `none`. `none` is accepted only for the ids listed in `scripts/testing/matrix-plan.test.ts`. A new row that uses `none` fails until that id is added to the list. CI-U, CI-I and CI-E are G0 only. RD-I is the S2.12 filing check and is G3. GN-I and GN-E are the H7.4 checks and are G6. G3 is also the cost-sheet rows from page 06. G1 stays in `NOT_YET_COVERED` because page 06 has no unit, integration or end-to-end step for it: Gate G1 is written evidence on V1.1. Every row has `owner_task`. The file has 45 rows. Fork and brand rows name S2.2; that step on page 06 spans S2.2 to S2.5. Permission-broker rows name PI3.1, the task that states the Ask-mode rule. PI3.1's own test lines are AD-I and AD-E.
+- Why it is necessary: A check that accepts the row id as its own journey, or that lets one row name every gate, cannot fail when a journey or a gate is missing.
+- Impact (cost / risk / timeline): No spend. Lint passed (`oxlint --deny-warnings`, exit 0). Typecheck passed (`tsc -b && tsc -p tsconfig.server.json`, exit 0). The lint-then-typecheck command exited 0 after 304s. `pnpm exec vitest run scripts/testing/matrix-plan.test.ts scripts/ci-workflow.test.ts scripts/ci-scope.test.ts`: 3 files passed; 130 passed; duration 131.90s; exit 0.
+- Files / Patch IDs: PATCH-6 (`tests/matrix.csv`, `scripts/testing/matrix-plan.test.ts`).
+- Rollback: Revert `fdf994087e21ac586ecfa5e3c5765912b44e304e`. The 42-row file returns, including the copied journey ids and the CI rows that listed every gate. Do not edit `upstream-mirror`.
