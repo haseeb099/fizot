@@ -99,3 +99,19 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. Lint passed (`oxlint --deny-warnings`, exit 0). Typecheck passed (`tsc -b && tsc -p tsconfig.server.json`, exit 0). The lint-then-typecheck command exited 0 after 304s. `pnpm exec vitest run scripts/testing/matrix-plan.test.ts scripts/ci-workflow.test.ts scripts/ci-scope.test.ts`: 3 files passed; 130 passed; duration 131.90s; exit 0.
 - Files / Patch IDs: PATCH-6 (`tests/matrix.csv`, `scripts/testing/matrix-plan.test.ts`).
 - Rollback: Revert `fdf994087e21ac586ecfa5e3c5765912b44e304e`. The 42-row file returns, including the copied journey ids and the CI rows that listed every gate. Do not edit `upstream-mirror`.
+
+## CL-15 The test baseline is 25 files on Windows and none of those on Linux
+
+- Type: Decision
+- Date: 2026-10-31
+- Area: CI & tests
+- Risk: Low
+- Related task: T0.3 (FZ-3)
+- Logged by: Cursor
+- Why we changed it: The 25 pre-existing failures were observed on Windows. Page 03 says the repo needs Linux or macOS, so a Windows failure is not the fork baseline until the same files have been run on Linux.
+- How it works: WSL could not start because its disk was missing, and Docker was not running. Branch `sandbox/baseline-linux` was created from tag v0.1.134, commit `0213b7435fc83a936f77c18475ba2a0d7b7c2de4`, with one workflow that runs these 25 files on `ubuntu-latest`. That branch is not `main` and it is not `upstream-mirror`. The workflow commit on that branch is `f804deb6ea8fff1518fe0a5ebc3e9525cea03aaa`. No upstream test was edited.
+- Why it is necessary: The Windows result and the Linux result have to be named separately, or a symlink error on this machine gets treated as a fork defect.
+- Impact (cost / risk / timeline): No spend. No product change. The baseline is: these 25 files fail on upstream v0.1.134 on Windows, and none of them fail on Linux. GitHub Actions run [41252793529](https://github.com/haseeb099/fizot/actions/runs/41252793529) on Ubuntu: 25 files passed; 496 passed, 4 skipped (500); duration 289.26s; exit 0. The 4 skips are inside `scripts/prepare-duckdb.test.mjs`. The Windows names are the same 25, from the targeted run recorded in CL-11. They were not re-run on Windows in this step, and they were not fixed.
+- Files that fail on Windows and passed on Linux: `scripts/prepare-duckdb.test.mjs`; `server/browser-upload.test.ts`; `server/cloud-lending-memory.e2e.test.ts`; `server/cloud-lending.test.ts`; `server/cloud-send-files.test.ts`; `server/cloud-sync-store.test.ts`; `server/cloud-sync.test.ts`; `server/data/charts.e2e.test.ts`; `server/data/tools.test.ts`; `server/headless-cli.e2e.test.ts`; `server/hosted-access.test.ts`; `server/lending-memory.test.ts`; `server/lent-copies.test.ts`; `server/mcp-bot-servers.test.ts`; `server/mcp-own-servers.e2e.test.ts`; `server/mcp-remote-proxy.test.ts`; `server/memory-store.test.ts`; `server/message-file.test.ts`; `server/pages/published-pages.test.ts`; `server/secret-requests.e2e.test.ts`; `server/setup-import.test.ts`; `server/team-computers.test.ts`; `server/turn-images.test.ts`; `server/workspace-backup.test.ts`; `server/workspace-links.test.ts`.
+- Files / Patch IDs: No new file on `main`. The record is this file, already listed as PATCH-3.
+- Rollback: Revert this commit. The sandbox branch can be deleted. Do not edit `upstream-mirror`, and do not change the tests.
