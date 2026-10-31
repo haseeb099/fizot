@@ -1,0 +1,30 @@
+name: Baseline Linux
+
+# One run of the 25 files that failed on Windows at OpenMausBot v0.1.134.
+# This branch is not main and is not upstream-mirror.
+on:
+  push:
+    branches: [sandbox/baseline-linux]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: 25 pre-existing files
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare Electron test runtime
+        run: node --input-type=commonjs -e "require('electron')"
+      - name: Run the 25 files
+        run: pnpm exec vitest run --reporter=default --reporter=github-actions scripts/prepare-duckdb.test.mjs server/browser-upload.test.ts server/cloud-lending-memory.e2e.test.ts server/cloud-lending.test.ts server/cloud-send-files.test.ts server/cloud-sync-store.test.ts server/cloud-sync.test.ts server/data/charts.e2e.test.ts server/data/tools.test.ts server/headless-cli.e2e.test.ts server/hosted-access.test.ts server/lending-memory.test.ts server/lent-copies.test.ts server/mcp-bot-servers.test.ts server/mcp-own-servers.e2e.test.ts server/mcp-remote-proxy.test.ts server/memory-store.test.ts server/message-file.test.ts server/pages/published-pages.test.ts server/secret-requests.e2e.test.ts server/setup-import.test.ts server/team-computers.test.ts server/turn-images.test.ts server/workspace-backup.test.ts server/workspace-links.test.ts
