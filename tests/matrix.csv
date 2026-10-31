@@ -1,0 +1,43 @@
+id,step,layer,test,journey_or_tc,gate,status
+FB-U,Fork and brand layer,unit,"Enterprise removal script, import guard, brand map and leak scans, each run on a clean fixture and a seeded-leak fixture",FB-U,G2,planned
+FB-I,Fork and brand layer,integration,"Build the fork in CI; leak scans pass; LICENSE and NOTICE survive; licence-file diff on each sync",FB-I,G2,planned
+FB-E,Fork and brand layer,e2e,"Rebranded build opens in a browser at desktop and phone width with no upstream name on screen",FB-E,G2,planned
+TM-U,Test matrix,unit,"Parser rejects any row missing an id, layer, gate or journey",TM-U,G0,planned
+TM-I,Test matrix,integration,CI fails if a gate in the plan has no row,TM-I,G0,planned
+TM-E,Test matrix,e2e,The release-candidate run reads the matrix and reports every row's status,TM-E,G0,planned
+SA-U,Spike A,unit,Brand map covers every string the build reads,SA-U,G2,planned
+SA-I,Spike A,integration,Network capture of a full run shows zero calls to upstream hosts,SA-I,G2,planned
+SA-E,Spike A,e2e,One chat in a browser during the capture,SA-E,G2,planned
+SB-U,Spike B,unit,Key redaction and one-hour key expiry,SB-U,G2,planned
+SB-I,Spike B,integration,"Canary secrets unreachable from the shell, with the proxy patch on a mock provider",TC26; TC51,G2,planned
+SB-E,Spike B,e2e,A bot told to find the secrets fails in a real browser chat,SB-E,G2,planned
+CS-U,Cost sheet,unit,"The price formula reproduces the 25 GBP case: 20.83 GBP before VAT allows about 15.40 dollars of monthly cost",CS-U,"G2, G3",planned
+CS-I,Cost sheet,integration,The sheet reads measured Fly staging usage after Gate 0b,CS-I,"G0b, G2, G3",planned
+CS-E,Cost sheet,e2e,A J4 run on staging feeds measured cost into the sheet,J4,"G2, G3",planned
+AD-U,Fizot Admin,unit,"Plan and flag rules, tenant lookup, pairing signature, webhook de-duplication, scheduler timing",AD-U,G4,planned
+AD-I,Fizot Admin,integration,"Tenant routing on a real database; recorded pairing request replayed against each new upstream image; Fly staging create and delete, with everything gone inside 24 hours",TC36,G4,planned
+AD-E,Fizot Admin,e2e,"J1, J2, J8, J10","J1; J2; J8; J10",G4,planned
+SW-U,Sleep and wake,unit,Idle timer and wake time,SW-U,G4,planned
+SW-I,Sleep and wake,integration,Ready within 60 seconds; schedules wake the instance; each event delivered once,TC56,G4,planned
+SW-E,Sleep and wake,e2e,A chat after idle sleep (add this step to J2),J2,G4,planned
+PL-U,"Proxy, ledger and billing",unit,"Append-only ledger, 12-month expiry, idempotency key, metering, caps at 80% and 100%, VAT, one-hour virtual keys",PL-U,G4,planned
+PL-I,"Proxy, ledger and billing",integration,"Stripe test mode with duplicate and out-of-order webhooks; proxy on a mock provider plus a small real xAI canary; ledger within 1% of proxy usage",PL-I,G4,planned
+PL-E,"Proxy, ledger and billing",e2e,"J4, J9","J4; J9",G4,planned
+SE-U,Sandbox and egress,unit,Allow-list matcher; private-range and metadata blocks,SE-U,"G2, G4",planned
+SE-I,Sandbox and egress,integration,"Private ranges and metadata fail; DNS exfiltration blocked; sandbox cannot reach its own instance's private address; instance A cannot reach instance B","TC52; TC28; TC59","G2, G4",planned
+SE-E,Sandbox and egress,e2e,"J2, J6","J2; J6","G2, G4",planned
+PB-U,Permission broker and Ask mode,unit,"Payments, outgoing email, deletion and account changes are never auto-approved",PB-U,G4,planned
+PB-I,Permission broker and Ask mode,integration,An unapproved action expires in 24 hours,PB-I,G4,planned
+PB-E,Permission broker and Ask mode,e2e,J5,J5,G4,planned
+MR-U,Model and route layer,unit,Every route flag defaults to off; route-to-plan mapping; customer key encrypts and decrypts,MR-U,G5,planned
+MR-I,Model and route layer,integration,"Customer key never reaches the sandbox, Admin, logs, exports or backups; with a subscription flag on the workspace holds no Fizot token, with it off the route is absent","TC55; TC68",G5,planned
+MR-E,Model and route layer,e2e,"J3, J11","J3; J11",G5,planned
+CL-U,Consumer layer,unit,"Trial reminders, cooling-off windows, 24-hour end-of-contract notice, VAT-inclusive price rounding",CL-U,G5,planned
+CL-I,Consumer layer,integration,"Stripe test clocks run subscribe, cancel and reminder emails",CL-I,G5,planned
+CL-E,Consumer layer,e2e,J7,J7,G5,planned
+AB-U,Abuse controls and free tier,unit,"Rate limits, Lite caps, card or phone checks before computer use",AB-U,G5,planned
+AB-I,Abuse controls and free tier,integration,Per-workspace kill switch works; abuse drill passes,AB-I,G5,planned
+AB-E,Abuse controls and free tier,e2e,"J1, J6","J1; J6",G5,planned
+CI-U,Test and CI foundation,unit,"Runner and coverage config: 80% on our own code, every branch in billing, auth, isolation and approval",CI-U,"G0, G0b, G1, G2, G3, G4, G5, G6",planned
+CI-I,Test and CI foundation,integration,"Unit on every commit, integration on every pull request, end-to-end on every release candidate and nightly",CI-I,"G0, G0b, G1, G2, G3, G4, G5, G6",planned
+CI-E,Test and CI foundation,e2e,A smoke journey on every deploy,CI-E,"G0, G0b, G1, G2, G3, G4, G5, G6",planned

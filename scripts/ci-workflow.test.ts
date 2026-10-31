@@ -231,7 +231,7 @@ describe("CI concurrency", () => {
       ["steps.scope.outputs.build == 'true'", "pnpm exec vite build"],
     ]);
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
-      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts",
+      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts",
     )).toBe(true);
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
       if (["static", "gate"].includes(name)) continue;
