@@ -4,7 +4,7 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26.
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 
@@ -236,4 +236,46 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. Local vitest of the ratchet and `scripts/fizot/admin-env.test.ts`: 2 files passed, 2 tests passed, 11.25s, exit 0.
 - Files / Patch IDs: PATCH-14.
 - Rollback: Put the import and the call back on their own lines. The ratchet fails again.
+
+## CL-24 The push gate is the daily checks
+
+- Type: Decision
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Logged by: Cursor
+- Why we changed it: Haseeb decided on 1 Nov 2026 that the daily gate is small. The eight vitest shards, behavior evals, browser identity and the macOS smokes are not blocking.
+- How it works: The CI gate job needs static, foss, packaged-server and ui-smoke. vitest, behavior-evals, browser-identity and electron-smokes run only when the event is schedule or workflow_dispatch. Dispatch CI before an upstream sync. Docker publish runs on a push to main or on a release tag. The static job runs lint, typecheck with a 7 GB heap, `scripts/fizot`, and the patched-file tests listed in `docs/fizot/README.md`.
+- Why it is necessary: A cancelled or failing upstream shard was failing the whole push. The fork does not need that suite green on every push.
+- Impact (cost / risk / timeline): No spend on the daily gate beyond the jobs that already passed. The full suite is not required on a push. A manual or nightly run still starts it.
+- Files / Patch IDs: PATCH-17. `.github/workflows/ci.yml`, `scripts/ci-workflow.test.ts`, `.github/workflows/docker.yml`, `docs/fizot/README.md`.
+- Rollback: Restore the gate needs list and the four job if conditions. Publish again on every push.
+
+## CL-25 Upstream tests that fail or time out on this runner
+
+- Type: Decision
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Logged by: Cursor
+- Why we changed it: The sandbox CI runs showed these failures. The box check also failed on upstream commit `0213b7435` on the same runner.
+- How it works: `server/bot-box/self-check.linux.test.ts` failed share-net on a clean checkout of `0213b7435`, with bubblewrap 0.11.1 already installed and socat missing, and again after bubblewrap and socat were installed. Run [41261359507](https://github.com/haseeb099/fizot/actions/runs/41261359507). `server/use-my-mac.e2e.test.ts`, `server/cloud-team-profile.e2e.test.ts`, `server/cloud-lending.e2e.test.ts` and `server/cloud-team-open-reach.e2e.test.ts` timed out on run [41261359549](https://github.com/haseeb099/fizot/actions/runs/41261359549). `server/cloud-team-owners.e2e.test.ts` timed out on run [41261903303](https://github.com/haseeb099/fizot/actions/runs/41261903303). Re-check these before the next upstream sync. They were not investigated further.
+- Why it is necessary: The next sync should not treat these failures as new Fizot breakage.
+- Impact (cost / risk / timeline): No code change. These tests are not in the daily gate.
+- Files / Patch IDs: No file change.
+- Rollback: Delete this row. Nothing in the tree changes.
+
+## CL-26 Skip the hosted-model suite when enterprise/ is missing
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Logged by: Cursor
+- Why we changed it: The suite setup boots with hosted-admin variables. One case was already `skipIf`. The setup still ran.
+- How it works: The file's `beforeAll` boots `server/index.ts` with `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE` and `OMB_ADMIN_MEMBERSHIP`. `rejectFizotAdminEnv` throws, so the suite cannot run on this fork. `describe.skipIf` wraps the setup and the cases while `enterprise/` is absent. The boot check is unchanged.
+- Why it is necessary: The daily gate runs this patched file. The setup was failing the file before the skipped case.
+- Impact (cost / risk / timeline): No spend. Local vitest skipped `server/hosted-models-api.test.ts` (1 file skipped, 6 tests skipped) and `scripts/ci-scope.test.ts` passed (99 tests, 62.26s, exit 0).
+- Files / Patch IDs: PATCH-2. `server/hosted-models-api.test.ts`.
+- Rollback: Move the setup back outside the skip. Do not weaken `rejectFizotAdminEnv`.
 
