@@ -56,9 +56,11 @@ jobs:
           node scripts/fizot/guard-enterprise-imports.mjs
       - name: Removal on a copy of upstream-mirror
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch origin upstream-mirror
+          git -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" fetch origin upstream-mirror
           copy="${RUNNER_TEMP}/upstream-copy"
           git worktree add --detach "$copy" origin/upstream-mirror
           node scripts/fizot/remove-enterprise.mjs --root "$copy"
