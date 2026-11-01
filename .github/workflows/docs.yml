@@ -1,25 +1,8 @@
 name: Docs
 
+# Fizot: apps/docs was removed; run by hand only (FZ-9).
 on:
-  pull_request:
-    paths:
-      - "apps/docs/**"
-      - "docs/screenshots/**"
-      - "public/app-icon.svg"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/docs.yml"
-  push:
-    branches: [main]
-    paths:
-      - "apps/docs/**"
-      - "docs/screenshots/**"
-      - "public/app-icon.svg"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/docs.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
