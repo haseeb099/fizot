@@ -1,6 +1,6 @@
 id,step,layer,test,journey_or_tc,gate,status,owner_task
-FB-U,Fork and brand layer,unit,"Enterprise removal script, import guard, brand map and leak scans, each run on a clean fixture and a seeded-leak fixture",none,G2,planned,S2.2
-FB-I,Fork and brand layer,integration,"Build the fork in CI; leak scans pass; LICENSE and NOTICE survive; licence-file diff on each sync",none,G2,planned,S2.2
+FB-U,Fork and brand layer,unit,"Enterprise removal script, import guard, brand map and leak scans, each run on a clean fixture and a seeded-leak fixture",none,G2,planned,S2.4
+FB-I,Fork and brand layer,integration,"Build the fork in CI; leak scans pass; LICENSE and NOTICE survive; licence-file diff on each sync",none,G2,planned,S2.5
 FB-E,Fork and brand layer,e2e,"Rebranded build opens in a browser at desktop and phone width with no upstream name on screen",none,G2,planned,S2.2
 TM-U,Test matrix,unit,"Parser rejects any row missing an id, layer, gate, journey or owner task",none,G0,planned,T0.4
 TM-I,Test matrix,integration,CI fails if a gate in the plan has no row,none,G0,planned,T0.4

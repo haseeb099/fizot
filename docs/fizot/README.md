@@ -12,3 +12,10 @@ pnpm audit --prod
 ```
 
 The clean-machine check for S2.7 runs `node -v`, `pnpm install --frozen-lockfile`, `pnpm lint`, `NODE_OPTIONS=--max-old-space-size=7000 pnpm typecheck`, and `pnpm exec vitest run server/bot-box server/brand.test.ts server/redact.test.ts server/cloud-home.test.ts`.
+
+The daily CI gate also runs the host scan and the brand scan:
+
+```bash
+node scripts/fizot/scan-upstream-hosts.mjs
+node scripts/fizot/scan-brand-leaks.mjs
+```

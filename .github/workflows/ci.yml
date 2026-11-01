@@ -74,8 +74,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Guard enterprise imports
         run: node scripts/fizot/guard-enterprise-imports.mjs
+      - name: Scan upstream hosts
+        run: node scripts/fizot/scan-upstream-hosts.mjs
+      - name: Scan brand leaks
+        run: node scripts/fizot/scan-brand-leaks.mjs
       - name: Verify CI selection and documentation references
-        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts
+        run: pnpm exec vitest run scripts/fizot scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
       - run: pnpm lint
@@ -523,6 +527,8 @@ jobs:
     name: package + smoke (Ubuntu 24.04 x64)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      NODE_OPTIONS: --max-old-space-size=7000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -1,0 +1,25 @@
+{
+  "entries": [
+    { "host": "boat.dev", "reason": "Upstream product domain still named in shipped source. Spike A maps hosts. A host not in this file fails." },
+    { "host": "docs.boat.dev", "reason": "Upstream documentation host." },
+    { "host": "openmausbot.com", "reason": "Upstream product site." },
+    { "host": "www.openmausbot.com", "reason": "Upstream product site." },
+    { "host": "docs.openmausbot.com", "reason": "Upstream documentation host." },
+    { "host": "accounts.openmausbot.com", "reason": "Upstream account host." },
+    { "host": "admin.openmausbot.com", "reason": "Upstream admin host." },
+    { "host": "device.openmausbot.com", "reason": "Upstream device-link host." },
+    { "host": "cloud.openmausbot.com", "reason": "Upstream cloud host." },
+    { "host": "mausbot.com", "reason": "Upstream product domain." },
+    { "host": "omb-cloud-staging.fly.dev", "reason": "Upstream staging broker." },
+    { "host": "posthog.com", "reason": "Upstream telemetry host." },
+    { "host": "us.i.posthog.com", "reason": "Upstream telemetry ingest host." },
+    { "host": "github.com/milind-soni/openmausbot", "reason": "Upstream update repository." },
+    { "host": "c-opaque.openmausbot.com", "reason": "Fixture hostname in upstream tests. Not a Fizot host." },
+    { "host": "c-office.openmausbot.com", "reason": "Fixture hostname in upstream tests. Not a Fizot host." },
+    { "host": "c-1.openmausbot.com", "reason": "Fixture hostname in upstream tests. Not a Fizot host." },
+    { "host": "c-example.openmausbot.com", "reason": "Fixture hostname in upstream tests. Not a Fizot host." },
+    { "host": "c-installation.openmausbot.com", "reason": "Fixture hostname in upstream tests. Not a Fizot host." },
+    { "host": "c-old.openmausbot.com", "reason": "Fixture hostname in upstream tests. Not a Fizot host." },
+    { "host": "fixture.openmausbot.com", "reason": "Fixture hostname in upstream tests. Not a Fizot host." }
+  ]
+}
