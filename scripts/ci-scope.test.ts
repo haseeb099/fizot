@@ -283,8 +283,8 @@ describe("the repository's import graph", () => {
   it("runs every test outside the renderer that reads a translation other than English with the locale tests", () => {
     const files = ["server", "shared", "electron", "companion", "enterprise", "evals", "scripts", "cloudflare"]
       .flatMap((directory) => codeFiles(join(ROOT, directory)))
-      // The selection and the workflow test name catalog paths without reading them.
-      .filter((file) => !/[/\\](?:ci-scope\.(?:mjs|test\.ts)|ci-workflow\.test\.ts)$/.test(file));
+      // These name catalog paths and do not read a catalog.
+      .filter((file) => !/[/\\](?:ci-scope\.(?:mjs|test\.ts)|ci-workflow\.test\.ts|scan-brand-leaks\.mjs)$/.test(file));
     const mentionsTranslations = (file: string) => {
       const text = readFileSync(file, "utf8");
       return [...text.matchAll(/locales/g)].some((match) => !/^locales\W{1,6}en\.json/.test(text.slice(match.index, match.index + 24)));

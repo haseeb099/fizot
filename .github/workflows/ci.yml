@@ -74,6 +74,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Guard enterprise imports
         run: node scripts/fizot/guard-enterprise-imports.mjs
+      - name: Scan upstream hosts
+        run: node scripts/fizot/scan-upstream-hosts.mjs
+      - name: Scan brand leaks
+        run: node scripts/fizot/scan-brand-leaks.mjs
       - name: Verify CI selection and documentation references
         run: pnpm exec vitest run scripts/fizot scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts
       - name: Validate locale catalogs

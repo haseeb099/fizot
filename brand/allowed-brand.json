@@ -1,0 +1,18 @@
+{
+  "entries": [
+    { "path": "LICENSE", "reason": "Apache attribution. This file is not edited." },
+    { "path": "NOTICE", "reason": "Attribution notice. This file is not edited." },
+    { "path": "LICENSING.md", "reason": "Upstream licence text. This file is not edited." },
+    { "path": "CLA.md", "reason": "Contributor licence text. This file is not edited." },
+    { "path": "package.json", "reason": "Package metadata still uses the upstream name. Spike A maps the package name and the installer name." },
+    { "path": "index.html", "reason": "Window title still uses the upstream name. S2.2 replaces user-visible strings." },
+    { "path": "server", "reason": "Upstream server copy still shows the product name. S2.2 replaces user-visible strings. Spike A maps internal identifiers such as OMB_* and ~/.openmausbot." },
+    { "path": "src", "reason": "UI copy and the mascot picker still use the upstream names. S2.2 replaces user-visible strings." },
+    { "path": "shared", "reason": "The default bot name is still MausBot. Spike A maps that identifier." },
+    { "path": "electron", "reason": "Window titles, installer names and updater paths still use the upstream name." },
+    { "path": "companion", "reason": "The phone companion still names the upstream product." },
+    { "path": "public", "reason": "Shipped public assets still name the upstream product." },
+    { "path": "docs", "reason": "Upstream docs still name the product and the mascot. Attribution stays. S2.2 replaces user-visible strings." },
+    { "path": "scripts", "reason": "Build scripts and the leak scanners name the upstream product. The scanners name the needles they search for." }
+  ]
+}
