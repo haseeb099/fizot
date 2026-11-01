@@ -83,11 +83,15 @@ jobs:
       # control plane cannot change what these three check.
       - if: steps.scope.outputs.build == 'true'
         run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=7000
       - if: steps.scope.outputs.build == 'true'
         run: pnpm check:electron
       - name: production UI build
         if: steps.scope.outputs.build == 'true'
         run: pnpm exec vite build
+        env:
+          NODE_OPTIONS: --max-old-space-size=7000
 
   vitest:
     # Admit the expensive runner fan-out only after the quick checks pass.
@@ -350,6 +354,8 @@ jobs:
       - name: Delete the enterprise folder
         run: rm -rf enterprise
       - run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=7000
       - run: pnpm exec vitest run server/enterprise.test.ts server/brand.test.ts
       - name: The server boots and reports the open-source edition
         run: |
@@ -365,7 +371,8 @@ jobs:
 
   control-plane:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"control-plane"')
+    # cloudflare/control-plane was removed, so its checks cannot run.
+    if: false
     name: control-plane check + workerd tests + dry run
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -233,8 +233,13 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
       step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts",
     )).toBe(true);
-    for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
+    for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string | boolean }][]) {
       if (["static", "gate"].includes(name)) continue;
+      if (name === "control-plane") {
+        expect(job.if).toBe(false);
+        expect(job.needs).toBe("static");
+        continue;
+      }
       // The one deploy job: after the control-plane checks, on main pushes only. It is
       // not part of the merge gate.
       if (name === "deploy-composio-broker") {
