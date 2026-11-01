@@ -188,7 +188,7 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Why we changed it: Docker run [41256135924](https://github.com/haseeb099/fizot/actions/runs/41256135924) failed because the Dockerfile copied `apps/docs/package.json` and `cloudflare/control-plane/package.json`.
 - How it works: Those two COPY lines and the comment above them are gone. The image proof expects edition `oss` and the text `no enterprise layer exists`. The `enterprise/**` path filter was removed from the Docker workflow. The broker and the rest of the Dockerfile are unchanged.
 - Why it is necessary: The image cannot build while it copies folders this fork deleted.
-- Impact (cost / risk / timeline): No spend. `scripts/docker-image.test.ts` passed locally. The Docker workflow has not been re-run yet.
+- Impact (cost / risk / timeline): No spend. `scripts/docker-image.test.ts` passed locally (12 passed, 2 skipped). Docker run [41261359478](https://github.com/haseeb099/fizot/actions/runs/41261359478) still died in `vite build` with a JavaScript heap out of memory error. The build stage now sets `NODE_OPTIONS=--max-old-space-size=7000`. Docker run [41261903302](https://github.com/haseeb099/fizot/actions/runs/41261903302) then succeeded: build image + boot smoke, and publish to GHCR. The publish job runs on every push, so that sandbox push published a sha tag for this repository.
 - Files / Patch IDs: PATCH-16 (Notion PR 25).
 - Rollback: Restore the two COPY lines and the old proof. Do not restore the deleted folders.
 
@@ -221,4 +221,19 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. No Cloudflare deploy. `scripts/ci-workflow.test.ts` passed locally after the push branch list was put back to `main`.
 - Files / Patch IDs: PATCH-5. `.github/workflows/ci.yml`, `scripts/ci-workflow.test.ts`.
 - Rollback: Restore the job `if` condition. The package is still gone, so the job would fail.
+
+## CL-23 Keep the boot check without growing server/index.ts
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Related task: S2.1 (FZ-8)
+- Logged by: Cursor
+- Why we changed it: S2.1 added two lines to `server/index.ts`. CI run [41261903303](https://github.com/haseeb099/fizot/actions/runs/41261903303) reported 15820 lines against the ratchet's listed 15818.
+- How it works: The import of `rejectFizotAdminEnv` shares the previous import line, and the call shares the `ensureDirs()` line. The file is 15818 lines. The check still runs before `ensureDirs()`.
+- Why it is necessary: `scripts/testing/file-size-ratchet.test.ts` fails when `server/index.ts` grows, so the vitest job fails.
+- Impact (cost / risk / timeline): No spend. Local vitest of the ratchet and `scripts/fizot/admin-env.test.ts`: 2 files passed, 2 tests passed, 11.25s, exit 0.
+- Files / Patch IDs: PATCH-14.
+- Rollback: Put the import and the call back on their own lines. The ratchet fails again.
 
