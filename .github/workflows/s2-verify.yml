@@ -86,7 +86,7 @@ jobs:
           grep -q 'supportedArchitectures' "$copy/pnpm-workspace.yaml"
           cd "$copy"
           pnpm install
-          pnpm exec vite build
+          NODE_OPTIONS=--max-old-space-size=7000 pnpm exec vite build
       - name: Hosted access after the boot check
         if: always()
         run: pnpm exec vitest run server/hosted-access.test.ts
