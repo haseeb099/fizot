@@ -4,7 +4,7 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23.
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 
@@ -115,3 +115,35 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Files that fail on Windows and passed on Linux: `scripts/prepare-duckdb.test.mjs`; `server/browser-upload.test.ts`; `server/cloud-lending-memory.e2e.test.ts`; `server/cloud-lending.test.ts`; `server/cloud-send-files.test.ts`; `server/cloud-sync-store.test.ts`; `server/cloud-sync.test.ts`; `server/data/charts.e2e.test.ts`; `server/data/tools.test.ts`; `server/headless-cli.e2e.test.ts`; `server/hosted-access.test.ts`; `server/lending-memory.test.ts`; `server/lent-copies.test.ts`; `server/mcp-bot-servers.test.ts`; `server/mcp-own-servers.e2e.test.ts`; `server/mcp-remote-proxy.test.ts`; `server/memory-store.test.ts`; `server/message-file.test.ts`; `server/pages/published-pages.test.ts`; `server/secret-requests.e2e.test.ts`; `server/setup-import.test.ts`; `server/team-computers.test.ts`; `server/turn-images.test.ts`; `server/workspace-backup.test.ts`; `server/workspace-links.test.ts`.
 - Files / Patch IDs: No new file on `main`. The record is this file, already listed as PATCH-3.
 - Rollback: Revert this commit. The sandbox branch can be deleted. Do not edit `upstream-mirror`, and do not change the tests.
+
+## CL-16 Commit the Cursor rules and the verified command list
+
+- Type: Code
+- Date: 2026-10-31
+- Area: Docs & plan
+- Risk: Low
+- Related task: S2.7 (FZ-14)
+- Logged by: Cursor
+- Commit: `43af72cabea70f3f2174223b4e83589e2b840556`
+- Why we changed it: Page 03 already states the rules and the commands. They were not in the repo, so a new machine had nothing to follow.
+- How it works: `.cursor/rules/fizot-core.mdc`, `fizot-licence.mdc` and `fizot-change-tracking.mdc` are the three files from page 03. `docs/fizot/README.md` lists that page's command block. The clean-machine check named by S2.7 is `node -v`, `pnpm install --frozen-lockfile`, `pnpm lint`, `NODE_OPTIONS=--max-old-space-size=7000 pnpm typecheck`, and `pnpm exec vitest run server/bot-box server/brand.test.ts server/redact.test.ts server/cloud-home.test.ts`.
+- Why it is necessary: The audit failed on Node 22 and on the default typecheck heap. The commands have to be in the repo.
+- Impact (cost / risk / timeline): No spend. Linux timing is recorded from the `sandbox/s2-verify` run. A new machine should finish these commands in under 15 minutes.
+- Files / Patch IDs: PATCH-7.
+- Rollback: Revert `43af72cabea70f3f2174223b4e83589e2b840556`. Do not edit `upstream-mirror`.
+
+## CL-17 Remove the dead workspaces and reject a hosted-admin boot
+
+- Type: Code
+- Date: 2026-10-31
+- Area: Fork & brand
+- Risk: Low
+- Related task: S2.1 (FZ-8)
+- Logged by: Cursor
+- Why we changed it: `cloudflare/control-plane/` and `apps/docs/` are not part of this fork. A hosted-admin variable has no enterprise adapter to serve it. Preview pages that `vite.config.ts` does not name are not part of the build.
+- How it works: `scripts/fizot/remove-enterprise.mjs` deletes `enterprise/`, `cloudflare/control-plane/`, `apps/docs/` and `.tmpexp/` when they exist, drops the two workspace entries, and does not read those trees. It refuses `LICENSE`, `NOTICE`, `LICENSING.md` and `CLA.md`. A second run prints `nothing to remove`. `scripts/fizot/guard-enterprise-imports.mjs` exits 1 when an import specifier contains `enterprise/`, except `server/enterprise.ts`. The static CI job runs it. `rejectFizotAdminEnv()` runs before `ensureDirs()` in `server/index.ts`. On main the script printed `removed cloudflare/control-plane/`, `removed apps/docs/`, `removed .tmpexp/`, and the two `pnpm-workspace.yaml` entries. `enterprise/` was already absent, so it was not in that list. The second run printed `nothing to remove`. `pnpm install` then rewrote `pnpm-lock.yaml` (120 packages removed). The twelve preview files were deleted because `vite.config.ts` does not contain the string `preview`.
+- Why it is necessary: Without the guard, a sync can import `enterprise/`. Without the boot check, a Fizot process can start with `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE` or `OMB_ADMIN_MEMBERSHIP` set.
+- Impact (cost / risk / timeline): No spend. No Fly or model call. Local vitest of `scripts/fizot/remove-enterprise.test.ts` and `scripts/fizot/guard-enterprise-imports.test.ts`: 2 files passed, 5 tests passed, duration 12.68s, exit 0. `scripts/fizot/admin-env.test.ts` passed in the earlier run of the three files (the only failure in that run was the repo scan, which the 12.68s run then passed). The 30 baseline files do not reference `apps/docs`, `cloudflare/control-plane` or `.tmpexp`, so they were not re-run for the deletion. `server/hosted-access.test.ts` spawns the server with `OMB_ADMIN_URL` set, so the boot check can fail it. That file is in the Linux run. The control-plane CI job still calls `pnpm control-plane:check`. That job fails once the folder is gone. It was not recreated.
+- Files / Patch IDs: PATCH-1 stays the enterprise deletion. PATCH-5 (`.github/workflows/ci.yml`). PATCH-8, PATCH-9, PATCH-10, PATCH-11, PATCH-12, PATCH-13, PATCH-14. Commits `d70e615bfd6797a74bfae611459e03042c81d8b0`, `635621fc5090ea0927ed2bb03a3c6747b5830f18`, `0b91577faaf02e6009b2da09150784d31570b1a9`, `2086529c4134d0d2e99adc55ddab6757112439ad`, `77e72c2cd7a3966702693caac59558fb4a623b52`.
+- Rollback: Revert those commits. Restoring the trees does not require editing `upstream-mirror`. Do not open `enterprise/`.
+
