@@ -3,7 +3,7 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, sandbox/s2-fix]
   pull_request:
   # The merge queue runs CI on the PR merged onto the current main BEFORE it
   # lands, so a PR that is green alone but red together with what just
