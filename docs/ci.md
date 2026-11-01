@@ -10,13 +10,13 @@ too) into areas, and runs only the jobs some area can affect:
 
 | Area | Paths | What runs |
 | --- | --- | --- |
-| docs | `*.md` at the root, everything under `docs/` and `apps/docs/`, `.github/FUNDING.yml` | lint, the docs tests (the three vitest files that read the docs) on Linux |
+| docs | `*.md` at the root, everything under `docs/` and `apps/docs/`, `.github/FUNDING.yml` | lint, the docs tests (`scripts/testing/analytics-docs.test.ts`, the test that still reads `docs/analytics.md`) on Linux |
 | locales | `src/locales/*.json` except `en.json`, `src/locales/*.test.ts` | the build, the locale tests: every `src/` test and `scripts/generate-locale.test.mjs` in two Linux shards, with the Electron node tests |
 | web | the rest of `src/`, `public/`, the root `*-preview.html` pages | the build, the eight Linux shards, the renderer smoke |
 | script tests | `scripts/**/*.test.*` | the Linux and Windows shards, the renderer smoke, browser identity |
 | server | `server/`, `shared/`, `enterprise/`, `companion/`, `evals/`, `skills/`, `deploy/`, the composio broker, the Dockerfile, and the renderer files the server or a smoke loads | the build, Linux and Windows shards, behavior evals, packaged server, open-source edition, the macOS smokes, renderer smoke, browser identity, browser driver, Linux package |
 | desktop | `electron/`, `build/`, `electron-builder.yml`, `index.html` | the same as server |
-| control plane | `cloudflare/control-plane/` | the control-plane job |
+| control plane | `cloudflare/control-plane/` | the control-plane job is selected, then skipped: `cloudflare/control-plane` was removed |
 | everything | anything else: `.github/` workflows, `package.json`, the lockfile and workspace, tsconfig, vite and vitest config, `third_party/`, `scripts/` code, unknown paths | every job |
 
 The build is static's typecheck, Electron syntax check and UI build. Several

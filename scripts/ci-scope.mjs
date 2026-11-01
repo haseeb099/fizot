@@ -43,7 +43,7 @@ export const VITEST_SUBSETS = {
   "locale-tests": { part: "locale tests", files: ["src/", "scripts/generate-locale.test.mjs", "scripts/testing/key-readback.e2e.test.ts"], shards: 2, nodeTests: true },
   "docs-tests": {
     part: "docs tests",
-    files: ["scripts/testing/analytics-docs.test.ts", "server/model-providers-docs.test.ts", "src/locales/vocabulary.test.ts"],
+    files: ["scripts/testing/analytics-docs.test.ts"],
     shards: 1,
     nodeTests: false,
   },
