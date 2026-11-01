@@ -56,13 +56,12 @@ jobs:
           node scripts/fizot/guard-enterprise-imports.mjs
       - name: Removal on a copy of upstream-mirror
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" fetch origin upstream-mirror
+          # upstream-mirror is this commit. It is an ancestor of this branch, so the object is already in the checkout.
+          git rev-parse --verify 0213b7435fc83a936f77c18475ba2a0d7b7c2de4
           copy="${RUNNER_TEMP}/upstream-copy"
-          git worktree add --detach "$copy" origin/upstream-mirror
+          git worktree add --detach "$copy" 0213b7435fc83a936f77c18475ba2a0d7b7c2de4
           node scripts/fizot/remove-enterprise.mjs --root "$copy"
           second=$(node scripts/fizot/remove-enterprise.mjs --root "$copy")
           printf '%s\n' "$second"
