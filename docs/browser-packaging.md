@@ -92,13 +92,13 @@ device link, to the DevTools port the computer finds itself, and only the
 person's own conversations and routines use it. My Chrome works only on a
 personal Cloud home: on a Team Cloud and on self-hosted servers profiles stay
 built-in. Details: [the browser engine plan, step 5](plans/browser-engine.md)
-and [MausBot Cloud](cloud-pro.md#your-chrome).
+and [Fizot Cloud](cloud-pro.md#your-chrome).
 
 ## What a bot's browser can reach
 
-Every Chrome OpenMausBot launches for a bot sends all of its connections
+Every Chrome Fizot launches for a bot sends all of its connections
 through an egress gate: a SOCKS5 server on `127.0.0.1`, one per browser
-session, run by the OpenMausBot server (`server/browser/egress/`). The gate
+session, run by the Fizot server (`server/browser/egress/`). The gate
 resolves names itself and checks every address a name resolves to before it
 connects, so redirects and DNS rebinding reach nothing it would refuse. It
 carries bytes only, so TLS, HTTP/2 and WebSockets are unchanged. Chrome sends
@@ -106,16 +106,16 @@ loopback traffic through it too (`--proxy-bypass-list=<-loopback>`), and
 WebRTC sends no UDP around it. If the gate is not running, the browser
 connects nowhere.
 
-| Destination | Desktop | Self-hosted server | MausBot Cloud |
+| Destination | Desktop | Self-hosted server | Fizot Cloud |
 |---|---|---|---|
 | Public internet | yes | yes | yes |
-| OpenMausBot's own ports (loopback and this machine's addresses) | no | no | no |
+| Fizot's own ports (loopback and this machine's addresses) | no | no | no |
 | Other ports on this computer | yes, by `localhost` or an address, not by a public name | only servers a bot's own processes opened (Linux), or allowed below | only servers a bot's own processes opened |
 | Local network: 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7 | yes, unless `browserEngine.egress.localNetwork` is `false` | only what `browserEngine.egress.allow` lists | no |
 | Link-local and cloud metadata (169.254/16, fe80::/10, `fd00:ec2::254`, 100.100.100.200) | no | no | no |
 | 0/8, 198.18/15, multicast | no | no | no |
 
-OpenMausBot's own ports are the server's and its webhook receiver's, the
+Fizot's own ports are the server's and its webhook receiver's, the
 desktop client relay, the companion and its control page and gateway, the Vite
 dev server, the Local VM viewer, every port the server process has listened
 on, the ports the desktop app reports, each gate, and agent-browser's stream
@@ -134,14 +134,14 @@ A self-hosted server opens more with `config.json`:
 ```
 
 Each entry is an address or CIDR range with an optional `:port` (IPv6 in
-brackets for a port: `[fd12::1]:443`). OpenMausBot's own ports, metadata and
-link-local addresses stay closed whatever it lists, and MausBot Cloud ignores
+brackets for a port: `[fd12::1]:443`). Fizot's own ports, metadata and
+link-local addresses stay closed whatever it lists, and Fizot Cloud ignores
 it. Every refused connection shows up in the bot's next browser result:
-`The page tried to reach "127.0.0.1:8799" (blocked: OpenMausBot's own service)`.
+`The page tried to reach "127.0.0.1:8799" (blocked: Fizot's own service)`.
 
 `agent_browser_read` reads the page open in the browser. Given an address,
 agent-browser 0.37 would fetch it with its own HTTP client, around the browser
-and the gate, so OpenMausBot does not offer that parameter and refuses a call
+and the gate, so Fizot does not offer that parameter and refuses a call
 that passes one; the bot opens the address first.
 
 My Chrome is the person's own browser and does not go through the gate; the
@@ -153,7 +153,7 @@ control page needs its per-launch token.
 
 Each built-in browser is an agent-browser daemon and the Chrome it starts.
 agent-browser starts the daemon in a session of its own and Chrome in a
-process group of its own, so neither stops with OpenMausBot, and a daemon
+process group of its own, so neither stops with Fizot, and a daemon
 nothing closes keeps its Chrome for the engine's one-hour idle timeout. The
 same rules hold on the desktop, a server and Cloud:
 
@@ -176,7 +176,7 @@ same rules hold on the desktop, a server and Cloud:
   read from `/proc`, so an image without `ps` works the same.
 - **Unused browsers close.** A browser nothing has used for
   `browserEngine.idleTimeoutMinutes` in `config.json` (1 to 60; 10 when
-  unset, 3 on a MausBot Cloud home, whose 4 GB fits few browsers) is closed: no bot call (a tool listing counts, and so do a call
+  unset, 3 on a Fizot Cloud home, whose 4 GB fits few browsers) is closed: no bot call (a tool listing counts, and so do a call
   waiting behind another, its page-health reads and recorded step, and
   fill_login's typing; a preview frame only holds off a close while it is
   taken), no turn that has used it and is still running, and no person
@@ -193,11 +193,11 @@ same rules hold on the desktop, a server and Cloud:
 - **Leftovers are swept.** A crash or a kill closes nothing, so the server
   sweeps when it starts, every minute, and at shutdown. It closes only this
   data dir's browsers: each bot's own, each built-in profile's, and its
-  temporary browsers, whose names carry a tag of the data dir. On a MausBot
+  temporary browsers, whose names carry a tag of the data dir. On a Fizot
   Cloud home, whose HOME is the server's alone, it also closes the browser
   of any bot that no longer exists (a `bot-` session), within a minute.
   Deleting a bot or profile closes its browser and erases its saved
-  sign-ins with the agent-browser OpenMausBot installed, or on a Cloud home
+  sign-ins with the agent-browser Fizot installed, or on a Cloud home
   the image's own; an agent-browser found only on PATH elsewhere just has
   the running browser closed, since a wrapper there could fail the erase
   for good. A Chrome whose
@@ -215,14 +215,14 @@ same rules hold on the desktop, a server and Cloud:
 **Containers.** Chrome's helper processes need something to collect them
 once their parent exits, and Chrome needs shared memory. Both Docker compose
 files and the Podman one set `init: true` and `shm_size: 512m`, as
-OpenMausBot's desktop containers do (`--shm-size 512m`); a plain
+Fizot's desktop containers do (`--shm-size 512m`); a plain
 `docker run` wants `--init --shm-size=512m`. agent-browser 0.37.0 itself
 adds `--no-sandbox` and `--disable-dev-shm-usage` when it sees
 `/.dockerenv` or `/run/.containerenv`, runs as root or under CI, or finds
 docker, kubepods or lxc in `/proc/1/cgroup`. A runtime that shows none of
 these (a Kubernetes pod on cgroup v2, for one) needs `/dev/shm` room of its
 own (on Kubernetes, an `emptyDir` with `medium: Memory`). The image does
-not set `AGENT_BROWSER_ARGS`: OpenMausBot hands its browsers a curated
+not set `AGENT_BROWSER_ARGS`: Fizot hands its browsers a curated
 environment that would not carry it. On Fly Machines (the Cloud home) Fly's
 own init runs as PID 1.
 
@@ -241,7 +241,7 @@ There is no recording control in OMB's browser panel.
 ## Linux sandbox
 
 Use the `.deb` on Ubuntu 24.04. Its package hooks install a narrowly scoped
-AppArmor policy for the root-owned browser executable under `/opt/OpenMausBot`.
+AppArmor policy for the root-owned browser executable under `/opt/Fizot`.
 They do not disable the browser sandbox or change the global user-namespace
 restriction. See [Linux desktop](linux-desktop.md).
 
@@ -265,9 +265,9 @@ Run the real browser check against an unpacked app:
 node scripts/smoke-browser-bundle.mjs --resources /absolute/app/resources
 ```
 
-On macOS, use `/absolute/OpenMausBot.app/Contents/Resources`. On Linux, run as
+On macOS, use `/absolute/Fizot.app/Contents/Resources`. On Linux, run as
 an unprivileged user against the installed `.deb` at
-`/opt/OpenMausBot/resources`. This check creates its own empty home and local
+`/opt/Fizot/resources`. This check creates its own empty home and local
 web page, checks automatic discovery, navigation, typing/clicking, the
 loopback command relay the server reads, pictures and types through
 (`server/browser-relay.ts`), screenshot delivery and two-bot cookie/storage
@@ -285,7 +285,7 @@ browser updater in the desktop bundle.
 
 ### Temporary Windows engine backport
 
-Windows uses an explicitly identified OpenMausBot build of agent-browser
+Windows uses an explicitly identified Fizot build of agent-browser
 0.36.0, with the handle-inheritance fix from
 [upstream PR #1781](https://github.com/vercel-labs/agent-browser/pull/1781).
 The official 0.37.0 release does not contain this fix, so Windows stays on the

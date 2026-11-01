@@ -110,7 +110,7 @@ it("sends events without any stored or current address, polls nothing, and sends
 
     const urls = sent.map(({ url }) => new URL(url));
     expect(urls.length).toBeGreaterThan(0);
-    expect(urls.map(({ origin, pathname }) => `${origin}${pathname}`).filter((url) => url !== "https://us.i.posthog.com/i/v0/e/")).toEqual([]);
+    expect(urls.map(({ origin, pathname }) => `${origin}${pathname}`).filter((url) => url !== "")).toEqual([]);
     const bodies = await Promise.all(sent.map(({ body }) => bodyText(body)));
     expect(bodies.join("\n")).toContain("app_snapshot");
     expect(bodies.join("\n")).toContain("app_active");

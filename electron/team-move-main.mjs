@@ -79,7 +79,7 @@ function bearerSession(origin, token, fetchImpl) {
  *   fetch?: typeof fetch,
  *   journal?: { read(): unknown, write(value: unknown): void },
  *   log?(line: string): void,
- * }} deps `home`: My Cloud and the Admin's code for it. `account`: the MausBot Cloud sign-in, whose verified session
+ * }} deps `home`: My Cloud and the Admin's code for it. `account`: the Fizot Cloud sign-in, whose verified session
  * names the person's teams. `file`: the send's own state; `journalFile`: the moves'. `openTeam`: shows the team's page.
  */
 export function installTeamMove({ ipcMain, cloudPage, home, account, file, journalFile, openTeam, onChange = () => {}, fetch: fetchImpl = globalThis.fetch, journal, log = () => {} }) {
@@ -100,7 +100,7 @@ export function installTeamMove({ ipcMain, cloudPage, home, account, file, journ
       const team = teamOf(move.team.id);
       if (!team) throw new Error(`You're no longer in ${move.team.name}.`);
       const client = account();
-      if (!client) throw new Error("Sign in to MausBot Cloud first.");
+      if (!client) throw new Error("Sign in to Fizot Cloud first.");
       const member = await openOwnerSession({ origin: team.origin, grant: () => client.pairTeam(team.id) }, fetchImpl, { label, background: false });
       try {
         const asked = await member.call("POST", "/api/team-move-in", { v: 1, bot: { id: move.bot.id, name: move.bot.name, ...(facts.threadId ? { threadId: facts.threadId } : {}) },

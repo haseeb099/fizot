@@ -175,15 +175,15 @@ describe("included Boat computers", () => {
 
   it("tells a revoked Boat key (boat_, or box_ from before v1) from something that is no Boat key", async () => {
     rejectCredentials = true;
-    const revoked = { ok: false, rejected: true, message: "boat.dev rejected that key — it may have been revoked or expired. Copy a fresh one from your boat.dev account." };
+    const revoked = { ok: false, rejected: true, message: "example.invalid rejected that key — it may have been revoked or expired. Copy a fresh one from your example.invalid account." };
     expect(await boat.verifyToken("boat_revoked")).toEqual(revoked);
     expect(await boat.verifyToken("box_revoked")).toEqual(revoked);
     expect(await boat.verifyToken("sk-ant-not-a-boat-key")).toEqual({ ok: false, rejected: true, message: expect.stringMatching(/^That doesn't look like a Boat API key: they start with boat_/) });
   });
 
-  it("does not call a key rejected when boat.dev could not check it", async () => {
+  it("does not call a key rejected when example.invalid could not check it", async () => {
     serverError = true;
-    expect(await boat.verifyToken("boat_maybe")).toEqual({ ok: false, message: "boat.dev returned 500 for that token — try again in a moment." });
+    expect(await boat.verifyToken("boat_maybe")).toEqual({ ok: false, message: "example.invalid returned 500 for that token — try again in a moment." });
   });
 
   it("lists the computers with the included wording when the relay rejects its token", async () => {
@@ -192,18 +192,18 @@ describe("included Boat computers", () => {
     expect((await boat.listManagedBoats({ box: { token: "box_own" } }, [])).problem).toMatch(/update it in Settings/);
   });
 
-  it("lists again once after a dropped connection, and names MausBot Cloud's computer service when it stays unreachable", async () => {
+  it("lists again once after a dropped connection, and names Fizot Cloud's computer service when it stays unreachable", async () => {
     const lists = () => requests.filter((request) => request.path === "/relay/api/box/v1/boxes");
     dropLists = 1;
     await expect(boat.findBoat({}, "unlisted-bot")).resolves.toBeNull();
     expect(lists()).toHaveLength(2);
     dropLists = 2;
     await expect(boat.findBoat({}, "unlisted-bot")).rejects.toMatchObject({
-      message: "Could not reach MausBot Cloud's computer service to list cloud computers — check your connection and refresh", status: 503, transient: true,
+      message: "Could not reach Fizot Cloud's computer service to list cloud computers — check your connection and refresh", status: 503, transient: true,
     });
     expect(lists()).toHaveLength(4);
     dropLists = 2;
-    expect((await boat.listManagedBoats({ box: { token: "box_own" } }, [])).problem).toBe("Could not reach boat.dev to list cloud computers — check your connection and refresh");
+    expect((await boat.listManagedBoats({ box: { token: "box_own" } }, [])).problem).toBe("Could not reach example.invalid to list cloud computers — check your connection and refresh");
     rejectCredentials = true;
     await expect(boat.findBoat({}, "unlisted-bot")).rejects.toMatchObject({ transient: false });
   });
@@ -275,6 +275,6 @@ describe("waking a sleeping computer", () => {
     state = "archived";
     resumeReplies = [{ status: 401, body: { ok: false, code: "unauthorized", message: "This cloud computer key is not valid." } }];
     await expect(boat.readyBoat({}, botId)).rejects.toThrow("The cloud computers included with your Cloud plan aren't available right now. Try again later.");
-    await expect(boat.readyBoat({ box: { token: "box_own" } }, botId)).rejects.toThrow("boat.dev rejected your Boat API key — paste a current one in Settings → API keys");
+    await expect(boat.readyBoat({ box: { token: "box_own" } }, botId)).rejects.toThrow("example.invalid rejected your Boat API key — paste a current one in Settings → API keys");
   });
 });

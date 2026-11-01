@@ -1,5 +1,5 @@
 // Real server, fake engine: a bot at Full access and one at Approve for me (auto) change a profile, a working folder,
-// a teammate's profile, a skill, the team and team memory with no card of OpenMausBot's own. Each change leaves one
+// a teammate's profile, a skill, the team and team memory with no card of Fizot's own. Each change leaves one
 // applied notice in the conversation, and its Undo puts the change back.
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync } from "node:fs";

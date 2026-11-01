@@ -96,19 +96,19 @@ describe("what the popup offers, by plan", () => {
     expect(signedOut.points).toContain("$5 of Claude credit to start");
     const costlier = { ...PLAIN_OFFER, plans: PLAIN_OFFER.plans.map(plan => ({ ...plan, amount: plan.amount + 1000 })) };
     expect(cloudProPopupView(free, costlier)).toMatchObject({ primary: { via: "add-cloud", label: "Upgrade to Cloud Pro" },
-      plan: "none", signedIn: true, email: "person@example.test", badge: null, price: "MausBot Cloud plans from $25/month + tax.", moneyBack: null });
+      plan: "none", signedIn: true, email: "person@example.test", badge: null, price: "Fizot Cloud plans from $25/month + tax.", moneyBack: null });
     expect((cloudProPopupView(free, costlier) as CloudProPopupView).points).toContain("Voice and cloud desktops by Boat included");
   });
 
-  it("a plan: Manage plan in Settings → MausBot Cloud for every plan, no Compare plans, never a checkout, a price or the browser", () => {
+  it("a plan: Manage plan in Settings → Fizot Cloud for every plan, no Compare plans, never a checkout, a price or the browser", () => {
     const cases: Array<[CloudAccountState, string, string, string | null]> = [
-      [onPlan("personal"), "personal", "Manage plan", "Personal active · verified by MausBot Cloud"],
-      [onPlan("pro", { trial: running }), "trial", "Manage plan", "Pro free trial · verified by MausBot Cloud"],
-      [onPlan("pro"), "pro", "Manage plan", "Pro active · verified by MausBot Cloud"],
-      [onPlan(undefined), "pro", "Manage plan", "Pro active · verified by MausBot Cloud"],
-      [onPlan("max"), "max", "Manage plan", "Max active · verified by MausBot Cloud"],
-      [onPlan("ultra"), "other", "Manage plan", "Cloud active · verified by MausBot Cloud"],
-      [{ ...free, purchase: { state: "confirming" } }, "none", "Manage plan", "MausBot Cloud · payment received"],
+      [onPlan("personal"), "personal", "Manage plan", "Personal active · verified by Fizot Cloud"],
+      [onPlan("pro", { trial: running }), "trial", "Manage plan", "Pro free trial · verified by Fizot Cloud"],
+      [onPlan("pro"), "pro", "Manage plan", "Pro active · verified by Fizot Cloud"],
+      [onPlan(undefined), "pro", "Manage plan", "Pro active · verified by Fizot Cloud"],
+      [onPlan("max"), "max", "Manage plan", "Max active · verified by Fizot Cloud"],
+      [onPlan("ultra"), "other", "Manage plan", "Cloud active · verified by Fizot Cloud"],
+      [{ ...free, purchase: { state: "confirming" } }, "none", "Manage plan", "Fizot Cloud · payment received"],
       [{ ...free, entitlement: { plan: "pro", tier: "pro", status: "inactive", expiresAt: null, version: 3 } }, "none", "Manage plan", "Pro · not active right now"],
       [{ status: "reauth-required", message: "expired", lastPlan: { tier: "pro", active: true } }, "unknown", "Manage plan", "Sign in again to use the Cloud on this computer. Your plan is not affected."],
       [{ status: "signed-out", message: "restore-removed" }, "none", "Manage plan", null],
@@ -122,12 +122,12 @@ describe("what the popup offers, by plan", () => {
 
   it("My Cloud's page: a plan manages in that page's Settings, never the plan page in the browser; a plan being checked waits; no plan read offers none", () => {
     const cases: Array<[CloudPlanSnapshot, string, boolean, string]> = [
-      [{ status: "paid", tier: "personal" }, "personal", true, "Personal active · verified by MausBot Cloud"],
-      [{ status: "paid", tier: "pro", trial: running }, "trial", true, "Pro free trial · verified by MausBot Cloud"],
-      [{ status: "paid" }, "pro", true, "Pro active · verified by MausBot Cloud"],
-      [{ status: "paid", tier: "ultra" }, "other", true, "Cloud active · verified by MausBot Cloud"],
+      [{ status: "paid", tier: "personal" }, "personal", true, "Personal active · verified by Fizot Cloud"],
+      [{ status: "paid", tier: "pro", trial: running }, "trial", true, "Pro free trial · verified by Fizot Cloud"],
+      [{ status: "paid" }, "pro", true, "Pro active · verified by Fizot Cloud"],
+      [{ status: "paid", tier: "ultra" }, "other", true, "Cloud active · verified by Fizot Cloud"],
       [{ status: "attention", tier: "max" }, "none", true, "Max · not active right now"],
-      [{ status: "attention" }, "none", true, "MausBot Cloud · not active right now"],
+      [{ status: "attention" }, "none", true, "Fizot Cloud · not active right now"],
       [{ status: "signin", tier: "pro" }, "unknown", false, "Sign in again to use the Cloud on this computer. Your plan is not affected."],
     ];
     for (const [snapshot, plan, signedIn, current] of cases) {
@@ -165,7 +165,7 @@ describe("the popup as a dialog", () => {
     show();
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.getAttribute("aria-modal")).toBe("true");
-    expect(document.getElementById(dialog.getAttribute("aria-labelledby")!)!.textContent).toBe("MausBot Cloud Pro");
+    expect(document.getElementById(dialog.getAttribute("aria-labelledby")!)!.textContent).toBe("Fizot Cloud Pro");
     expect(document.getElementById(dialog.getAttribute("aria-describedby")!)!.textContent).toContain("Then from $15/month + tax.");
     expect(document.activeElement!.id).toBe("cloud-pro-popup-title");
     const order: Array<string | null> = [];

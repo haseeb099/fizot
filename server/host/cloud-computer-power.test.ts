@@ -226,7 +226,7 @@ describe("cloud computer power", () => {
   });
 
   it("a failed provider read backs off the same way", async () => {
-    fake.findBoat = vi.fn(async () => { throw Object.assign(new Error("Could not reach boat.dev"), { status: 503 }); });
+    fake.findBoat = vi.fn(async () => { throw Object.assign(new Error("Could not reach example.invalid"), { status: 503 }); });
     power.used("bot-a");
     await vi.advanceTimersByTimeAsync(30 * MINUTE);
     expect(fake.findBoat).toHaveBeenCalledTimes(2);
@@ -347,14 +347,14 @@ describe("cloud computer power", () => {
   it("a listing that fails at startup is retried later, with backoff, until it works", async () => {
     fake.states.set("on", "ready");
     fake.listManagedBoats = vi.fn()
-      .mockResolvedValueOnce({ configured: true, available: false, problem: "boat.dev could not list cloud computers (502)", instances: [] })
+      .mockResolvedValueOnce({ configured: true, available: false, problem: "example.invalid could not list cloud computers (502)", instances: [] })
       .mockRejectedValueOnce(new Error("socket hang up"))
       .mockResolvedValue({
         configured: true, available: true, problem: null,
         instances: [{ boxId: boxIdOf("on"), name: "on", state: "ready", ownerBotId: "on", ownerName: "on", orphaned: false, inUse: false }],
       });
     await power.armRunning();
-    expect(logs).toEqual(["cloud computers: could not list them to time the ones left on, retrying in 10 min: boat.dev could not list cloud computers (502)"]);
+    expect(logs).toEqual(["cloud computers: could not list them to time the ones left on, retrying in 10 min: example.invalid could not list cloud computers (502)"]);
     await vi.advanceTimersByTimeAsync(10 * MINUTE);
     expect(fake.listManagedBoats).toHaveBeenCalledTimes(2);
     expect(logs[1]).toMatch(/retrying in 20 min: listing failed$/);

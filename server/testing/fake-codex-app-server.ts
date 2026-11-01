@@ -843,7 +843,7 @@ process.stdin.on("data", (chunk) => {
           if (every > 0) setTimeout(print, every * (index + 1));
           else print();
         });
-        if (!process.env.FAKE_CODEX_COMMAND) notify("item/started", { item: { id: "w1", type: "webSearch", query: "OpenMausBot" } });
+        if (!process.env.FAKE_CODEX_COMMAND) notify("item/started", { item: { id: "w1", type: "webSearch", query: "Fizot" } });
         const reviewOnce = process.env.FAKE_CODEX_REVIEW_ONCE_FILE;
         if (process.env.FAKE_CODEX_REVIEW_EVENTS && (!reviewOnce || !existsSync(reviewOnce))) {
           if (reviewOnce) writeFileSync(reviewOnce, "1");
@@ -961,13 +961,13 @@ process.stdin.on("data", (chunk) => {
           const item = {
             type: "agentMessage",
             id: "call_async_question",
-            text: "Which source should I use?\n- Directly in OpenMausBot\n- The official server in Executor",
+            text: "Which source should I use?\n- Directly in Fizot\n- The official server in Executor",
             phase: "final_answer",
             memoryCitation: null,
             delivery: "async",
             questions: process.env.FAKE_CODEX_ASYNC_QUESTIONS
               ? JSON.parse(process.env.FAKE_CODEX_ASYNC_QUESTIONS)
-              : [{ title: "Which source should I use?", options: ["Directly in OpenMausBot", "The official server in Executor"] }],
+              : [{ title: "Which source should I use?", options: ["Directly in Fizot", "The official server in Executor"] }],
           };
           notify("item/started", { item, startedAtMs: Date.now() });
           notify("item/completed", { item, completedAtMs: Date.now() });

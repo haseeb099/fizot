@@ -30,7 +30,7 @@ it("opening My Cloud from the app needs no click and no code to type", async () 
   vi.stubGlobal("window", { ogb: { workspaces: {} } });
   f.pair.mockResolvedValue({ ok: true });
   const html = render(code);
-  expect(html).toContain("Connecting to this MausBot…");
+  expect(html).toContain("Connecting to this Fizot…");
   expect(html).not.toContain("Pairing code"); expect(html).not.toContain("<form");
   f.effects[0](); await flush();
   expect(f.pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code }));
@@ -53,7 +53,7 @@ it("a browser keeps the code in the form for the person to confirm", () => {
 
 it("My Cloud says where its connection starts, never 'the code shown on the server'", () => {
   const cloud = pairIntro({ mode: "code", sent: false, email: "", cloudHome: true });
-  expect(cloud).toContain(`choose ${en["cloudHome.connect"]} in the MausBot app`);
+  expect(cloud).toContain(`choose ${en["cloudHome.connect"]} in the Fizot app`);
   expect(cloud).toContain(`Settings → ${en["settings.section.cloudAccount"]}`);
   expect(cloud).toContain("on your Plan page");
   expect(cloud).not.toContain("shown on the server");

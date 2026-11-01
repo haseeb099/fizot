@@ -1,9 +1,9 @@
 # Bring Your Own VPS
 
-OpenMausBot can turn a Linux server you already own into a bot's computer. The agent process stays on your
+Fizot can turn a Linux server you already own into a bot's computer. The agent process stays on your
 machine; Docker's own SSH transport reaches the daemon on the VPS, and each bot gets one managed, hardened
 Cua container there — a Linux desktop it can see and control. SSH is the only credential involved and the
-only surface exposed: OpenMausBot never opens a public port on the VPS, never stores your SSH key or
+only surface exposed: Fizot never opens a public port on the VPS, never stores your SSH key or
 passphrase, and never runs an agent remotely.
 
 ## What works
@@ -34,7 +34,7 @@ not one that also holds things you would not hand to the agent.
 
 ## The required SSH config alias
 
-OpenMausBot connects only through a named alias in your `~/.ssh/config` — you type the alias into
+Fizot connects only through a named alias in your `~/.ssh/config` — you type the alias into
 Settings → API keys, nothing else. Every bot action becomes a `docker exec` over SSH, so the app
 supplies connection sharing and fail-fast timeouts itself: it runs each VPS command through its own
 `ssh_config` (under `~/.openmausbot/ssh/`) that includes your file first and fills in `ControlMaster`,
@@ -81,7 +81,7 @@ is back. (Changing the default alias still waits until its server can be listed.
 `~/.ssh/config`, host key already verified by hand, is all it takes. The field is in a saved bot's settings; a new
 bot starts on the default server.
 
-**Host key first, by hand.** Connect once manually before pointing OpenMausBot at the alias:
+**Host key first, by hand.** Connect once manually before pointing Fizot at the alias:
 
 ```sh
 ssh my-vps true
@@ -92,12 +92,12 @@ host is unknown simply fails until you have done this once.
 
 ## Security
 
-- **No public ports.** The managed container is created with no published ports, and OpenMausBot refuses to
+- **No public ports.** The managed container is created with no published ports, and Fizot refuses to
   use a container that publishes any — the check runs before every attach, not just at creation. Live view
   reaches the container's private bridge address through SSH and is loopback-only on your computer.
-- **Firewall the VPS to SSH only**, ideally from your IP. Nothing OpenMausBot does needs any other inbound
+- **Firewall the VPS to SSH only**, ideally from your IP. Nothing Fizot does needs any other inbound
   port open, so anything else open is pure attack surface.
-- **Nothing sensitive is stored.** The only thing OpenMausBot persists is the alias name itself
+- **Nothing sensitive is stored.** The only thing Fizot persists is the alias name itself
   (`~/.openmausbot/config.json`, plus a bot's own alias in `bots.json` when it has one); keys, passphrases,
   and agent state stay with SSH. Aliases are also kept out of the settings and bot records that paired phones
   and members of a shared workspace receive — they get configured-or-not, never the name. An SSH or Docker
@@ -115,7 +115,7 @@ when it has one.
 New containers default to 4 GiB memory with no extra swap, 2 CPUs, 512 PIDs, 512 MiB shared memory and an
 `unless-stopped` restart policy. These are creation defaults, not compatibility requirements. Existing
 managed containers can keep customized resource and OOM settings, unlimited budgets, or other restart
-policies, including the legacy `no` policy. OpenMausBot does not reset those settings or recreate a
+policies, including the legacy `no` policy. Fizot does not reset those settings or recreate a
 container to enforce its defaults. Restart behavior follows the chosen Docker policy; for example,
 `always` can wake a slept container after a Docker daemon restart.
 
@@ -124,7 +124,7 @@ container to enforce its defaults. Restart behavior follows the chosen Docker po
 - **Start** only wakes an existing stopped container; it never creates one.
 - **Sleep** stops the container. The VPS stops spending CPU on it; the filesystem stays put.
 - **Remove** is yours, done by hand when a bot no longer needs the server:
-  `docker -H ssh://my-vps rm -f <container>`. OpenMausBot never deletes a container on its own.
+  `docker -H ssh://my-vps rm -f <container>`. Fizot never deletes a container on its own.
 
 What survives what: sleep/start preserves the container's filesystem; removal — including the recreate that
 follows a Cua image upgrade, since a container pinned to an old image is refused rather than reused — wipes

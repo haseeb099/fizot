@@ -100,7 +100,7 @@ describe("preparing a harness response for a device", () => {
       for (const path of ["computer/join", "computer/screenshot", "local-computer/screenshot", "local-computer/join"]) {
         const { status, text } = await device(`/api/bots/b1/${path}`, "POST");
         expect(status).toBe(403);
-        expect(text).toContain("enable it in OpenMausBot");
+        expect(text).toContain("enable it in Fizot");
         expect(text).toContain("Settings → Remote access");
       }
     } finally {

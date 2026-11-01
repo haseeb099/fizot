@@ -19,6 +19,11 @@ export function loadAllowList(file) {
   return parsed.entries;
 }
 
+export function matchesUpstreamHost(value) {
+  HOST.lastIndex = 0;
+  return HOST.test(value);
+}
+
 export async function upstreamHostHits(root, entries = []) {
   const hits = [];
   for (const file of await readTextFiles(root, ROOTS)) {

@@ -58,7 +58,7 @@ test("Files channels answer this computer's own window only, and share only a fo
   assert.equal(await handlers.get("files:pick")({}), null);
   await assert.rejects(handlers.get("files:check")({}, "not a list"));
   await handlers.get("files:open")({}, { outputs: true });
-  assert.deepEqual(opened, [join(dir, "documents", "MausBot")]);
+  assert.deepEqual(opened, [join(dir, "documents", "Fizot")]);
   // before-quit runs twice when quitting: closing again must not throw.
   installed.close();
   assert.doesNotThrow(() => installed.close());

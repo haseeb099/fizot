@@ -1,5 +1,5 @@
 // X research's relay access on the desktop: while this computer's
-// MausBot Cloud sign-in is on an active paid plan, fetch that sign-in's
+// Fizot Cloud sign-in is on an active paid plan, fetch that sign-in's
 // own relay token from the Admin once and hand it to the local server over
 // the private parent port (server/included-services.ts). Kept in memory only.
 //

@@ -37,13 +37,13 @@ const request = (session, url) => new Promise((resolve) => session.hooks.request
 test("the app window's own requests to the server carry the owner header on http and WebSocket alike", async () => {
   const { defaultSession, setToken } = install();
   for (const url of [`http://127.0.0.1:${SERVER_PORT}/api/bots`, `ws://127.0.0.1:${SERVER_PORT}/api/desktop-viewer/local/shared/websockify`]) {
-    assert.equal((await sendHeaders(defaultSession, url))["X-OpenMausBot-Desktop-Owner"], "a".repeat(43), url);
+    assert.equal((await sendHeaders(defaultSession, url))["X-Fizot-Desktop-Owner"], "a".repeat(43), url);
   }
   for (const url of [`http://127.0.0.1:${SERVER_PORT + 1}/`, `https://127.0.0.1:${SERVER_PORT}/`, "https://example.com/", `http://localhost:${SERVER_PORT}/`, "not a url"]) {
-    assert.equal((await sendHeaders(defaultSession, url))["X-OpenMausBot-Desktop-Owner"], undefined, url);
+    assert.equal((await sendHeaders(defaultSession, url))["X-Fizot-Desktop-Owner"], undefined, url);
   }
   setToken(null);
-  assert.equal((await sendHeaders(defaultSession, `http://127.0.0.1:${SERVER_PORT}/api/bots`))["X-OpenMausBot-Desktop-Owner"], undefined);
+  assert.equal((await sendHeaders(defaultSession, `http://127.0.0.1:${SERVER_PORT}/api/bots`))["X-Fizot-Desktop-Owner"], undefined);
 });
 
 test("no session but the app window's may reach the server, in any spelling of this machine", async () => {

@@ -7,12 +7,12 @@ const accessToken = `omc_${"S".repeat(43)}`;
 
 test("OMB_CLOUD_STAGING=1, and only that, points the app at the fixed staging Admin with its own token file", () => {
   assert.deepEqual(cloudTarget({}), { origin: CLOUD_ORIGIN, staging: false, file: "cloud-account.bin", environments: "environments.json", sync: "cloud-sync", look: "cloud-home-look.json" });
-  assert.deepEqual(cloudTarget({ OMB_CLOUD_STAGING: "1" }), { origin: "https://omb-cloud-staging.fly.dev", staging: true, file: "cloud-account-staging.bin",
+  assert.deepEqual(cloudTarget({ OMB_CLOUD_STAGING: "1" }), { origin: "", staging: true, file: "cloud-account-staging.bin",
     environments: "environments-staging.json", sync: "cloud-sync-staging", look: "cloud-home-look-staging.json" });
   const production = Object.values(cloudTarget({})), staging = Object.values(cloudTarget({ OMB_CLOUD_STAGING: "1" }));
   assert.ok(staging.filter(value => typeof value === "string").every(name => !production.includes(name)), "no file or address shared with production");
-  assert.equal(STAGING_CLOUD_ORIGIN, "https://omb-cloud-staging.fly.dev");
-  for (const value of ["0", "true", "yes", " 1", "1 ", "01", "2", "", "https://evil.example.test", "https://omb-cloud-staging.fly.dev"]) {
+  assert.equal(STAGING_CLOUD_ORIGIN, "");
+  for (const value of ["0", "true", "yes", " 1", "1 ", "01", "2", "", "https://evil.example.test", ""]) {
     assert.deepEqual(cloudTarget({ OMB_CLOUD_STAGING: value }), cloudTarget({}), JSON.stringify(value));
   }
   assert.deepEqual(cloudTarget({ OMB_CLOUD_ORIGIN: "https://evil.example.test", OMB_CLOUD_STAGING_URL: "https://evil.example.test" }), cloudTarget({}), "no address is ever read from the environment");
@@ -21,8 +21,8 @@ test("OMB_CLOUD_STAGING=1, and only that, points the app at the fixed staging Ad
 
 test("the staging address is the one exact https origin; staging checkouts are only Dodo's test page", () => {
   assert.equal(cloudOrigin(STAGING_CLOUD_ORIGIN), STAGING_CLOUD_ORIGIN);
-  for (const value of ["http://omb-cloud-staging.fly.dev", `${STAGING_CLOUD_ORIGIN}/`, `${STAGING_CLOUD_ORIGIN}:8443`, "https://omb-cloud-staging.fly.dev.evil.test", "https://evil.fly.dev"]) {
-    assert.throws(() => cloudOrigin(value), /Invalid MausBot Cloud address/, value);
+  for (const value of ["", `${STAGING_CLOUD_ORIGIN}/`, `${STAGING_CLOUD_ORIGIN}:8443`, "", "https://evil.fly.dev"]) {
+    assert.throws(() => cloudOrigin(value), /Invalid Fizot Cloud address/, value);
   }
   const test = "https://test.checkout.dodopayments.com/session/cks_1", live = "https://checkout.dodopayments.com/session/cks_1";
   assert.equal(checkoutDestination(test, { staging: true }), test);

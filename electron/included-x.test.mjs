@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDesktopIncludedX, createIncludedXSync } from "./included-x.mjs";
 
-const access = { url: "https://cloud.openmausbot.com/api/cloud/services/x", token: `omb_xd_${"a".repeat(43)}` };
+const access = { url: "", token: `omb_xd_${"a".repeat(43)}` };
 const paid = (deviceId = "device-1") => ({ status: "connected", deviceId, entitlement: { plan: "pro", status: "active", tier: "pro" } });
 
 function sync(fetchAccess = vi.fn(async () => access)) {

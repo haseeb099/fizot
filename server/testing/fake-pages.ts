@@ -1,4 +1,4 @@
-// A stand-in for MausBot's pages: the Admin's token route and the pages Worker, as one fetch. Pages, quotas and tokens
+// A stand-in for Fizot's pages: the Admin's token route and the pages Worker, as one fetch. Pages, quotas and tokens
 // are kept in memory; nothing reaches the network.
 import { pagesHomeSignature } from "../pages/access.ts";
 
@@ -32,11 +32,11 @@ export function fakePagesService(options: { quota?: number; plan?: string; admin
     if (state.down) throw new TypeError("fetch failed");
     if (url.href === tokenUrl) {
       const body = await request.text(), who = caller(request, body);
-      if (!who) return Response.json({ error: "invalid_token", message: "Sign in to MausBot again to publish pages." }, { status: 401 });
+      if (!who) return Response.json({ error: "invalid_token", message: "Sign in to Fizot again to publish pages." }, { status: 401 });
       const { action, pageId } = JSON.parse(body) as { action: string; pageId?: string };
       minted.push({ action, ...(pageId ? { pageId } : {}), caller: who });
       if (action === "create" && pages.size >= state.quota) {
-        return Response.json({ error: "page_limit", message: `You’ve used your ${state.quota} free pages. MausBot Cloud gives you more, and pages without the badge.`,
+        return Response.json({ error: "page_limit", message: `You’ve used your ${state.quota} free pages. Fizot Cloud gives you more, and pages without the badge.`,
           usage: usage(), plan: state.plan, upgrade: true }, { status: 402 });
       }
       const id = action === "create" ? newId() : pageId!, token = `fake-token-${minted.length}`;

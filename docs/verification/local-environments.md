@@ -26,7 +26,7 @@ They do not prove the user workflow — the recipe does.
 - A packaged desktop installation of this branch, signed in on This
   computer with at least one bot so the bot list is visibly non-empty.
 - The registry lives in the app's user-data folder: on macOS
-  `~/Library/Application Support/OpenMausBot/environments.json`.
+  `~/Library/Application Support/Fizot/environments.json`.
 - The app log (`server.log` in the app's logs directory) records every
   switch decision; keep it open.
 
@@ -101,7 +101,7 @@ Make the **active** environment unbootable:
    cannot create its data dir exits quickly; a hung child burns the full
    probe timeout per attempt), then:
    - the installation comes up on This computer with normal data,
-   - a dialog titled **"The environment was unhealthy"** says OpenMausBot
+   - a dialog titled **"The environment was unhealthy"** says Fizot
      "came up on this computer's default data folder instead" and to choose
      the environment again once it is available,
    - `environments.json` shows `activeId` reset to `"local"`, and the entry

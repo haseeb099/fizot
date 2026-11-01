@@ -46,7 +46,7 @@ export async function connectVerb(ctx: VerbContext): Promise<VerbOutcome> {
   }
   let code = flag(ctx.flags, "code")?.replace(/\s+/g, "");
   if (!code && !isLoopback(origin)) throw usageError("a workspace elsewhere needs a pairing code", "open Settings → Phone → Set up a phone there, then pass --code CODE");
-  const unreachable = () => new HeadlessError(`no OpenMausBot server answers at ${origin}`, EXIT.unreachable, "check the address, and that the server is running");
+  const unreachable = () => new HeadlessError(`no Fizot server answers at ${origin}`, EXIT.unreachable, "check the address, and that the server is running");
   const described = await call(origin, "/.well-known/openmausbot/environment").catch(() => { throw unreachable(); });
   if (described.status !== 200 || typeof described.body.environmentId !== "string") throw unreachable();
   const label = flag(ctx.flags, "label")?.trim() || "openmausbot CLI";

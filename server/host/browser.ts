@@ -164,7 +164,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     const url = doorUrls.get(session);
     return url !== undefined && spec.env.AGENT_BROWSER_CDP === url;
   }
-  // A tool call that would open Reddit from MausBot Cloud is refused before it reaches the browser. My Chrome is the
+  // A tool call that would open Reddit from Fizot Cloud is refused before it reaches the browser. My Chrome is the
   // person's own, outside the egress gate too; on My Cloud a call that can't reach it now says why instead.
   const browserRuntime = new RuntimeRouter(agentBrowserRuntime, chromeEngine, {
     refusal: (_session, spec, params) => (attachesToChrome(spec.env) ? null : browserEgress.callRefusal(params)),
@@ -451,7 +451,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     return Promise.resolve(true);
   }
   /**
-   * The agent-browser whose saved sessions a deletion erases: the one OpenMausBot installed, or on a Cloud home the
+   * The agent-browser whose saved sessions a deletion erases: the one Fizot installed, or on a Cloud home the
    * image's own. Another one on PATH may be a wrapper whose failing close would hold the cleanup journal forever, so
    * it only closes the running browser.
    */
@@ -480,7 +480,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
         return true;
       }
       const ok = await clearBrowserSessionState(engine.binaryPath, name, { encryptionKey: browserEngineEncryptionKey() });
-      if (!ok) console.warn(`browser cleanup: could not clear saved state for session ${name}; restart OpenMausBot to retry this profile's cleanup. Do not use state clear --all: it erases other profiles too.`);
+      if (!ok) console.warn(`browser cleanup: could not clear saved state for session ${name}; restart Fizot to retry this profile's cleanup. Do not use state clear --all: it erases other profiles too.`);
       return ok;
     };
     const results = await Promise.all([eraseChromeBrowser(request), ...session ? [erased(session)] : []]);

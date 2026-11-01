@@ -53,8 +53,8 @@ describe("the page tools' internal routes", () => {
     const publisher = fakePublisher(), handler = createPagesInternalRoutes(publisher);
     expect(await internal(handler, { body: { path: 3, title: "x" } })).toMatchObject({ status: 400 });
     expect(publisher.publish).not.toHaveBeenCalled();
-    publisher.publish.mockResolvedValueOnce({ status: 403, text: "Publishing a page needs a MausBot account." });
-    expect(await internal(handler, { body: { path: "site", title: "x" } })).toMatchObject({ status: 403, body: { error: "Publishing a page needs a MausBot account." } });
+    publisher.publish.mockResolvedValueOnce({ status: 403, text: "Publishing a page needs a Fizot account." });
+    expect(await internal(handler, { body: { path: "site", title: "x" } })).toMatchObject({ status: 403, body: { error: "Publishing a page needs a Fizot account." } });
   });
 
   it("unpublishes by page id or path, as the capability's bot", async () => {

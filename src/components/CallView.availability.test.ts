@@ -92,7 +92,7 @@ describe("call capability guidance", () => {
       onDevice: true,
     }), false)).toEqual({
       label: "Calls aren't available right now",
-      reason: "The speech service is unavailable in this app build. Restart or update MausBot.",
+      reason: "The speech service is unavailable in this app build. Restart or update Fizot.",
     });
   });
 });

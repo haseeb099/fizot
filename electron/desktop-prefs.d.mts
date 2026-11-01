@@ -4,7 +4,7 @@ export interface DesktopNoticesState {
   /** Notices this desktop has shown and someone closed, on whichever page of its window; This computer's own workspace
    * record counts too (an earlier close of the popup, or the welcome's Cloud beat). */
   seen: string[];
-  /** This desktop sells MausBot Cloud: the installed app, not a branded build, not connected to another computer. */
+  /** This desktop sells Fizot Cloud: the installed app, not a branded build, not connected to another computer. */
   cloud: boolean;
 }
 /** On every page this desktop's window shows: this computer's, My Cloud's or another saved server's. */
@@ -69,7 +69,7 @@ export declare function registerDesktopPrefs(options: {
   cloudOffered(): Promise<boolean>;
   localConfig?(): unknown;
   languageChanged?(language: string, sender: unknown): void;
-  /** The MausBot Cloud sign-in client: with it, the product-updates question is asked and its answer kept here. */
+  /** The Fizot Cloud sign-in client: with it, the product-updates question is asked and its answer kept here. */
   cloudAccount?(): import("./updates-consent.mjs").UpdatesConsentClient | null;
   now?: () => number;
 }): import("./updates-consent.mjs").UpdatesConsent | null;

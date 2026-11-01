@@ -1,5 +1,5 @@
 // What a bot's browser may connect to: every address a destination resolves to gets a class, and the host
-// OpenMausBot runs on decides which classes pass.
+// Fizot runs on decides which classes pass.
 import { BlockList, isIP } from "node:net";
 import { z } from "zod";
 
@@ -7,7 +7,7 @@ import { addressClass, ownAddresses, type AddressClass } from "../../../electron
 
 export { addressClass, ownAddresses, type AddressClass };
 
-/** `desktop`: the app on someone's computer. `server`: self-hosted (Docker, npm). `cloud`: a MausBot Cloud home. */
+/** `desktop`: the app on someone's computer. `server`: self-hosted (Docker, npm). `cloud`: a Fizot Cloud home. */
 export type EgressHost = "desktop" | "server" | "cloud";
 
 /** `home-network` and `port` come from the person's own computer when My Cloud's browsing goes out through it. */
@@ -15,7 +15,7 @@ export type Refusal = "omb" | "this-computer" | "local-network" | "link-local" |
 
 /** How a refusal reads in the page-health line. */
 export const REFUSAL_TEXT: Record<Refusal, string> = {
-  omb: "OpenMausBot's own service",
+  omb: "Fizot's own service",
   "this-computer": "a service on this computer that no bot started",
   "local-network": "the local network",
   "link-local": "a link-local address",
@@ -37,8 +37,8 @@ export function namesThisMachine(host: string): boolean {
 /** `browserEngine.egress` in config.json. */
 export const browserEgressConfigSchema = z.object({
   /** Self-hosted servers only: local-network or this-computer destinations bots' browsers may reach, as
-   * `10.0.0.5`, `192.168.1.0/24`, `10.0.0.5:8080`, `fd12::/48` or `[fd12::1]:443`. OpenMausBot's own ports,
-   * cloud metadata and link-local addresses stay closed. MausBot Cloud ignores it. */
+   * `10.0.0.5`, `192.168.1.0/24`, `10.0.0.5:8080`, `fd12::/48` or `[fd12::1]:443`. Fizot's own ports,
+   * cloud metadata and link-local addresses stay closed. Fizot Cloud ignores it. */
   allow: z.array(z.string().trim().max(64).refine((entry) => parseAllowEntry(entry) !== null, {
     message: "must be an IP address or CIDR range, with an optional :port",
   })).max(64).optional(),
@@ -81,7 +81,7 @@ export function allowList(entries: readonly string[] | undefined): (address: str
 
 export interface EgressRules {
   host: EgressHost;
-  /** A port one of OpenMausBot's own listeners holds on this machine. */
+  /** A port one of Fizot's own listeners holds on this machine. */
   ownPort(port: number): boolean;
   /** Whether every listener on this loopback port belongs to a bot's processes. */
   botPort(port: number): Promise<boolean>;

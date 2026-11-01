@@ -1,6 +1,6 @@
 # Usage analytics
 
-OpenMausBot can send anonymous product analytics to PostHog (US cloud, `us.i.posthog.com`), so its maintainers can see
+Fizot can send anonymous product analytics to PostHog (US cloud, `us.i.posthog.com`), so its maintainers can see
 which features people set up and use. This page lists every event and every property the app can send. Nothing else is
 sent.
 
@@ -11,11 +11,11 @@ sent.
 - Autocapture, pageviews, surveys and feature flags are off. Events come only from the calls listed on this page, and
   switching analytics back on sends no event of its own.
 - Every event carries `app_version` (for example `0.1.112`) and `surface`: `local` for the desktop app's own window,
-  `server` for a page a server serves (MausBot Cloud, a self-hosted server, or the app in a browser).
+  `server` for a page a server serves (Fizot Cloud, a self-hosted server, or the app in a browser).
 - PostHog adds its standard device facts to every event: operating system, browser and its version, device type,
   screen and window size, language and time zone. Like any server, PostHog sees the IP address a request comes from.
 - Events are tied to a random id that PostHog keeps in the page's storage. The first-run screen asks for a name only and
-  ties no email to your events. If you are signed in to MausBot Cloud in
+  ties no email to your events. If you are signed in to Fizot Cloud in
   the desktop app and choose the Cloud Pro popup's main button or Compare plans, your events on this computer's page are
   tied to your Cloud account's email from then on (`cloud_pro_popup`); My Cloud's Manage plan, and Continue on this
   computer on a server's page, are counted on that page as `continue` and finish on this computer's page, which counts
@@ -32,7 +32,7 @@ The desktop app keeps the switch for this computer's page itself, so it holds wh
 (it moves to another when its usual one is taken). It is read before anything loads, and before any email is tied to
 your events. A switch turned off only in the page's storage, before the app kept it, does not hold on another port until
 the app serves its page on that port again, which moves it to the app; while the app has kept no choice yet, its page on
-a port other than its first ties no email to your events. Each server page (your MausBot Cloud, a self-hosted server,
+a port other than its first ties no email to your events. Each server page (your Fizot Cloud, a self-hosted server,
 each browser you use) keeps its own switch in that page's storage. With the switch off in the desktop app, a server page
 that the app's window shows, My Cloud's included, starts with it off too once that server runs this version; turning it
 on there lasts until that page reloads. In a browser, switch it off on each server's page.
@@ -42,7 +42,7 @@ on there lasts until that page reloads. In a browser, switch it off on each serv
 - API keys, tokens or passwords, or anything derived from them: no length, prefix, hash or last characters.
 - Names of bots, rooms, teams, people, routines, files, devices, models, presets or accounts.
 - Emails, except your Cloud account's email once a click on the Cloud Pro popup's main button or Compare plans is
-  counted on this computer's page while you are signed in to MausBot Cloud.
+  counted on this computer's page while you are signed in to Fizot Cloud.
 - URLs, hosts and addresses. PostHog's own `$current_url`, `$host`, `$pathname`, `$referrer`, `$referring_domain`,
   campaign parameters (`utm_*`, `gclid` and the like) and their `$initial_*` and `$session_entry_*` copies are removed
   before an event leaves the app.
@@ -76,7 +76,7 @@ use their own Boat key, and how many bots run on cloud computers, without sendin
 - It counts what the app has already loaded. It also asks, once: this server for its signed-in devices (counted, never
   listed) and its connected-app inventory; on the desktop app, the app itself for the number of paired phones and the
   Cloud plan; and, when a Boat account is set, this server for the number of cloud computers. To answer that, the server
-  lists the computers once at boat.dev with your Boat key, or at MausBot Cloud's relay for computers included with a
+  lists the computers once at boat.dev with your Boat key, or at Fizot Cloud's relay for computers included with a
   plan. That listing only reads: it never changes a computer.
 - When a source fails, its properties are left out and the rest is sent.
 
@@ -116,7 +116,7 @@ use their own Boat key, and how many bots run on cloud computers, without sendin
 | `paired_devices` | count | Devices signed in to this server without an email, other than this one |
 | `phone_paired` | true/false | Either count above is more than zero |
 | `members` | count | People signed in to this server with an email, other than you |
-| `cloud_home` | true/false | This server is a MausBot Cloud |
+| `cloud_home` | true/false | This server is a Fizot Cloud |
 | `cloud_plan` | `starter`, `personal`, `pro`, `max`, `other`, `none`, `unknown` | The Cloud plan: `none` when free or signed out, `unknown` when the app cannot tell |
 | `cloud_trial` | true/false | A Cloud trial is running |
 | `edition` | `oss`, `enterprise` | The edition |
@@ -133,11 +133,11 @@ use their own Boat key, and how many bots run on cloud computers, without sendin
 | `app_first_open` | The first time this app page starts with analytics on | `platform`: `desktop`, `browser` |
 | `app_opened` | Each time this app page starts with analytics on | `platform`: `desktop`, `browser` |
 | `app_active` | Once a day you use the app: when this app page starts, comes into view or is focused, or when a check every ten minutes finds a new day while the page is in view and focused. At most once per day by your computer's date for each app page, and never while the page is hidden | `platform`: `desktop`, `browser`; `mode`: `simple`, `advanced`, the look this app page is in when it counts the day |
-| `$identify` | PostHog's own event, sent before a `cloud_pro_popup` `upgrade`, `manage` or `see_plans` counted on this computer's page for someone signed in to MausBot Cloud (not while the app has kept no analytics choice of its own and serves that page on a port other than its first), to tie your events to that email. When your events were already tied to an email, PostHog sends its `$set` event with the new one instead | `$set`: `email`, your Cloud account's email; `$anon_distinct_id`: the random id your events had before |
+| `$identify` | PostHog's own event, sent before a `cloud_pro_popup` `upgrade`, `manage` or `see_plans` counted on this computer's page for someone signed in to Fizot Cloud (not while the app has kept no analytics choice of its own and serves that page on a port other than its first), to tie your events to that email. When your events were already tied to an email, PostHog sends its `$set` event with the new one instead | `$set`: `email`, your Cloud account's email; `$anon_distinct_id`: the random id your events had before |
 | `onboarding_step` | A first-run screen is shown | `step`: `meet`, `chief`; `replay`: true/false |
 | `onboarding_completed` | The first run ends in the chat | `reason`: `completed`; `at`: the screen it ended on; `replay`: true/false |
 | `setup_import_applied` | You bring in the skills and MCP servers found from other AI tools on this computer, in Settings → Import | `skills`, `tools`: how many were added. Never their names or where they came from |
-| `onboarding_cloud` | You tap Try Cloud under MausBot's first messages, which opens Add a Cloud | `action`: `start_trial` |
+| `onboarding_cloud` | You tap Try Cloud under Fizot's first messages, which opens Add a Cloud | `action`: `start_trial` |
 | `message_sent` | You send a message | To a bot: `driver`: engine; `queued`: true/false. To a room: `room`: true; `mode`: `chat`, `goal`; `queued`: true/false |
 | `call_started` | You start a call with a bot | `driver`: engine; `mode`: `turns`, `live` |
 | `group_call_started` | You start a call with a room | `memberCount`: count |
@@ -151,13 +151,13 @@ use their own Boat key, and how many bots run on cloud computers, without sendin
 | `engine_signed_in` | You finish signing in to an engine inside the app | `engine`: `claude`, `codex`, `grok`; `method`: `code`, `device_code`, `browser` |
 | `connector_connect` | A Connect you started in Connected apps ends | `app`: app; `result`: `connected` (the account it added works), `failed` or `expired` (that account failed or expired), `timed_out` (neither within two minutes) |
 | `app_snapshot` | Once a day, as described above | The properties in the snapshot table |
-| `cloud_card_shown` | The MausBot Cloud card is shown | `variant`: `signed_out`, `free` |
-| `cloud_card_action` | You act on the MausBot Cloud card | `action`: `start`, `howto`, `signin`, `not_now`, `close` |
-| `cloud_pro_popup` | The Cloud Pro popup (once on each desktop after an update, on whichever page its window shows) is shown, counted at most once a day on that desktop until it is closed, or you choose one of its buttons. On this computer's page, signed in to MausBot Cloud, `upgrade`, `manage` or `see_plans` first ties your events to your Cloud account's email (`$identify`); `shown`, `continue`, `not_now`, `close` and anything counted on a server's page never do. A server's page counts its main button there as `continue`: Manage plan on My Cloud's page, or Continue on this computer on a page that is not told your plan (a saved server's other than My Cloud's, or My Cloud's while it reads no plan). It switches the window to this computer, whose page counts what it opens there, with `via` naming the page clicked: `manage` for Manage plan; for Continue on this computer, from the plan this computer knows, `upgrade` with no plan, and `manage` with one or when its sign-in or plan is not known in time | `action`: `shown`, `upgrade` (Start free trial, Upgrade to Cloud Pro, or Continue on this computer with no plan), `manage` (Manage plan, or Continue on this computer with a plan), `see_plans` (Compare plans), `continue` (the main button on a server's page), `not_now`, `close` (the X, Escape or a click outside); `plan`: `none`, `trial`, `starter`, `personal`, `pro`, `max`, `other` (a plan newer than the app), `unknown` (the sign-in ended or is not known yet, or a page that is not told the plan); `signed_in`: true/false, signed in to MausBot Cloud in the app (false on a page that is not told); `page`: where it was counted: `local` (this computer's page), `my_cloud`, `server` (another saved server's); `via`: on this computer's page, the page whose click it finishes: `my_cloud`, `server` |
+| `cloud_card_shown` | The Fizot Cloud card is shown | `variant`: `signed_out`, `free` |
+| `cloud_card_action` | You act on the Fizot Cloud card | `action`: `start`, `howto`, `signin`, `not_now`, `close` |
+| `cloud_pro_popup` | The Cloud Pro popup (once on each desktop after an update, on whichever page its window shows) is shown, counted at most once a day on that desktop until it is closed, or you choose one of its buttons. On this computer's page, signed in to Fizot Cloud, `upgrade`, `manage` or `see_plans` first ties your events to your Cloud account's email (`$identify`); `shown`, `continue`, `not_now`, `close` and anything counted on a server's page never do. A server's page counts its main button there as `continue`: Manage plan on My Cloud's page, or Continue on this computer on a page that is not told your plan (a saved server's other than My Cloud's, or My Cloud's while it reads no plan). It switches the window to this computer, whose page counts what it opens there, with `via` naming the page clicked: `manage` for Manage plan; for Continue on this computer, from the plan this computer knows, `upgrade` with no plan, and `manage` with one or when its sign-in or plan is not known in time | `action`: `shown`, `upgrade` (Start free trial, Upgrade to Cloud Pro, or Continue on this computer with no plan), `manage` (Manage plan, or Continue on this computer with a plan), `see_plans` (Compare plans), `continue` (the main button on a server's page), `not_now`, `close` (the X, Escape or a click outside); `plan`: `none`, `trial`, `starter`, `personal`, `pro`, `max`, `other` (a plan newer than the app), `unknown` (the sign-in ended or is not known yet, or a page that is not told the plan); `signed_in`: true/false, signed in to Fizot Cloud in the app (false on a page that is not told); `page`: where it was counted: `local` (this computer's page), `my_cloud`, `server` (another saved server's); `via`: on this computer's page, the page whose click it finishes: `my_cloud`, `server` |
 | `cloud_howto` | The "Show me how" tip ends | `result`: `no_button`, `skipped`, `closed` |
-| `cloud_dialog_shown` | The Add a Cloud dialog opens | `source`: `app_card`, `app_howto`, `app_menu`, `app_settings`, `app_routines`, `update_popup` (the Cloud Pro popup), `app_onboarding` (Try Cloud under MausBot's first messages); `view`: the dialog's first screen |
+| `cloud_dialog_shown` | The Add a Cloud dialog opens | `source`: `app_card`, `app_howto`, `app_menu`, `app_settings`, `app_routines`, `update_popup` (the Cloud Pro popup), `app_onboarding` (Try Cloud under Fizot's first messages); `view`: the dialog's first screen |
 | `cloud_dialog_view` | The Add a Cloud dialog reaches a step | `view`: `received`, `starting`, `ready` |
-| `cloud_signin` | Signing in to MausBot Cloud inside the Add a Cloud dialog takes a step | `step`: `code_sent` (a sign-in code was emailed), `signed_in`, `browser` (Continue in browser); `source`: as for `cloud_dialog_shown` |
+| `cloud_signin` | Signing in to Fizot Cloud inside the Add a Cloud dialog takes a step | `step`: `code_sent` (a sign-in code was emailed), `signed_in`, `browser` (Continue in browser); `source`: as for `cloud_dialog_shown` |
 | `cloud_checkout_opened` | A Cloud checkout opens in the browser | `plan`: Cloud plan; `trial`: true/false; `source`: as for `cloud_dialog_shown` |
 | `cloud_add_another` | Buying another Cloud, for someone who has one, takes a step | `step`: `plan` (a plan chosen), `checkout_opened`, `ready`; `plan`: Cloud plan, for `plan` and `checkout_opened` |
 | `rail_place_opened` | You open a place from the rail of Clouds at the window's left edge | `kind`: `computer`, `cloud`, `team`, `server` |

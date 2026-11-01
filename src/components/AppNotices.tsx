@@ -153,7 +153,7 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
   // also for a launch after the one whose welcome just finished. Account and billing notices keep their own rules.
   // Unknown (null) until the bots have loaded, so nothing lower in the queue flashes up before them.
   const firstChat = firstReplyPending(state);
-  // MausBot's first-launch card goes first: the popup and the question wait while it is due. The popup skips a launch the
+  // Fizot's first-launch card goes first: the popup and the question wait while it is due. The popup skips a launch the
   // card used; the question may follow the card once it closes, as it follows the popup.
   const afterWelcome = welcomeFinishedThisLaunch() || launchDialogShown() === "mausbot" || firstChat;
   const consentWaits = welcomeFinishedThisLaunch() || firstChat;
@@ -161,7 +161,7 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
   const consentNow = consentWaits === true || consentFact === false ? false : consentWaits === null || mausBotFirst ? null : consentFact;
   // After a closed popup only the product-updates question may follow in this launch; nothing else does.
   const notice = waits ? null : closed ? (consentNow === true ? UPDATES_CONSENT_NOTICE : null) : cards || popupHere || consentHere || simpleDue ? nextNotice({
-    // As the Cloud Pro popup: never in the launch whose welcome just finished, nor over MausBot's first-launch card.
+    // As the Cloud Pro popup: never in the launch whose welcome just finished, nor over Fizot's first-launch card.
     [SIMPLE_MODE_NOTICE]: !simpleDue || afterWelcome === true ? false : afterWelcome === null || mausBotFirst || simpleBlocked ? null : true,
     [CLOUD_PRO_UPDATE_NOTICE]: !popupPending || moving || afterWelcome === true ? false
       : afterWelcome === null || mausBotFirst || popupState === "loading" || moving === null || (popupView !== null && popupBlocked) ? null : popupView !== null,
@@ -179,7 +179,7 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
   const shownKey = notice === CLOUD_TRIAL_NOTICE ? key : notice;
   useEffect(() => {
     if (!shownKey) return;
-    // The popups and the question own this launch: MausBot's first-launch card waits for a later one.
+    // The popups and the question own this launch: Fizot's first-launch card waits for a later one.
     if (shownKey === SIMPLE_MODE_NOTICE || shownKey === CLOUD_PRO_UPDATE_NOTICE || shownKey === UPDATES_CONSENT_NOTICE) markLaunchDialog("notices");
     if (shownKey === CLOUD_INTRO) {
       setIntroOpen(true);

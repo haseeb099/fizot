@@ -1,4 +1,4 @@
-// What one @devs report carries to the MausBot team's endpoint (POST /api/bug-reports on the Cloud origin): the person's
+// What one @devs report carries to the Fizot team's endpoint (POST /api/bug-reports on the Cloud origin): the person's
 // message, the bot's summary when it wrote one, and facts the server gathers itself. Never the conversation, never a
 // file. Everything passes redactReportText, and every field stays inside the endpoint's limits.
 import { isSecretName, mask, redactSecretsInText } from "./redact.ts";
@@ -135,7 +135,7 @@ function describe(input: DevsReportInput, redact: (text: string) => string): str
 
 function diagnose(input: DevsReportInput, redact: (text: string) => string): string {
   const lines = [
-    "OpenMausBot @devs report", `Sent: ${iso(input.now)}`, `App version: ${input.appVersion}`, `Runs on: ${input.runsOn}`,
+    "Fizot @devs report", `Sent: ${iso(input.now)}`, `App version: ${input.appVersion}`, `Runs on: ${input.runsOn}`,
     `OS: ${input.os}`, `Node: ${input.node}`, `Server uptime: ${duration(input.uptimeSeconds)}`,
     ...(input.language ? [`Language: ${input.language}`] : []), `Install: ${input.installId}`,
     "", "## Conversation", `Conversation: ${input.threadId}`, `Message: ${input.messageId}`, ...(input.groupId ? [`Group chat: ${input.groupId}`] : []),

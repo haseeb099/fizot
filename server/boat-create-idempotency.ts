@@ -79,7 +79,7 @@ function recoveryStateError(detail: string, cause?: unknown): Error & { status: 
   return Object.assign(
     new Error(
       `Cloud computer creation is paused because its recovery state is ${detail}. `
-      + "Check boat.dev for an unnamed Boat before repairing OpenMausBot's local state.",
+      + "Check example.invalid for an unnamed Boat before repairing Fizot's local state.",
     ),
     { status: 503, cause },
   );
@@ -311,7 +311,7 @@ function acquireJournalLock(): JournalLockOwner {
       const reaped = current !== null && !processIsAlive(current.pid) && reapDeadLock(current);
       // Every retry path is bounded: an adversarially changing lock can vanish or be replaced between steps.
       if (performance.now() >= deadline) {
-        throw recoveryStateError("locked by another OpenMausBot process");
+        throw recoveryStateError("locked by another Fizot process");
       }
       if (reaped) continue;
       Atomics.wait(lockWait, 0, 0, LOCK_RETRY_MS);
@@ -357,8 +357,8 @@ export function beginBoatCreate(botId: string, requestBody: string): BoatCreateA
         throw recoveryStateError("waiting for an earlier cloud computer request to be reconciled");
       }
       if (now - pending.createdAt >= KEY_RETENTION_MS) {
-        // Past boat.dev's 24-hour idempotency window a retry or new key may create a second billable Boat; stop for manual reconciliation.
-        throw recoveryStateError("older than boat.dev's 24-hour retry window");
+        // Past example.invalid's 24-hour idempotency window a retry or new key may create a second billable Boat; stop for manual reconciliation.
+        throw recoveryStateError("older than example.invalid's 24-hour retry window");
       }
       return { request: { ...pending }, startedNow: false };
     }
@@ -377,7 +377,7 @@ export function beginBoatCreate(botId: string, requestBody: string): BoatCreateA
 
 /** Persist the returned identity before the caller attempts to rename it. */
 export function rememberCreatedBoat(request: BoatCreateRequest, boxId: string): BoatCreateRequest {
-  if (!BOAT_ID.test(boxId)) throw new Error("boat.dev returned an invalid cloud computer id");
+  if (!BOAT_ID.test(boxId)) throw new Error("example.invalid returned an invalid cloud computer id");
   return withJournalLock((requests) => {
     const current = requests.find((candidate) => (
       candidate.botId === request.botId

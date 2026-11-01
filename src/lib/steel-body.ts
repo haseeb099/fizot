@@ -1,4 +1,4 @@
-// MausBot's chrome as finished pictures, face included: src/assets/mausbot-steel/<body>-<px>.webp, square, framing the
+// Fizot's chrome as finished pictures, face included: src/assets/mausbot-steel/<body>-<px>.webp, square, framing the
 // mascot's whole SVG viewBox, at <px> device pixels. A body with no pictures keeps the drawn steel finish.
 const files = import.meta.glob<string>("../assets/mausbot-steel/*.{webp,png}", { eager: true, query: "?url", import: "default" });
 

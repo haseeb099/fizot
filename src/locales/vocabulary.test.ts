@@ -53,7 +53,7 @@ const isSource = (name: string) => /\.(?:ts|tsx|mjs|cjs|js)$/.test(name) && !/\.
 /** No snippet keeps the word file-wide; otherwise only literals containing the snippet. */
 const ALLOWED: ReadonlyArray<{ file: string; snippet?: string; why: string }> = [
   { file: "shared/credential-request.ts", snippet: "when Boat is selected", why: "the card that asks for a person's own Boat key" },
-  { file: "server/boat-create-idempotency.ts", snippet: "unnamed Boat", why: "own-key repair: boat.dev's own name for a machine" },
+  { file: "server/boat-create-idempotency.ts", snippet: "unnamed Boat", why: "own-key repair: example.invalid's own name for a machine" },
   { file: "server/workspace-backup.ts", snippet: "OMB-WORKSPACE-1", why: "a backup file's format marker" },
   { file: "electron/company-backups.mjs", snippet: "OMB-WORKSPACE-1", why: "a backup file's format marker" },
 ];
@@ -176,7 +176,7 @@ describe("one name per thing", () => {
     for (const good of [
       "Sign in to MausBot Cloud", "Pro active · verified by MausBot Cloud", "Restart OpenMausBot", "locked by another OpenMausBot process",
       "set OMB_PUBLIC_IPV4", "Open My Cloud", "Open the Cloud", "Choose Cloud desktop to wake", "Auto, Cloud desktop or Browser",
-      "Included with your Cloud plan", "Add a Boat API key in Settings → API keys", "Connect Boat", "Check boat.dev",
+      "Included with your Cloud plan", "Add a Boat API key in Settings → API keys", "Connect Boat", "Check example.invalid",
       "Bots here can get their own cloud desktops from Boat, a paid service", "Cloud desktops by Boat",
       "Local VM", "Open your Plan page",
     ]) expect(retiredIn(good), good).toEqual([]);

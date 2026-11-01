@@ -68,7 +68,7 @@ describe("which Chrome the bots' browser runs", () => {
   });
 
   it("on a Linux desktop without its own Google Chrome keeps the bundled shell, as a fixed choice", () => {
-    const linuxDesktop = (files: string[]) => host("linux", files, { env: { OMB_RESOURCES_PATH: "/opt/OpenMausBot/resources" } });
+    const linuxDesktop = (files: string[]) => host("linux", files, { env: { OMB_RESOURCES_PATH: "/opt/Fizot/resources" } });
     expect(resolveChromePlan(linuxDesktop(["/opt/google/chrome/chrome"]), managed)).toMatchObject({ kind: "chrome", chrome: { source: "installed" } });
     expect(resolveChromePlan(linuxDesktop([]), managed)).toEqual({ kind: "legacy", reason: "Google Chrome is not installed" });
     const policy = linuxDesktop(["/opt/google/chrome/chrome", "/etc/opt/chrome/policies/managed/corp.json"]);

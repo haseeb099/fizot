@@ -184,7 +184,7 @@ it("takes Philipp's own words in Biber's chat as the answer to the card Biber wa
 }, hostTimeout(150_000));
 
 it("turns Biber's NEEDS INPUT question into the same card with a reply field, in its chat and in Philipp's inbox, and his reply there answers Biber", async () => {
-  script(luchs.id, ...handOn("QC3"), { key: "QC3-L-ASKED", match: ["stopped on a question for", "[OpenMausBot question from @Biber", "QC3-JOB"], reply: "QC3-L-ASKED" });
+  script(luchs.id, ...handOn("QC3"), { key: "QC3-L-ASKED", match: ["stopped on a question for", "[Fizot question from @Biber", "QC3-JOB"], reply: "QC3-L-ASKED" });
   script(biber.id,
     { key: "QC3-B2", match: ["QC3-BRIEF", "The person answered"], reply: "QC3-B2: Erledigt, der neue Abschlusstext steht." },
     { key: "QC3-B", match: ["QC3-BRIEF"], reply: `Geprüft: der Abschlusstext nutzt noch die alte Vorlage.\nNEEDS INPUT: ${OPEN}` });
@@ -213,7 +213,7 @@ it("turns Biber's NEEDS INPUT question into the same card with a reply field, in
 }, hostTimeout(150_000));
 
 it("closes the open question as stopped when Philipp stops Biber's work, in its chat and in his inbox", async () => {
-  script(luchs.id, ...handOn("QC4"), { key: "QC4-L-ASKED", match: ["stopped on a question for", "[OpenMausBot question from @Biber", "QC4-JOB"], reply: "QC4-L-ASKED" });
+  script(luchs.id, ...handOn("QC4"), { key: "QC4-L-ASKED", match: ["stopped on a question for", "[Fizot question from @Biber", "QC4-JOB"], reply: "QC4-L-ASKED" });
   script(biber.id, { key: "QC4-B", match: ["QC4-BRIEF"], reply: `Geprüft.\nNEEDS INPUT: ${OPEN}` });
   const sinceQC4 = Date.now();
   await say(luchs, inbox, "QC4-JOB: Lass Biber den Einladungstext prüfen.");

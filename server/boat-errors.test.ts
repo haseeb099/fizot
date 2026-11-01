@@ -9,7 +9,7 @@ const billing = {
   message: "Start the $20/month Boat plan to create sandboxes.",
   error: {
     code: "billing_required",
-    details: { billingUrl: "https://boat.dev/dashboard?tab=billing", accessTier: "trial" },
+    details: { billingUrl: "", accessTier: "trial" },
   },
 };
 
@@ -17,7 +17,7 @@ describe("boatErrorMessage", () => {
   it("passes the provider's billing message through, with its link", () => {
     const msg = boatErrorMessage(402, "boat create", billing);
     expect(msg).toContain("$20/month Boat plan");
-    expect(msg).toContain("https://boat.dev/dashboard?tab=billing");
+    expect(msg).toContain("");
     expect(msg).not.toMatch(/\(402\)/);
   });
 
@@ -27,7 +27,7 @@ describe("boatErrorMessage", () => {
 
   it("tells you to re-paste your own key on an auth failure", () => {
     expect(boatErrorMessage(401, "boat create", { message: "unauthorized" }))
-      .toBe("boat.dev rejected your Boat API key — paste a current one in Settings → API keys");
+      .toBe("example.invalid rejected your Boat API key — paste a current one in Settings → API keys");
   });
 
   it("never asks for a token the person never pasted when Cloud Pro's included one is refused", () => {

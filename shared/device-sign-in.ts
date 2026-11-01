@@ -1,5 +1,5 @@
 // Where a person enters the one-time code that signs an engine's CLI in on
-// the machine running OpenMausBot (`codex login --device-auth`, `grok login
+// the machine running Fizot (`codex login --device-auth`, `grok login
 // --device-auth`). The server reads the page and the code from the CLI's
 // output with these rules, and the app checks them again before it shows a
 // link. Neither ever turns arbitrary output into a link, or lets a token ride

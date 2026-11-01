@@ -51,7 +51,7 @@ function sidebar() {
   return { ada, bea, maus, from, commit };
 }
 
-describe("MausBot landing in the sidebar", () => {
+describe("Fizot landing in the sidebar", () => {
   it("glides the rows already there down by its height, flies the avatar into the new top slot and shows the row as it lands", () => {
     const s = sidebar();
     landInSidebar({ from: s.from, botId: "maus", reduced: false, commit: s.commit });

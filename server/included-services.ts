@@ -6,9 +6,10 @@
 //   OMB_CLOUD_X_URL       + OMB_CLOUD_X_TOKEN        the X research relay (a desktop gets its own over the parent port)
 // The person's own key always wins and is resolved per request; an included token goes only to its relay and is never
 // written to config.json or reported to a client.
+import { fizotEndpoint } from "../shared/fizot-endpoints.ts";
 import { JEV_DEFAULT_BASE_URL } from "./decider/jev.ts";
 
-export const BOAT_API_DEFAULT = "https://boat.dev/api/v1";
+export const BOAT_API_DEFAULT = fizotEndpoint("boatApiOrigin");
 export const ELEVENLABS_API_DEFAULT = "https://api.elevenlabs.io/v1";
 /** Must also be on WORKSPACE_CREDENTIAL_ENV. */
 export const INCLUDED_TOKEN_ENV = ["OMB_CLOUD_BOAT_TOKEN", "OMB_CLOUD_VOICE_TOKEN", "OMB_CLOUD_DECIDER_TOKEN", "OMB_CLOUD_AI_TOKEN", "OMB_CLOUD_X_TOKEN"] as const;
@@ -65,8 +66,8 @@ export function holdIncludedServices(env: NodeJS.ProcessEnv = process.env): void
 
 function resolve(own: string | undefined, providerApi: string, included: ServiceCredential | null): ServiceCredential | null {
   if (own) {
-    // A leased computer hands the included token back as a plain one; it still goes only to its relay.
     if (included && own === included.token) return included;
+    if (!providerApi) return null;
     return { token: own, api: providerApi, included: false };
   }
   return included;
@@ -97,7 +98,7 @@ export function deciderCredential(
 }
 
 /** X research's relay token on a signed-in desktop: the desktop's main process
- * fetches it with its MausBot Cloud sign-in while the plan is paid
+ * fetches it with its Fizot Cloud sign-in while the plan is paid
  * (electron/main.mjs) and hands it over on the private parent port. Held in
  * memory only, never written to config. */
 let desktopX: ServiceCredential | null = null;

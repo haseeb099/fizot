@@ -124,11 +124,11 @@ export function filterToolsListFrame(
 
 const AUTH_CONFIG_PARAMETER = {
   type: "string",
-  description: "Optional, read by OpenMausBot: the id (ac_…) of an auth config in the person's own Composio project to "
+  description: "Optional, read by Fizot: the id (ac_…) of an auth config in the person's own Composio project to "
     + "connect the one listed toolkit with. Leave it out to use their most recently created enabled config for it.",
 };
 
-/** COMPOSIO_MANAGE_CONNECTIONS as OpenMausBot's connection cards read it: Composio's schema has no auth config id. */
+/** COMPOSIO_MANAGE_CONNECTIONS as Fizot's connection cards read it: Composio's schema has no auth config id. */
 export function withAuthConfigParameter(frame: Record<string, unknown>): Record<string, unknown> {
   const result = frame.result;
   if (!result || typeof result !== "object" || Array.isArray(result)) return frame;

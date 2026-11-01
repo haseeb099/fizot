@@ -1,6 +1,6 @@
 # Decision model
 
-OpenMausBot can use a fast decision model to pick things for your bots. It
+Fizot can use a fast decision model to pick things for your bots. It
 answers in a few hundred milliseconds for a fraction of a cent. It never does
 the work: the chosen bot still runs its own turn on its own engine. Two
 providers are supported: TypeSafe's [Jev](https://typesafe.ai) (the default)
@@ -158,7 +158,7 @@ Each decision sends the state described above (the room's name, its people,
 recent room lines and the new message) and the bots' descriptions to the
 selected provider. With OpenRouter that is OpenRouter and the host it routes
 the model to, under OpenRouter's privacy settings and your account's data
-policy; OpenMausBot does not set a data-collection preference. Use Jev, or
+policy; Fizot does not set a data-collection preference. Use Jev, or
 leave the job off, for rooms that must not leave the machine.
 
 ## Turning it off

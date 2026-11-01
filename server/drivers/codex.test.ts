@@ -678,7 +678,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       const input = calls.find((c) => c.method === "turn/start")?.params?.input as Array<{ text?: string }> | undefined;
       return input?.[0]?.text;
     };
-    expect(turnText(first)).toBe("Context from OpenMausBot updated since this conversation started; it replaces any earlier copy:\n\nMemory: likes quiet hours.\n\nfirst");
+    expect(turnText(first)).toBe("Context from Fizot updated since this conversation started; it replaces any earlier copy:\n\nMemory: likes quiet hours.\n\nfirst");
     expect(turnText(second)).toBe("second");
     expect(turnText(third)).toContain("Memory: moved to Toronto.");
     expect(turnText(third)).toContain("third");
@@ -1175,7 +1175,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(argv).toContain("mcp_servers.notes.command");
   });
 
-  it("reaches a url server through OpenMausBot's connector on Codex's own login, header values off argv", async () => {
+  it("reaches a url server through Fizot's connector on Codex's own login, header values off argv", async () => {
     await create();
     const dump = join(scratch, "remote-mcp.json");
     process.env.FAKE_CODEX_DUMP = dump;
@@ -1250,7 +1250,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
       const seen = JSON.parse(readFileSync(dump, "utf8"));
       expect(seen.mcpStartup.voluum).toEqual({ status: "ready", tools: ["report", "campaigns"] });
-      expect(strict.initializes).toEqual([{ protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "OpenMausBot tool proxy", version: "1" } }]);
+      expect(strict.initializes).toEqual([{ protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "Fizot tool proxy", version: "1" } }]);
       expect(seen.argv.join(" ")).not.toContain("tok-voluum");
     });
 
@@ -1285,7 +1285,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
       const seen = JSON.parse(readFileSync(dump, "utf8"));
       expect(seen.mcpStartup.voluum).toEqual({ status: "ready", tools: ["report"] });
-      expect(strict.initializes).toEqual([{ protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "OpenMausBot tool proxy", version: "1" } }]);
+      expect(strict.initializes).toEqual([{ protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "Fizot tool proxy", version: "1" } }]);
     });
   });
 
@@ -1984,7 +1984,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
   it("reports local ChatGPT sign-out with a warning when remote revocation is unconfirmed", async () => {
     vi.spyOn(ChatGptPlanAuthController.prototype, "models").mockResolvedValue({ default: "gpt-6.1-sol", options: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] });
     vi.spyOn(ChatGptPlanAuthController.prototype, "snapshot").mockResolvedValue({ authenticated: false });
-    const message = "Signed out locally, but remote revocation was not confirmed. Disconnect OpenMausBot in ChatGPT Settings → Usage to end access there.";
+    const message = "Signed out locally, but remote revocation was not confirmed. Disconnect Fizot in ChatGPT Settings → Usage to end access there.";
     vi.spyOn(ChatGptPlanAuthController.prototype, "signOut").mockRejectedValue(Object.assign(new Error(message), { code: "chatgpt_revocation_unconfirmed" }));
     await create({ authMode: "chatgpt-plan" });
     await expect(instance.signOut!()).resolves.toBeUndefined();
@@ -2298,7 +2298,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       if (index > 0) expect(threadCalls[0].method).toBe("thread/resume");
       const updates = calls.filter((call) => call.method === "thread/inject_items");
       expect(updates).toHaveLength(index === 2 || index === 3 ? 1 : 0);
-      if (updates.length) expect(JSON.stringify(updates[0].params)).toContain(system || "No OpenMausBot bot-specific instructions remain.");
+      if (updates.length) expect(JSON.stringify(updates[0].params)).toContain(system || "No Fizot bot-specific instructions remain.");
       for (const call of calls.filter((call) => call.method === "turn/start")) {
         expect(call.params.input).toEqual([{ type: "text", text: `message-${index}` }]);
       }
@@ -2320,7 +2320,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       await expect(recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId)).resolves.toMatchObject({ ok: true });
       const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
       const threadCall = calls.find((call: { method: string }) => call.method === (index ? "thread/resume" : "thread/start"));
-      expect(threadCall.params.developerInstructions).toBe(`${system || "No OpenMausBot bot-specific instructions remain."}\n\nPrivate native rules.`);
+      expect(threadCall.params.developerInstructions).toBe(`${system || "No Fizot bot-specific instructions remain."}\n\nPrivate native rules.`);
       expect(calls.filter((call: { method: string }) => call.method === "thread/inject_items")).toHaveLength(index === 1 ? 1 : 0);
       expect(calls.find((call: { method: string }) => call.method === "turn/start").params.input).toEqual([{ type: "text", text: `message-${index}` }]);
     }
@@ -2549,14 +2549,14 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       requestType: "question",
       tool: "ask_user",
       summary: "Which source should I use?",
-      choices: ["Directly in OpenMausBot", "The official server in Executor"],
-      questions: [{ question: "Which source should I use?", options: [{ label: "Directly in OpenMausBot" }, { label: "The official server in Executor" }] }],
+      choices: ["Directly in Fizot", "The official server in Executor"],
+      questions: [{ question: "Which source should I use?", options: [{ label: "Directly in Fizot" }, { label: "The official server in Executor" }] }],
     });
     expect(recorder.events.find((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toMatchObject({
-      text: "Which source should I use?\n- Directly in OpenMausBot\n- The official server in Executor",
+      text: "Which source should I use?\n- Directly in Fizot\n- The official server in Executor",
     });
 
-    const answer = "The user answered your questions.\n\nQ: Which source should I use?\nA: Directly in OpenMausBot";
+    const answer = "The user answered your questions.\n\nQ: Which source should I use?\nA: Directly in Fizot";
     await expect(instance.adapter.respondToRequest("t-async-question", opened.requestId!, { behavior: "answer", message: answer })).resolves.toBe("answered");
     expect(await recorder.until((e) => e.type === "request.resolved")).toMatchObject({ requestId: opened.requestId, behavior: "answer", source: "user" });
     expect(JSON.parse(readFileSync(dump, "utf8")).calls.find((c: any) => c.method === "turn/steer")?.params?.input).toEqual([{ type: "text", text: answer }]);
@@ -3287,7 +3287,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       await expect(instance.snapshot()).resolves.toMatchObject({ authenticated: true });
     });
 
-    it("says a ChatGPT account's Codex usage limit is OpenAI's, not MausBot's, and leaves a custom provider's words alone", async () => {
+    it("says a ChatGPT account's Codex usage limit is OpenAI's, not Fizot's, and leaves a custom provider's words alone", async () => {
       await create({ mode: "usage-limit" });
       const { done, errors } = await runTurn("t-limit");
       expect(errors).toHaveLength(1);
@@ -3305,7 +3305,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     const plus = "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:23 PM.";
     const said = codexUserError(plus, "own");
     expect(said).toContain("ChatGPT");
-    expect(said).toContain("not your MausBot plan");
+    expect(said).toContain("not your Fizot plan");
     expect(said).toMatch(/It resets at 5:23 PM \([^)]+\)\./);
     expect(said).not.toContain("Pro");
     expect(codexUserError("You've hit your usage limit for gpt-6.1-sol. Switch to another model now, or try again at Oct 17th, 2026 5:23 PM.", "own"))

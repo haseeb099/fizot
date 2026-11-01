@@ -63,7 +63,7 @@ test("talkPanelBounds sits the box bottom-centre of the work area, clamped", () 
 test("the constants are frozen and carry the spec's values", () => {
   assert.deepEqual(TALK_PANEL, { width: 400, margin: 24, minHeight: 56, maxHeight: 240, fadeMs: 180 });
   assert.ok(Object.isFrozen(TALK_PANEL) && Object.isFrozen(TALK_LABELS));
-  assert.equal(TALK_LABELS["needs-you"], "MausBot needs you · Open chat");
+  assert.equal(TALK_LABELS["needs-you"], "Fizot needs you · Open chat");
   assert.equal(TALK_LABELS["still-working"], "Still working · Open chat");
   assert.equal(TALK_LABELS.error, "");
 });

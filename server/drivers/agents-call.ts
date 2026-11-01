@@ -541,10 +541,10 @@ export async function callTool(called: string, input: Json, context: ToolCallCon
       return { text: `${r.label ?? CREDENTIAL_TARGETS[credentialId].label} is already configured. Continue the task.` };
     }
     if (credentialId === "onePasswordToken") {
-      return { text: `A secure ${r.label ?? CREDENTIAL_TARGETS[credentialId].label} request is ready: the person pastes it into its card in OpenMausBot, on their computer or in My Cloud, and OpenMausBot checks it with 1Password before keeping it. End this turn; OpenMausBot will resume the task after they save or decline. Never ask them to paste the token into chat, and never pass it to a command line.` };
+      return { text: `A secure ${r.label ?? CREDENTIAL_TARGETS[credentialId].label} request is ready: the person pastes it into its card in Fizot, on their computer or in My Cloud, and Fizot checks it with 1Password before keeping it. End this turn; Fizot will resume the task after they save or decline. Never ask them to paste the token into chat, and never pass it to a command line.` };
     }
     return {
-      text: `A secure ${r.label ?? CREDENTIAL_TARGETS[credentialId].label} request is ready. The desktop app and a freshly QR-paired mobile app show its secure entry card; older mobile pairings explain how to pair again or finish on the computer. End this turn; OpenMausBot will resume the task after the user saves or declines. Never ask them to paste the key into chat.`,
+      text: `A secure ${r.label ?? CREDENTIAL_TARGETS[credentialId].label} request is ready. The desktop app and a freshly QR-paired mobile app show its secure entry card; older mobile pairings explain how to pair again or finish on the computer. End this turn; Fizot will resume the task after the user saves or declines. Never ask them to paste the key into chat.`,
     };
   }
   if (name === "request_sign_in") {
@@ -556,7 +556,7 @@ export async function callTool(called: string, input: Json, context: ToolCallCon
       body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, site, ...(reason ? { reason } : {}) }),
     });
     return {
-      text: `The person was asked to sign in to ${r.site ?? site} on ${SIGN_IN_PLACES[String(r.place)] ?? "the place you work"}. Your turn ends now: say in one short line that you are waiting for them, then stop. OpenMausBot resumes you when they finish or decline. Never ask for the password or a code in chat.`,
+      text: `The person was asked to sign in to ${r.site ?? site} on ${SIGN_IN_PLACES[String(r.place)] ?? "the place you work"}. Your turn ends now: say in one short line that you are waiting for them, then stop. Fizot resumes you when they finish or decline. Never ask for the password or a code in chat.`,
     };
   }
   if (name === "fill_login") {
@@ -879,7 +879,7 @@ export async function callTool(called: string, input: Json, context: ToolCallCon
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
-/** A secret OpenMausBot does not keep: the person agrees to one use, and the bot gets a secretRef or a file path back. */
+/** A secret Fizot does not keep: the person agrees to one use, and the bot gets a secretRef or a file path back. */
 async function requestCustomSecret(args: Json, context: ToolCallContext): Promise<ToolCallResult> {
   const r = await context.client.apiResponse("/api/internal/request-credential", {
     method: "POST",
@@ -889,9 +889,9 @@ async function requestCustomSecret(args: Json, context: ToolCallContext): Promis
   if (!r.ok) return { text: String(r.body.error ?? `request_credential failed (HTTP ${r.status}).`), isError: true };
   if (typeof r.body.text === "string") return { text: `${r.body.text} Continue the task.` };
   const asked = r.body.savedAs === "ref"
-    ? ` ${label} was saved earlier for OpenMausBot's tools only, not as a file for your commands (not a file request), so this card asks for it again.`
+    ? ` ${label} was saved earlier for Fizot's tools only, not as a file for your commands (not a file request), so this card asks for it again.`
     : r.body.savedAs === "file" ? ` ${label} was saved earlier as a file for your commands, not as a secretRef, so this card asks for it again.` : "";
   return {
-    text: `A secure card for ${label} is ready in OpenMausBot, on the computer and on a freshly QR-paired phone.${asked} End this turn now and say in one line that you are waiting for it; OpenMausBot resumes you when the person saves or declines, and tells you how to use it. Never ask for it in chat.`,
+    text: `A secure card for ${label} is ready in Fizot, on the computer and on a freshly QR-paired phone.${asked} End this turn now and say in one line that you are waiting for it; Fizot resumes you when the person saves or declines, and tells you how to use it. Never ask for it in chat.`,
   };
 }

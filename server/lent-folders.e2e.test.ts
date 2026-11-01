@@ -50,7 +50,7 @@ async function api(method: string, path: string, options: { body?: unknown; remo
 }
 
 async function ownerPairing(): Promise<string> {
-  const body = JSON.stringify({ label: "OpenMausBot app (Cloud)", ttlSeconds: 300 });
+  const body = JSON.stringify({ label: "Fizot app (Cloud)", ttlSeconds: 300 });
   const timestamp = String(Math.floor(Date.now() / 1000)), nonce = randomBytes(16).toString("base64url");
   const granted = await api("POST", "/api/cloud/pairing", { remote: true, headers: {
     "content-type": "application/json", "x-omb-cloud-timestamp": timestamp, "x-omb-cloud-nonce": nonce,
@@ -78,7 +78,7 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     },
   }));
   mkdirSync(join(home, "web"));
-  writeFileSync(join(home, "web", "index.html"), "<!doctype html><title>OpenMausBot</title>");
+  writeFileSync(join(home, "web", "index.html"), "<!doctype html><title>Fizot</title>");
   const port = await freePortBlock([0, 1]);
   base = `http://127.0.0.1:${port}`;
   const offlinePrelude = `data:text/javascript,${encodeURIComponent('globalThis.fetch = async () => new Response("offline fixture", { status: 503 });')}`;
@@ -164,7 +164,7 @@ it("a lent folder keeps working while the Mac is away: read from the copy, chang
     lending: lendingForFiles({ environment: () => env, sharing: () => connector, validate: validateSharedFolders }),
   });
   try {
-    // The person lends Notes with editing, as Settings → MausBot Cloud does.
+    // The person lends Notes with editing, as Settings → Fizot Cloud does.
     await connector.saveCloud(env, { folders: [{ id: randomUUID(), path: notes, write: true }], screen: false, internet: false });
     await vi.waitFor(() => expect(connector.cloudState(env).connected).toBe(true), { timeout: 15_000 });
     // Files copies it by itself: nothing to choose.

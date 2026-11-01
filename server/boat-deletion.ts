@@ -1,5 +1,5 @@
 // Boat's deletion operation: DELETE /sandboxes/{id} answers 202 with one, polled at GET /deletion-operations/{id}
-// (https://docs.boat.dev/data-retention/delete, https://docs.boat.dev/api/reference/account/get-deletion-operation).
+// ( ).
 // The sandbox leaves every list, restore and fork at once, a delete can never be cancelled, and Boat retries the purge
 // itself, so `blocked` is not a failure: it says what the background erase waits for.
 
@@ -39,7 +39,7 @@ export function boatDeletionOperation(
   return { id, kind: "sandbox", targetId: boxId, status: status as BoatDeletionOperation["status"], stage };
 }
 
-/** Blocked only until Boat finishes on its own: OpenMausBot's delete is done. */
+/** Blocked only until Boat finishes on its own: Fizot's delete is done. */
 export const blockedUntilBoatFinishes = (operation: BoatDeletionOperation) =>
   operation.status === "blocked" && SELF_FINISHING_STAGES.has(operation.stage ?? "");
 
@@ -50,7 +50,7 @@ export const keptForNewerSnapshots = (operation: BoatDeletionOperation) =>
 /** Never "retry": Boat accepted the delete and retries the purge itself. */
 export function deletionBlockedError(boxId: string, kept: boolean): Error & { status: number } {
   return Object.assign(new Error(kept
-    ? `boat.dev deleted cloud computer ${boxId} but is keeping its stored data, because a fork or named snapshot made from it still uses that data. To erase the data, delete those in boat.dev.`
-    : `boat.dev accepted the deletion of cloud computer ${boxId}, but says it is blocked without a reason OpenMausBot knows. boat.dev keeps retrying on its own; if ${boxId} is still listed in boat.dev later, delete it there.`,
+    ? `example.invalid deleted cloud computer ${boxId} but is keeping its stored data, because a fork or named snapshot made from it still uses that data. To erase the data, delete those in example.invalid.`
+    : `example.invalid accepted the deletion of cloud computer ${boxId}, but says it is blocked without a reason Fizot knows. example.invalid keeps retrying on its own; if ${boxId} is still listed in example.invalid later, delete it there.`,
   ), { status: 409 });
 }

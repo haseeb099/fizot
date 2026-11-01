@@ -76,7 +76,7 @@ describe("optional phone setup", () => {
     const result = await runPhoneSetup(options, ui.io, deps);
     expect(result).toEqual({ options });
     expect(result.options).toBe(options);
-    expect(ui.io.choose).toHaveBeenCalledWith("Use OpenMausBot on your phone?", expect.any(Array), 0);
+    expect(ui.io.choose).toHaveBeenCalledWith("Use Fizot on your phone?", expect.any(Array), 0);
     expect(deps.accountReady).not.toHaveBeenCalled();
     expect(deps.login).not.toHaveBeenCalled();
     ui.consumed();
@@ -113,7 +113,7 @@ describe("optional phone setup", () => {
     const ui = prompts({ choices: [2, 0], confirms: [true] });
     expect((await runPhoneSetup(options, ui.io, deps)).phone).toBe("android");
     expect(deps.login).not.toHaveBeenCalled();
-    expect(ui.lines.join("\n")).toContain("saved OpenMausBot account");
+    expect(ui.lines.join("\n")).toContain("saved Fizot account");
     ui.consumed();
   });
 
@@ -238,7 +238,7 @@ describe("phone pairing instructions", () => {
 
   it("sends an Android phone to the app first, and still offers the browser", () => {
     const text = phonePairingInstructions("android", { origin: "https://maus.example", ready: true }).join("\n");
-    expect(text).toContain("open the OpenMausBot app and scan the QR with its pairing scanner");
+    expect(text).toContain("open the Fizot app and scan the QR with its pairing scanner");
     expect(text).toContain("Camera will not open it in a browser");
     expect(text).toContain("https://maus.example/pair");
     expect(text).not.toContain("not the Android native pairing scanner");

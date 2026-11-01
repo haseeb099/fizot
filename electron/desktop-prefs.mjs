@@ -136,11 +136,11 @@ export function createDesktopPrefs({ read, write, now = Date.now }) {
 }
 
 /**
- * `cloudAccount()`: the MausBot Cloud sign-in client, for the product-updates question (updates-consent.mjs), which is
+ * `cloudAccount()`: the Fizot Cloud sign-in client, for the product-updates question (updates-consent.mjs), which is
  * asked where Cloud offers are (`cloudOffered`); without it nothing is asked and null is returned.
  * `page(event)`: "local" for this computer's page, "cloud" for My Cloud's own page as main verifies it, "server" for
  * another saved server open in this desktop's window, null for anything else. `cloudOffered()`: this desktop sells
- * MausBot Cloud, asked once its Cloud sign-in is restored. `localConfig()`: This computer's own workspace's config.json.
+ * Fizot Cloud, asked once its Cloud sign-in is restored. `localConfig()`: This computer's own workspace's config.json.
  * `languageChanged(language, sender)`: tells this desktop's other pages the language picked on one of them.
  */
 export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page, cloudOffered, cloudAccount, localConfig = () => null, languageChanged = () => {}, now = Date.now, systemName = accountFullName }) {

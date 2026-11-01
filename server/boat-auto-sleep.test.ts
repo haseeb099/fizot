@@ -103,7 +103,7 @@ describe("a cloud computer goes to sleep after its idle window", () => {
     vi.unstubAllEnvs();
   });
 
-  it("with a person's own Boat key, stops it at boat.dev, asking Chrome to exit first", async () => {
+  it("with a person's own Boat key, stops it at example.invalid, asking Chrome to exit first", async () => {
     await powerFor({ box: { token: OWN } });
     power.used(botId);
     await new Promise(resolve => setTimeout(resolve, 600));

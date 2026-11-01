@@ -717,7 +717,7 @@ describe("lookupLocation", () => {
 
   it("says which case a refusal is, in plain words, with HighLevel's own reason when it gave one", async () => {
     expect(await check(401, MISSING_SCOPE)).toMatchObject({ status: 401, message:
-      "This token is missing the View Locations permission (401), which OpenMausBot needs to check it. In HighLevel, open Settings → Private Integrations, " +
+      "This token is missing the View Locations permission (401), which Fizot needs to check it. In HighLevel, open Settings → Private Integrations, " +
       "edit this integration, turn on View Locations and save, then connect again: the token stays the same. HighLevel said: The token is not authorized for this scope." });
     expect(await check(401, INVALID_TOKEN)).toMatchObject({ status: 401, message:
       "HighLevel did not accept this token (401). Check that it was copied whole and has not been rotated or deleted, " +

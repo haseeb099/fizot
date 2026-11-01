@@ -324,3 +324,33 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Files / Patch IDs: PATCH-20. Notion PR 29.
 - Rollback: Restore the push and pull_request triggers, and remove the package job heap.
 
+## CL-30 Stop phone-home when Fizot endpoints are empty
+
+- Type: Code
+- Date: 2026-11-01
+- Area: Fork & brand, Sandbox & egress
+- Risk: Medium
+- Logged by: Cursor
+- Commit: the commit that adds this row
+- Why we changed it: S2.3 (FZ-10) asks Fizot to stop calling upstream hosts that this fork does not use. Bug reports, analytics, update checks, cloud and account origins, and the computer-service default were still aimed at upstream.
+- How it works: `brand/endpoints.json` holds those URLs and every value is empty. Each feature reads that value, or an existing `OMB_*` variable when one is set, and does nothing when both are empty. A fake-engine boot records outbound fetch URLs and fails if any match an upstream host. The host allow-list keeps fixture hostnames used by upstream tests, plus the two scanner files that name a host on purpose.
+- Why it is necessary: A default install must not contact upstream bug, analytics, update, cloud, account, or computer-service hosts. The env names stay, so a later config can turn a feature on without renaming variables.
+- Impact (cost / risk / timeline): No spend. Bug reports, analytics, update checks, and the computer service stay off until a Fizot URL or the existing env var is set. An empty-allow host scan was 281 hits before this change and 25 after. Those 25 are fixture hosts and the scanner files. The scan reports no unlisted host.
+- Files / Patch IDs: PATCH-21. Notion PR 30. https://app.notion.com/p/40bdd43e0a9d81839b6dc2bdac07e44a
+- Rollback: Restore the upstream URL defaults and the previous host allow-list. Remove the fetch log and the boot test.
+
+## CL-31 Replace user-visible upstream names with Fizot
+
+- Type: Code
+- Date: 2026-11-01
+- Area: Fork & brand, CI & tests
+- Risk: Medium
+- Logged by: Cursor
+- Commit: the commit that adds this row
+- Why we changed it: S2.2 (FZ-9) asks for a brand map and for user-visible product and mascot names to say Fizot. The brand allow-list still covered whole source trees.
+- How it works: `brand/brand-map.json` maps the upstream product names and mascot labels to Fizot. User-visible strings, window titles, installer display names, and the app icon use Fizot. Internal identifiers are unchanged. The brand allow-list no longer covers `server`, `src`, `shared`, `electron`, `companion`, `public`, or `scripts` as folders. It lists attribution files, the change history, the scanners, the vocabulary test, and files whose ordinary English matches a mascot label. The static job scans again after the renderer build.
+- Why it is necessary: People should see Fizot, and a new user-visible upstream name should fail the scan instead of hiding inside a folder allow.
+- Impact (cost / risk / timeline): No spend. An empty-allow brand scan was 4028 hits before this change and 179 after. Those 179 are the listed files. The scan reports no unlisted brand leak. Chat messages still draw the geometric body. The picker labels and the app icon do not show it. The built renderer is scanned in CI after `vite build`; this machine did not run that build.
+- Files / Patch IDs: PATCH-22. Notion PR 31. https://app.notion.com/p/40bdd43e0a9d81acbc1fcad35e3e280f
+- Rollback: Restore the previous strings and the folder allow-list. Remove the brand map and the post-build scan step.
+

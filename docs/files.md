@@ -1,9 +1,9 @@
 # Files: lent folders on My Cloud, get your bots' work
 
-Files is a top-level page in the desktop app, for people with a MausBot Cloud ("My Cloud"). It does two jobs:
+Files is a top-level page in the desktop app, for people with a Fizot Cloud ("My Cloud"). It does two jobs:
 
 - **Lent folders, even while this computer sleeps.** Every folder lent to My Cloud (each moved bot's project folder, a folder added here) also gets a copy on My Cloud, kept up to date while this computer is on. The home folder, which this computer lends My Cloud by itself (`docs/cloud-pro.md`, "This computer works for your Clouds"), is too broad for a copy and stays live only. While it is away, bots read that copy, and a change to a folder lent with editing waits on My Cloud and lands here when the computer is back. Nobody chooses anything: what fits is copied, the rest stays live only.
-- **Your bots' work.** What Cloud bots make comes down to `Documents/MausBot/<bot>/<conversation>` on this computer.
+- **Your bots' work.** What Cloud bots make comes down to `Documents/Fizot/<bot>/<conversation>` on this computer.
 
 It never merges two sides. Nothing on this computer is deleted because of something that happened on My Cloud, and a bot changes the person's files only in a folder lent with editing, by the same rules whether the computer is on or away.
 
@@ -55,7 +55,7 @@ Folders shared from the Files page before lent folders keep working. Once this c
 - **Folders that are never shared:**
   - the home folder or anything above it;
   - a drive root or a mount point;
-  - MausBot's own folders: its data folder and `Documents/MausBot`;
+  - Fizot's own folders: its data folder and `Documents/Fizot`;
   - folders of keys and settings: `.ssh`, `.aws`, `.gnupg`, `.config`, `Library`, `AppData` and similar;
   - a folder inside, or around, one already shared.
 - **This computer's version always wins.** A file new or changed here is uploaded. If a bot edits the copy anyway, the next pass puts this computer's version back, and the bot's version stays in My Cloud's trash. Files a bot adds to the copy stay on My Cloud and never come down.
@@ -71,7 +71,7 @@ Folders shared from the Files page before lent folders keep working. Once this c
 
 `planOutputs`, `fetchOutputs`.
 
-- **What comes down:** each bot conversation folder (`task-workspaces/<bot>/<thread>`) that changed since the switch was turned on (`newestMs`). It lands in `Documents/MausBot/<bot name>/<conversation title>`, with names made safe for Windows and macOS.
+- **What comes down:** each bot conversation folder (`task-workspaces/<bot>/<thread>`) that changed since the switch was turned on (`newestMs`). It lands in `Documents/Fizot/<bot name>/<conversation title>`, with names made safe for Windows and macOS.
 - **Never deleted here.** A file removed on My Cloud stays on this computer. A file the person removed here comes back only when My Cloud has a newer version.
 - **The person's edit is kept.** When the file here changed since it came down, My Cloud's newer version lands beside it, as "report (new from My Cloud, 15 Oct 2026).md". A file that was not edited is replaced, and the old copy goes to the Recycle Bin first.
 - **Never brought down:**

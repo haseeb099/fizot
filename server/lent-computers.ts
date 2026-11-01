@@ -102,10 +102,10 @@ export class LentComputers {
   }
 }
 
-/** What makes a lent computer lend its apps and screen: OpenMausBot on it lends them by itself once computer control works there. */
+/** What makes a lent computer lend its apps and screen: Fizot on it lends them by itself once computer control works there. */
 export const lendScreenSteps = (device: "PC" | "Mac" | "computer") => device === "Mac"
-  ? "OpenMausBot on that Mac lends them by itself once macOS allows it Accessibility and Screen Recording: tell the person in one sentence to allow both for OpenMausBot in System Settings → Privacy & Security on that Mac, and to update OpenMausBot there if it is an older version."
-  : `OpenMausBot on that ${device} lends them by itself once its computer control works: tell the person in one sentence to check computer control in OpenMausBot on that ${device}, and to update OpenMausBot there if it is an older version.`;
+  ? "Fizot on that Mac lends them by itself once macOS allows it Accessibility and Screen Recording: tell the person in one sentence to allow both for Fizot in System Settings → Privacy & Security on that Mac, and to update Fizot there if it is an older version."
+  : `Fizot on that ${device} lends them by itself once its computer control works: tell the person in one sentence to check computer control in Fizot on that ${device}, and to update Fizot there if it is an older version.`;
 
 const dateText = (at: number) => new Date(at).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 
@@ -120,7 +120,7 @@ export function awayNotice(known: LentComputer[], online: ReadonlySet<string>): 
   const latest = away[0]!;
   const device = deviceWord(latest.platform);
   const say = latest.stoppedAt === null
-    ? `Their ${device} ${latest.name} is shared with the Cloud but offline (last online ${dateText(latest.lastSeenAt)}): OpenMausBot on it is closed, or the ${device} is asleep or off. Ask them to open OpenMausBot on that ${device}; it reconnects by itself.`
-    : `Their ${device} ${latest.name} no longer shares itself with the Cloud: OpenMausBot on it is paused, or signed out of MausBot Cloud. Ask them to choose Resume from OpenMausBot's icon in the ${device === "Mac" ? "menu bar" : "taskbar"} on that ${device}, or sign in there again.`;
+    ? `Their ${device} ${latest.name} is shared with the Cloud but offline (last online ${dateText(latest.lastSeenAt)}): Fizot on it is closed, or the ${device} is asleep or off. Ask them to open Fizot on that ${device}; it reconnects by itself.`
+    : `Their ${device} ${latest.name} no longer shares itself with the Cloud: Fizot on it is paused, or signed out of Fizot Cloud. Ask them to choose Resume from Fizot's icon in the ${device === "Mac" ? "menu bar" : "taskbar"} on that ${device}, or sign in there again.`;
   return { offline, say };
 }

@@ -283,7 +283,7 @@ test("My Cloud's notice says what did not go, by kind, with each reason: logins 
   const login = (id, site) => ({ key: itemKey.login(site, "amit"), kind: "login", label: site, detail: "amit", id, parts: { saved: id } });
   const sides = fakeSides({ localItems: [bot("ember", { soul: "s" }), login("l1", "bank.example"), login("l2", "crm.example"), { key: itemKey.onePassword(), kind: "1password", label: "1Password", parts: { token: "t" } }] });
   sides.deps.handoff = async (what) => {
-    if (what.kind === "login") throw new Error("OpenMausBot on this computer did not answer. Try again.");
+    if (what.kind === "login") throw new Error("Fizot on this computer did not answer. Try again.");
     throw new Error("1Password did not accept this computer's token, so it was not sent to My Cloud.");
   };
   const send = createCloudSend(sides.deps);
@@ -293,7 +293,7 @@ test("My Cloud's notice says what did not go, by kind, with each reason: logins 
   const notice = sendNotice(send.snapshot());
   const none = { bots: [], skills: 0, logins: 0, onePassword: false, settings: 0, connections: 0, chats: false };
   assert.deepEqual(notice.last.reasons, [
-    { what: { ...none, logins: 2 }, error: "OpenMausBot on this computer did not answer. Try again." },
+    { what: { ...none, logins: 2 }, error: "Fizot on this computer did not answer. Try again." },
     { what: { ...none, onePassword: true }, error: "1Password did not accept this computer's token, so it was not sent to My Cloud." },
   ]);
   assert.equal(notice.last.error, undefined, "the send itself did not stop");

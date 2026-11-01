@@ -1,5 +1,5 @@
 // Ported from pingdotgg/t3code@00cdceb1 packages/client-runtime/src/preview/serverBrowserStream.test.ts (MIT License,
-// Copyright (c) 2026 T3 Tools Inc.), with OpenMausBot's routes, its watching viewer's resize and its own messages.
+// Copyright (c) 2026 T3 Tools Inc.), with Fizot's routes, its watching viewer's resize and its own messages.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { browserStreamAccess, createPreviewStreamClient, type PreviewStreamControl, type PreviewStreamEvents } from "./browser-stream-client";

@@ -59,8 +59,8 @@ describe("the team's people in the sidebar", () => {
     expect(needsYouVersion(tasks(2), [], [])).toBe(needsYouVersion(tasks(2), [], []));
   });
 
-  it("finds the person's inbox with their own Chief, else their own MausBot", () => {
-    const mausbot = bot({ id: "mm", name: "MausBot", defaultBot: { person: MARCO.email } });
+  it("finds the person's inbox with their own Chief, else their own Fizot", () => {
+    const mausbot = bot({ id: "mm", name: "Fizot", defaultBot: { person: MARCO.email } });
     const chief = bot({ id: "mc", name: "Marco's Chief", chiefOfStaff: true, reportsTo: MARCO.email });
     const philipps = bot({ id: "pc", chiefOfStaff: true, reportsTo: PHILIPP.email });
     expect(inboxBotOf([mausbot, philipps, chief], MARCO.email)?.id).toBe("mc");

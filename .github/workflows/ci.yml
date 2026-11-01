@@ -96,6 +96,8 @@ jobs:
         run: pnpm exec vite build
         env:
           NODE_OPTIONS: --max-old-space-size=7000
+      - name: Scan built output for brand leaks
+        run: node scripts/fizot/scan-brand-leaks.mjs
 
   vitest:
     # Admit the expensive runner fan-out only after the quick checks pass.

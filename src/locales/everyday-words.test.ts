@@ -19,7 +19,7 @@ const EVERYDAY_PREFIXES: Record<string, readonly string[]> = {
     "place.", "computer.tab.", "computer.simple.", "computer.phase.", "computer.cloud.", "computer.badge.", "computer.problem.",
     "computer.screen.", "vm.cloud.", "browser.",
   ],
-  "MausBot Cloud: buying it, setting it up, moving to it and sharing with it": [
+  "Fizot Cloud: buying it, setting it up, moving to it and sharing with it": [
     "cloudBuy.", "cloudIntro.", "cloudTrial.", "cloudCancel.", "cloudSetup.", "cloudIntent.", "cloudNotice.", "cloudHowTo.", "cloudProPopup.",
     "cloudCredit.", "cloudPower.", "cloudSignIn.", "cloudAdd.", "cloudHome.", "cloudPhone.", "cloudAccount.", "pro.", "lending.",
     "files.", "usageMeter.",
@@ -64,7 +64,7 @@ type Word = { word: string; pattern: RegExp; say: string };
 const INTERNAL_WORDS: readonly Word[] = [
   { word: "engine", pattern: /\bengines?\b/i, say: "AI" },
   { word: "instance", pattern: /\binstances?\b/i, say: "AI account" },
-  // "Your own server" is the person's own word for a computer they run OpenMausBot on (the rail's ＋).
+  // "Your own server" is the person's own word for a computer they run Fizot on (the rail's ＋).
   { word: "server", pattern: /(?<!(?:Discord|Slack|MCP|own) )\bservers?\b/i, say: "the app, the Cloud when it is hosted, or your own server" },
   { word: "Composio", pattern: /composio/i, say: "connected apps" },
   { word: "Cloud computer", pattern: /\bcloud computers?\b/i, say: "cloud desktop" },

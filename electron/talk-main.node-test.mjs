@@ -225,7 +225,7 @@ test("a press, an open or a dismiss that throws is logged, never thrown at Elect
   h.talk.close();
 });
 
-test("clicking the box opens its chat by a link with both ids escaped, or else just shows MausBot", async () => {
+test("clicking the box opens its chat by a link with both ids escaped, or else just shows Fizot", async () => {
   const h = harness({ serve: route => {
     if (route === "/api/bots?messages=0") return json({ bots: [{ id: "b?1&x", defaultBot: {}, tasks: [] }] });
     if (route === "/api/bots/b%3F1%26x/tasks") return json({ task: { threadId: "t 1/x" } });
@@ -274,7 +274,7 @@ test("a press while this computer's server is still starting says so", async () 
   h.start();
   h.press();
   await settle();
-  assert.deepEqual((await h.painted()).at(-1), { state: "error", text: "MausBot is still starting. Try again in a moment." });
+  assert.deepEqual((await h.painted()).at(-1), { state: "error", text: "Fizot is still starting. Try again in a moment." });
   h.talk.close();
 });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
-  app: { name: "OpenMausBot" },
+  app: { name: "Fizot" },
   Menu: { buildFromTemplate: (template) => template },
 }));
 
@@ -48,7 +48,7 @@ describe("buildApplicationMenu", () => {
     const onToggle = vi.fn();
     const template = build(platform, { openAtLogin: { checked: false, onToggle } });
     const item = template[0].submenu.find((entry) => entry.id === "open-at-login");
-    expect(template[0].label).toBe(platform === "darwin" ? "OpenMausBot" : "File");
+    expect(template[0].label).toBe(platform === "darwin" ? "Fizot" : "File");
     expect(item).toMatchObject({ label: "Open at Login", type: "checkbox", checked: false });
     item.click();
     expect(onToggle).toHaveBeenCalledWith(true);
@@ -70,7 +70,7 @@ describe("buildApplicationMenu", () => {
     const template = build(platform);
     expect(template[0].role).toBe("fileMenu");
     for (const item of template) {
-      expect(item.label).not.toBe("OpenMausBot");
+      expect(item.label).not.toBe("Fizot");
     }
   });
 

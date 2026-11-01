@@ -17,7 +17,7 @@ afterAll(async () => {
   await fixture?.close();
 });
 
-it("asks MausBot in its own Quick asks chat, as the desktop app does, and follows the reply to the end", async () => {
+it("asks Fizot in its own Quick asks chat, as the desktop app does, and follows the reply to the end", async () => {
   let saved: TalkChat | null = null;
   const talk = createTalkServer({ request, serverKey: () => "fixture", prefs: { quickAsksChat: () => saved, setQuickAsksChat: (_s, chat) => { saved = chat; } } });
   const before = (await (await request("/api/bots?messages=0")).json() as any).bots.find((b: any) => b.defaultBot);

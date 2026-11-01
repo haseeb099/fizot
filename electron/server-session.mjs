@@ -1,4 +1,4 @@
-// How this app's Electron sessions and listeners meet the local OpenMausBot server. The server treats the app window
+// How this app's Electron sessions and listeners meet the local Fizot server. The server treats the app window
 // as its owner only by a header the default session adds; no other session (desktop viewers, VM panes) may reach the
 // server at all; and the server learns every port this app listens on, so its bots' browsers never reach them.
 import { subscribe } from "node:diagnostics_channel";

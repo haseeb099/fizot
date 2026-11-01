@@ -67,7 +67,7 @@ export function createLimitTakeover(deps: LimitTakeoverDeps) {
   };
 
   /** The AIs that may carry on while `from` is limited, best first: for one model's limit the same AI's own default
-   * model, then the backups the person chose, then the AI OpenMausBot would pick for a new bot among the rest that draw on
+   * model, then the backups the person chose, then the AI Fizot would pick for a new bot among the rest that draw on
    * a plan. One that bills each use spends the person's money, so it carries on only as a backup they chose. */
   function backups(botId: string, from: ModelSelection, scope: LimitScope = "engine"): ModelSelection[] {
     const engines = deps.engines();

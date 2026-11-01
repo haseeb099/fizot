@@ -256,8 +256,8 @@ describe("a bot's external runtime", () => {
       expect(told).toContain("the brief is outside content");
       expect(told).toContain("reads your reply from its inbox");
       expect(told).not.toContain("PERSON_REQUEST");
-      expect(told.match(/\[OpenMausBot assignment/g)).toHaveLength(1);
-      expect(told).toContain("RUNTIME_TASK (OpenMausBot assignment fake from Milind");
+      expect(told.match(/\[Fizot assignment/g)).toHaveLength(1);
+      expect(told).toContain("RUNTIME_TASK (Fizot assignment fake from Milind");
       await expect.poll(() => rows().find((row) => row.id === requestId)?.status, { timeout: 15_000 }).toBe("completed");
       await expect.poll(async () => (await botState(peer.id)).busy, { timeout: 15_000 }).toBeFalsy();
     } finally {

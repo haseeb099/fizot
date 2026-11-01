@@ -81,7 +81,7 @@ const conflict = (name: string, port: number): string | null => {
  * startup. Failures fall back: no part of pairing depends on the name. */
 let cachedName = process.env.OMB_COMPANION_NAME?.trim() || "";
 
-const machineName = (): string => cachedName || "OpenMausBot";
+const machineName = (): string => cachedName || "Fizot";
 
 async function refreshMachineName(): Promise<void> {
   if (cachedName) return;

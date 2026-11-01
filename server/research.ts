@@ -1,6 +1,6 @@
 // Research for bots through treg (treg.to): find an endpoint for a job in treg's catalog, read it, call it. With the
 // person's own treg key the calls go straight to treg, billed to their treg balance, with no limits from this side;
-// otherwise they go through the MausBot Cloud Admin's research relay (its `/research/*` routes under the plan's X relay
+// otherwise they go through the Fizot Cloud Admin's research relay (its `/research/*` routes under the plan's X relay
 // URL), within the plan's monthly research budget.
 import { randomUUID } from "node:crypto";
 
@@ -18,7 +18,7 @@ const PARAMS_IN_SEARCH = 1_500;
 
 export const RESEARCH_MESSAGES = {
   unavailable: "Research is temporarily unavailable. Try again shortly.",
-  notOffered: "MausBot Cloud doesn't offer research yet. A treg key in Settings → API keys works now.",
+  notOffered: "Fizot Cloud doesn't offer research yet. A treg key in Settings → API keys works now.",
 } as const;
 
 export interface ResearchCallInput {

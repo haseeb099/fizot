@@ -184,7 +184,7 @@ export function RemoteComputerSection({ hideWhenUnavailable = false }: { hideWhe
                 <input
                   value={endpoint}
                   onChange={(event) => setEndpoint(event.target.value)}
-                  placeholder="https://…openmausbot.com or computer.tailnet.ts.net"
+                  placeholder="https://…example.invalid or computer.tailnet.ts.net"
                   disabled={busy}
                   autoCapitalize="none"
                   autoCorrect="off"

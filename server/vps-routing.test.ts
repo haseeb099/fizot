@@ -737,7 +737,7 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
       const thread = await replies();
       expect(thread.filter((message) => String(message.tool?.name ?? "").startsWith("error:"))).toEqual([]);
       const echo = thread.find((message) => message.text?.startsWith("echo: ")).text as string;
-      expect(echo).toContain("This bot's VPS computer is unavailable this turn (The OpenMausBot VPS container is stopped)");
+      expect(echo).toContain("This bot's VPS computer is unavailable this turn (The Fizot VPS container is stopped)");
       expect(echo).toContain("Open Computer and enable Start VPS automatically");
     } finally {
       writeFileSync(template, original);

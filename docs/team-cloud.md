@@ -104,7 +104,7 @@ this server shares with every bot. It exists only on a Team Cloud.
 
 Every app (a Composio toolkit) and MCP server has a scope. `team`, the default and what every connection made before this
 is, is one connection an Admin makes and every turn uses. `person` is one connection per member, made by that member on
-their team page in MausBot Cloud (the Admin's Cloud page calls the routes below as them).
+their team page in Fizot Cloud (the Admin's Cloud page calls the routes below as them).
 
 - **Who gets a member's own connection.** Only a turn in that member's private chat (`member:<person>`) that their own
   message started (the request proven for that turn, as lent computers use). Never a group chat, the bot's main chat,
@@ -141,7 +141,7 @@ mcp: { <name>: [address] } }`: who has connected each, never with what.
 The Admin signs the usual pairing body with two more fields:
 
 ```json
-{ "label": "OpenMausBot app (Team Cloud)", "ttlSeconds": 300,
+{ "label": "Fizot app (Team Cloud)", "ttlSeconds": 300,
   "team": { "id": "<team id>", "name": "Acme" },
   "member": { "email": "mira@example.com", "role": "owner" | "admin" | "member" } }
 ```
@@ -321,7 +321,7 @@ Every bot still reaches every bot there.
 ## One inbox per person
 
 Everything addressed to a person reaches one place, their **inbox** (`server/host/person-inbox.ts`): their own private
-chat with their own Chief of Staff, or with their own MausBot while they crowned none (every member gets one). It is the
+chat with their own Chief of Staff, or with their own Fizot while they crowned none (every member gets one). It is the
 chat that bot opens to for them (`WireTask.inbox`, sent to its person alone): the one their brief was in, else their
 newest own chat with that bot, else a new one, "Inbox". Crowning another Chief moves it. Nothing is turned on: every
 member of a team has one, and off a team none exists.
@@ -432,6 +432,6 @@ person as before, and `message_person` and the inbox do not exist.
   (the team's), whichever chat wrote them; so are a routine's definition and schedule (its runs and results are the
   conversation's). The Owner's whole-machine export (`OMB_CLOUD_EXPORT_ONLY`, the workspace backup) still carries every
   member's private chats.
-- **Own apps with the team's own Composio project.** A member's own apps always use OpenMausBot's connected-apps
+- **Own apps with the team's own Composio project.** A member's own apps always use Fizot's connected-apps
   service, even when the team connected a Composio project key of its own; an app that needs the project's own auth
   config can't be connected by each person.

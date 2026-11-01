@@ -571,7 +571,7 @@ posixOnly("per-bot visibility on a shared workspace", () => {
         body: JSON.stringify({ name: "Layoff Modeler", role: "Models RIF scenarios", instructions: "SECRET-INSTR model the reduction",
           modelSelection: { instanceId: "grok", model: engine.models.default } }),
       });
-      // Applies at Ask too: OpenMausBot adds no card of its own.
+      // Applies at Ask too: Fizot adds no card of its own.
       const made = await created.json() as { id: string; state: string };
       expect(created.status, JSON.stringify(made)).toBe(201);
       expect(made.state).toBe("applied");

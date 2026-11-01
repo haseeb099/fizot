@@ -141,7 +141,7 @@ describe("SecretRequestCard key analytics", () => {
     for (const fragment of [KEY, KEY.slice(0, 6), KEY.slice(-6), String(KEY.length)]) expect(JSON.stringify(fixture.track.mock.calls)).not.toContain(fragment);
   });
 
-  it("reports a Boat key boat.dev refused as rejected", async () => {
+  it("reports a Boat key example.invalid refused as rejected", async () => {
     vi.stubGlobal("window", { ogb: { setCredential: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'credential:set': KeyRejected: That doesn't look like a Boat API key")) } });
     await submit("boxToken");
     expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "boat", via: "chat_request", result: "rejected" }]]);
@@ -209,6 +209,6 @@ describe("SecretRequestCard custom secrets", () => {
     expect(file).toContain("Saved to a private file your bot&#x27;s commands can read for 24 hours, then deleted.");
     expect(file).not.toContain("Where to get this key");
     const ref = view({ target: "customSecret", label: "Notion key", reason: "For Notion.", helpUrl: "", delivery: "ref" });
-    expect(ref).toContain("MausBot keeps it for one use by its own tools. Your bot never sees it");
+    expect(ref).toContain("Fizot keeps it for one use by its own tools. Your bot never sees it");
   });
 });
