@@ -40,15 +40,22 @@ jobs:
           mark lint
           NODE_OPTIONS=--max-old-space-size=7000 pnpm typecheck
           mark typecheck
+          set +e
           pnpm exec vitest run server/bot-box server/brand.test.ts server/redact.test.ts server/cloud-home.test.ts
+          vitest_status=$?
+          set -e
           mark vitest
           echo "S2_TOTAL seconds=$(( $(date +%s) - start ))"
+          echo "S2_VITEST exit=${vitest_status}"
+          exit "$vitest_status"
       - name: Removal script, guard and boot check
+        if: always()
         run: |
           set -euo pipefail
-          pnpm exec vitest run scripts/fizot scripts/ci-workflow.test.ts
+          pnpm exec vitest run scripts/fizot scripts/ci-workflow.test.ts server/enterprise.test.ts server/brand.test.ts
           node scripts/fizot/guard-enterprise-imports.mjs
       - name: Removal on a copy of upstream-mirror
+        if: always()
         run: |
           set -euo pipefail
           git fetch origin upstream-mirror
@@ -80,4 +87,5 @@ jobs:
           pnpm install
           pnpm exec vite build
       - name: Hosted access after the boot check
+        if: always()
         run: pnpm exec vitest run server/hosted-access.test.ts
