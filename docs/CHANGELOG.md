@@ -4,7 +4,7 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23. PATCH-15 is Notion PR 27, PATCH-16 is PR 28, PATCH-17 is PR 29. Notion rows CL-18 through CL-26 and Notion PR 24 through PR 26 are on `sandbox/s2-fix` and are not in this file.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29.
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 
@@ -147,6 +147,138 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Files / Patch IDs: PATCH-1 stays the enterprise deletion. PATCH-5 (`.github/workflows/ci.yml`). PATCH-8, PATCH-9, PATCH-10, PATCH-11, PATCH-12, PATCH-13, PATCH-14. Commits `d70e615bfd6797a74bfae611459e03042c81d8b0`, `635621fc5090ea0927ed2bb03a3c6747b5830f18`, `0b91577faaf02e6009b2da09150784d31570b1a9`, `2086529c4134d0d2e99adc55ddab6757112439ad`, `77e72c2cd7a3966702693caac59558fb4a623b52`.
 - Rollback: Revert those commits. Restoring the trees does not require editing `upstream-mirror`. Do not open `enterprise/`.
 
+## CL-18 Give CI typecheck and the UI build a 7 GB heap
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Related task: S2.7 (FZ-14)
+- Logged by: Cursor
+- Why we changed it: Run [41253729709](https://github.com/haseeb099/fizot/actions/runs/41253729709) on commit `dc7b7c12`, before S2.1, died in `pnpm typecheck` with a JavaScript heap out of memory error. The same runner later aborted `vite build` while rendering chunks ([41257846929](https://github.com/haseeb099/fizot/actions/runs/41257846929)).
+- How it works: The typecheck steps in the static job and the open-source job, and the static `vite build` step, set `NODE_OPTIONS=--max-old-space-size=7000`. The run lines stay `pnpm typecheck` and `pnpm exec vite build`. Upstream `ci.yml` sets no heap and uses `ubuntu-latest`. `release.yml` sets 4096 only on the release build.
+- Why it is necessary: The default heap on that runner is about 2 GB. Typecheck and the UI build do not finish in it, so every later CI job stays skipped.
+- Impact (cost / risk / timeline): No spend. 7000 MB already finished typecheck and a vite build on the sandbox runner. The CI run that includes this change is recorded after it finishes.
+- Files / Patch IDs: PATCH-5. `.github/workflows/ci.yml`.
+- Rollback: Remove the three `NODE_OPTIONS` env blocks.
+
+## CL-19 Match the docs-reader check to docs that still exist
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Related task: S2.1 (FZ-8)
+- Logged by: Cursor
+- Why we changed it: After `apps/docs` was removed, `scripts/ci-scope.test.ts` expected four docs readers and found two. Static CI failed there, so typecheck never ran. Runs [41256135896](https://github.com/haseeb099/fizot/actions/runs/41256135896) and [41259044556](https://github.com/haseeb099/fizot/actions/runs/41259044556).
+- How it works: The docs-tests subset lists `scripts/testing/analytics-docs.test.ts`, which still reads `docs/analytics.md`. `server/model-providers-docs.test.ts` and the vocabulary public-docs test only read `apps/docs`, so they are not readers. Those tests, and the analytics site test, skip when the `apps/docs` path is missing. The reader test is still there. `docs/ci.md` names the one file.
+- Why it is necessary: A missing tree must not fail the selection check or crash vitest on import.
+- Impact (cost / risk / timeline): No spend. Local vitest: the reader assertion passed, model-providers skipped, analytics and vocabulary passed.
+- Files / Patch IDs: PATCH-15 (Notion PR 24).
+- Rollback: Restore the three file names in the docs-tests subset and drop the skipIf guards. That makes `apps/docs` required again.
+
+## CL-20 Stop the image from copying deleted workspace manifests
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Related task: S2.1 (FZ-8)
+- Logged by: Cursor
+- Why we changed it: Docker run [41256135924](https://github.com/haseeb099/fizot/actions/runs/41256135924) failed because the Dockerfile copied `apps/docs/package.json` and `cloudflare/control-plane/package.json`.
+- How it works: Those two COPY lines and the comment above them are gone. The image proof expects edition `oss` and the text `no enterprise layer exists`. The `enterprise/**` path filter was removed from the Docker workflow. The broker and the rest of the Dockerfile are unchanged.
+- Why it is necessary: The image cannot build while it copies folders this fork deleted.
+- Impact (cost / risk / timeline): No spend. `scripts/docker-image.test.ts` passed locally (12 passed, 2 skipped). Docker run [41261359478](https://github.com/haseeb099/fizot/actions/runs/41261359478) still died in `vite build` with a JavaScript heap out of memory error. The build stage now sets `NODE_OPTIONS=--max-old-space-size=7000`. Docker run [41261903302](https://github.com/haseeb099/fizot/actions/runs/41261903302) then succeeded: build image + boot smoke, and publish to GHCR. The publish job runs on every push, so that sandbox push published a sha tag for this repository.
+- Files / Patch IDs: PATCH-16 (Notion PR 25).
+- Rollback: Restore the two COPY lines and the old proof. Do not restore the deleted folders.
+
+## CL-21 Skip hosted access when enterprise is absent
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Related task: S2.1 (FZ-8)
+- Logged by: Cursor
+- Why we changed it: The suite setup boots `server/index.ts` with `OMB_ADMIN_URL` and `OMB_ADMIN_WORKSPACE`. `rejectFizotAdminEnv` throws, so the file failed before its cases. Those cases already skipped when `enterprise/` was missing.
+- How it works: The whole describe, including the setup that boots the server, is `describe.skipIf` when `enterprise/` is missing. `rejectFizotAdminEnv` is unchanged. A separate test spawns `server/index.ts` with `OMB_ADMIN_URL` set and expects a non-zero exit and the refusal text.
+- Why it is necessary: The suite must not boot a Fizot server with hosted-admin variables, and the refusal still has to be proven.
+- Impact (cost / risk / timeline): No spend. Local vitest of `server/hosted-access.test.ts` passed: the describe skipped and the new boot test ran.
+- Files / Patch IDs: PATCH-2. `server/hosted-access.test.ts`.
+- Rollback: Move the setup back outside the skip. Do not weaken `rejectFizotAdminEnv`.
+
+## CL-22 Skip the control-plane job whose package was removed
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Related task: S2.1 (FZ-8)
+- Logged by: Cursor
+- Why we changed it: The job runs `pnpm control-plane:check`, `pnpm control-plane:test` and `pnpm control-plane:dry-run`, which filter `@openmausbot/control-plane`. That package was deleted, and main still selects the job.
+- How it works: The job stays in `ci.yml` with `if: false` and a one-line comment. Its steps are unchanged and do not run. The gate does not list the job. `deploy-composio-broker` still needs it, so a main push skips that deploy. `cloudflare/composio-broker` was not deleted. Selection in `scripts/ci-scope.mjs` is unchanged. The open-source edition job still runs.
+- Why it is necessary: Deleting the job would drop an upstream job. Leaving it runnable fails every main push.
+- Impact (cost / risk / timeline): No spend. No Cloudflare deploy. `scripts/ci-workflow.test.ts` passed locally after the push branch list was put back to `main`.
+- Files / Patch IDs: PATCH-5. `.github/workflows/ci.yml`, `scripts/ci-workflow.test.ts`.
+- Rollback: Restore the job `if` condition. The package is still gone, so the job would fail.
+
+## CL-23 Keep the boot check without growing server/index.ts
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Related task: S2.1 (FZ-8)
+- Logged by: Cursor
+- Why we changed it: S2.1 added two lines to `server/index.ts`. CI run [41261903303](https://github.com/haseeb099/fizot/actions/runs/41261903303) reported 15820 lines against the ratchet's listed 15818.
+- How it works: The import of `rejectFizotAdminEnv` shares the previous import line, and the call shares the `ensureDirs()` line. The file is 15818 lines. The check still runs before `ensureDirs()`.
+- Why it is necessary: `scripts/testing/file-size-ratchet.test.ts` fails when `server/index.ts` grows, so the vitest job fails.
+- Impact (cost / risk / timeline): No spend. Local vitest of the ratchet and `scripts/fizot/admin-env.test.ts`: 2 files passed, 2 tests passed, 11.25s, exit 0.
+- Files / Patch IDs: PATCH-14.
+- Rollback: Put the import and the call back on their own lines. The ratchet fails again.
+
+## CL-24 The push gate is the daily checks
+
+- Type: Decision
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Logged by: Cursor
+- Why we changed it: Haseeb decided on 1 Nov 2026 that the daily gate is small. The eight vitest shards, behavior evals, browser identity and the macOS smokes are not blocking.
+- How it works: The CI gate job needs static, foss, packaged-server and ui-smoke. vitest, behavior-evals, browser-identity and electron-smokes run only when the event is schedule or workflow_dispatch. Dispatch CI before an upstream sync. Docker publish runs on a push to main or on a release tag. The static job runs lint, typecheck with a 7 GB heap, `scripts/fizot`, and the patched-file tests listed in `docs/fizot/README.md`.
+- Why it is necessary: A cancelled or failing upstream shard was failing the whole push. The fork does not need that suite green on every push.
+- Impact (cost / risk / timeline): No spend on the daily gate beyond the jobs that already passed. The full suite is not required on a push. A manual or nightly run still starts it.
+- Files / Patch IDs: PATCH-17. `.github/workflows/ci.yml`, `scripts/ci-workflow.test.ts`, `.github/workflows/docker.yml`, `docs/fizot/README.md`.
+- Rollback: Restore the gate needs list and the four job if conditions. Publish again on every push.
+
+## CL-25 Upstream tests that fail or time out on this runner
+
+- Type: Decision
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Logged by: Cursor
+- Why we changed it: The sandbox CI runs showed these failures. The box check also failed on upstream commit `0213b7435` on the same runner.
+- How it works: `server/bot-box/self-check.linux.test.ts` failed share-net on a clean checkout of `0213b7435`, with bubblewrap 0.11.1 already installed and socat missing, and again after bubblewrap and socat were installed. Run [41261359507](https://github.com/haseeb099/fizot/actions/runs/41261359507). `server/use-my-mac.e2e.test.ts`, `server/cloud-team-profile.e2e.test.ts`, `server/cloud-lending.e2e.test.ts` and `server/cloud-team-open-reach.e2e.test.ts` timed out on run [41261359549](https://github.com/haseeb099/fizot/actions/runs/41261359549). `server/cloud-team-owners.e2e.test.ts` timed out on run [41261903303](https://github.com/haseeb099/fizot/actions/runs/41261903303). Re-check these before the next upstream sync. They were not investigated further.
+- Why it is necessary: The next sync should not treat these failures as new Fizot breakage.
+- Impact (cost / risk / timeline): No code change. These tests are not in the daily gate.
+- Files / Patch IDs: No file change.
+- Rollback: Delete this row. Nothing in the tree changes.
+
+## CL-26 Skip the hosted-model suite when enterprise/ is missing
+
+- Type: Code
+- Date: 2026-11-01
+- Area: CI & tests
+- Risk: Low
+- Logged by: Cursor
+- Why we changed it: The suite setup boots with hosted-admin variables. One case was already `skipIf`. The setup still ran.
+- How it works: The file's `beforeAll` boots `server/index.ts` with `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE` and `OMB_ADMIN_MEMBERSHIP`. `rejectFizotAdminEnv` throws, so the suite cannot run on this fork. `describe.skipIf` wraps the setup and the cases while `enterprise/` is absent. The boot check is unchanged.
+- Why it is necessary: The daily gate runs this patched file. The setup was failing the file before the skipped case.
+- Impact (cost / risk / timeline): No spend. Local vitest skipped `server/hosted-models-api.test.ts` (1 file skipped, 6 tests skipped) and `scripts/ci-scope.test.ts` passed (99 tests, 62.26s, exit 0).
+- Files / Patch IDs: PATCH-2. `server/hosted-models-api.test.ts`.
+- Rollback: Move the setup back outside the skip. Do not weaken `rejectFizotAdminEnv`.
+
 ## CL-27 Scan shipped source for upstream hosts
 
 - Type: Code
@@ -159,7 +291,7 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - How it works: `scripts/fizot/scan-upstream-hosts.mjs` walks `server`, `src`, `shared`, `electron`, `companion`, `public`, `scripts`, `package.json`, `index.html`, `LICENSE`, `NOTICE`, `LICENSING.md`, `CLA.md`, and `dist` or `dist-server` when those builds exist. It does not open `enterprise/`. It matches `openmausbot.com`, `mausbot.com`, `supamaus` domains, `boat.dev`, `posthog.com`, `omb-cloud-staging.fly.dev` and `github.com/milind-soni/OpenMausBot`. `brand/allowed-hosts.json` lists each host with a reason. Any other hit prints `file:line` and exits 1. The static CI job runs the scan. Before the allow-list, the tree had 281 hits.
 - Why it is necessary: A sync can add a hard-coded upstream host. The daily gate has to fail on one that is not classified.
 - Impact (cost / risk / timeline): No spend. A new upstream host fails the daily gate until it is classified.
-- Files / Patch IDs: PATCH-15. Notion PR 27. `docs/fizot/README.md` lists the two commands.
+- Files / Patch IDs: PATCH-18. Notion PR 27. `docs/fizot/README.md` lists the command.
 - Rollback: Remove the CI step and the scanner. The allow-list is data, not a product change.
 
 ## CL-28 Scan user-visible copy for upstream brand names
@@ -171,10 +303,10 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Related task: S2.5 (FZ-12)
 - Logged by: Cursor
 - Why we changed it: S2.5 asks for a brand-leak scan with an allow-list for attribution and for internal identifiers Spike A will map.
-- How it works: `scripts/fizot/scan-brand-leaks.mjs` searches the same trees plus `docs` for `OpenMausBot`, `Open Maus`, `MausBot` and `Supamaus`. Mascot display names are scanned in package metadata, `index.html`, `public`, `docs`, locale catalogs and `electron`. `brand/allowed-brand.json` allows attribution files and the trees that still carry the upstream name, each with a reason. A file outside that list fails. The static CI job runs the scan. Before the allow-list, the tree had 4003 hits. `FB-U` owner_task is S2.4 and `FB-I` owner_task is S2.5. The `rejectFizotAdminEnv` import shares the previous import line and the call shares the `ensureDirs()` line, so `server/index.ts` stays at 15818 lines.
+- How it works: `scripts/fizot/scan-brand-leaks.mjs` searches the same trees plus `docs` for `OpenMausBot`, `Open Maus`, `MausBot` and `Supamaus`. Mascot display names are scanned in package metadata, `index.html`, `public`, `docs`, locale catalogs and `electron`. `brand/allowed-brand.json` allows attribution files and the trees that still carry the upstream name, each with a reason. A file outside that list fails. The static CI job runs the scan. Before the allow-list, the tree had 4003 hits. `FB-U` owner_task is S2.4 and `FB-I` owner_task is S2.5.
 - Why it is necessary: A sync can put the upstream name or a mascot name in a new file a user can see.
-- Impact (cost / risk / timeline): No spend. S2.2 still has to replace the user-visible strings. A new file outside the allow-list fails the daily gate. Local vitest of the two scan files, `scripts/ci-workflow.test.ts`, `scripts/testing/matrix-plan.test.ts` and `scripts/testing/file-size-ratchet.test.ts`: 5 files passed, 38 tests passed, 56.41s. `pnpm lint` (`oxlint --deny-warnings`) and `NODE_OPTIONS=--max-old-space-size=7000 pnpm typecheck` exited 0.
-- Files / Patch IDs: PATCH-16. Notion PR 28. `tests/matrix.csv`. PATCH-14 (`server/index.ts`).
+- Impact (cost / risk / timeline): No spend. S2.2 still has to replace the user-visible strings. A new file outside the allow-list fails the daily gate. Local vitest of the two scan files, `scripts/ci-workflow.test.ts`, `scripts/testing/matrix-plan.test.ts` and `scripts/testing/file-size-ratchet.test.ts`: 5 files passed, 38 tests passed, 56.41s. `pnpm lint` and `NODE_OPTIONS=--max-old-space-size=7000 pnpm typecheck` exited 0 before the merge with main.
+- Files / Patch IDs: PATCH-19. Notion PR 28. `tests/matrix.csv`.
 - Rollback: Remove the CI step and the scanner. Do not edit `LICENSE`, `NOTICE` or `LICENSING.md`.
 
 ## CL-29 Make the docs and npm workflows manual-only
@@ -184,10 +316,11 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Area: CI & tests
 - Risk: Low
 - Logged by: Cursor
-- Why we changed it: The request asked for a change-log row for making those two workflows manual-only and giving the Linux package job a 7 GB heap. This is the FZ-9 record. Notion task id 9 is S2.2, which is not this change.
+- Commit: `6b9e43a277f7c1a8ef9627a399b37f8bc0b936c4`
+- Why we changed it: The request asked for a change-log row for making those two workflows manual-only and giving the Linux package job a 7 GB heap. This is that FZ-9 record. Notion task id 9 is S2.2, which is not this change.
 - How it works: `docs.yml` and `npm-package.yml` run only on `workflow_dispatch`. `release.yml` still dispatches the npm package workflow on a tag. The Linux package job sets `NODE_OPTIONS=--max-old-space-size=7000`.
 - Why it is necessary: `docs.yml` still filters `@openmausbot/docs`, and `npm-package.yml` still tests for `enterprise/server/index.js`. Either fails if a push or a tag starts it. The Linux package job ran out of heap on pull request 1.
-- Impact (cost / risk / timeline): No spend. A push to main no longer starts the docs workflow or the npm package workflow. The Linux package job gets the heap that the image build already uses.
-- Files / Patch IDs: PATCH-17. Notion PR 29.
+- Impact (cost / risk / timeline): No spend. A push to main no longer starts the docs workflow or the npm package workflow. The Linux package job gets the heap that the image build already uses. The code is commit `6b9e43a277f7c1a8ef9627a399b37f8bc0b936c4`, which is already on main.
+- Files / Patch IDs: PATCH-20. Notion PR 29.
 - Rollback: Restore the push and pull_request triggers, and remove the package job heap.
 

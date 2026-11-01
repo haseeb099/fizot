@@ -1,5 +1,6 @@
 name: Docs
 
+# Fizot: apps/docs was removed; run by hand only (FZ-9).
 on:
   workflow_dispatch:
 

@@ -13,7 +13,6 @@ on:
       - deploy/**
       - server/**
       - src/**
-      - enterprise/**
       - scripts/bundle-server.mjs
       - package.json
       - pnpm-lock.yaml
@@ -49,12 +48,7 @@ jobs:
           # the renderer is served by the server itself (OMB_STATIC_DIR)
           docker exec omb curl -sf http://127.0.0.1:8799/ | grep -qi "<html" || { docker logs omb; echo "UI not served"; exit 1; }
           docker logs omb | tail -5
-      - name: Prove the image finds its enterprise layer
-        # The image ships dist-server/ alone, so the bundled layer sits inside
-        # the server root (server/enterprise.ts looks there after the sibling
-        # folder). A key that is not genuine proves the layer loaded and
-        # checked it; a missing layer would report "no enterprise layer exists"
-        # and a licensed self-hoster would silently run the open-source edition.
+      - name: Prove the image reports the open-source edition
         run: |
           set -euo pipefail
           docker run -d --name omb-ent -e OMB_LICENSE_KEY=omb1.not.real openmausbot:ci
@@ -65,10 +59,8 @@ jobs:
           done
           edition=$(docker exec omb-ent curl -sf http://127.0.0.1:8799/api/edition)
           echo "$edition"
-          if grep -q 'no enterprise layer exists' <<<"$edition"; then echo "the image cannot find its enterprise layer"; exit 1; fi
           grep -q '"edition":"oss"' <<<"$edition"
-          grep -q 'enterprise layer disabled: OMB_LICENSE_KEY signature does not match' <<<"$edition"
-          docker exec omb-ent test -f /app/dist-server/enterprise/LICENSE
+          grep -q 'no enterprise layer exists' <<<"$edition"
           docker rm -f omb-ent >/dev/null
       - name: Prove the non-root user can browse with the baked-in Chrome
         run: |
@@ -396,7 +388,7 @@ jobs:
     needs: build-and-smoke
     # Release dispatches on its published tag because GITHUB_TOKEN-created
     # tags do not start another workflow. A manual branch run is smoke-only.
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v'))
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: read

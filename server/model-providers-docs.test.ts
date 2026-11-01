@@ -1,5 +1,5 @@
 // Pins each workaround the "Other model providers" docs page gives to the code it depends on: when one fails, update the page.
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,9 @@ import { OPENROUTER_FAILURES, freeLabel } from "./drivers/openrouter-free.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PAGE = readFileSync(join(ROOT, "apps", "docs", "content", "docs", "providers", "model-providers.mdx"), "utf8");
+const PAGE_PATH = join(ROOT, "apps", "docs", "content", "docs", "providers", "model-providers.mdx");
+const providerDocs = existsSync(PAGE_PATH);
+const PAGE = providerDocs ? readFileSync(PAGE_PATH, "utf8") : "";
 const EN = JSON.parse(readFileSync(join(ROOT, "src", "locales", "en.json"), "utf8")) as Record<string, string>;
 
 function section(heading: string): string {
@@ -38,7 +40,7 @@ afterEach(async () => {
   for (const dir of scratchDirs.splice(0)) await removeTempDir(dir);
 });
 
-describe("Claude Code section", () => {
+describe.skipIf(!providerDocs)("Claude Code section", () => {
   // Shell exports as copied into the env block, plus FireConnect's header and model settings. Every value is fake.
   const settingsHome = (env: Record<string, string>, extra: Record<string, unknown> = {}) => {
     const home = scratch("omb-docs-claude-");
@@ -101,7 +103,7 @@ describe("Claude Code section", () => {
   });
 });
 
-describe("OpenCode 2.x section", () => {
+describe.skipIf(!providerDocs)("OpenCode 2.x section", () => {
   it("lists provider models from ACP even when OpenCode 2 rejects models --verbose", async () => {
     const dir = scratch("omb-docs-opencode2-");
     const catalog = await discoverOpenCodeModels({
@@ -120,7 +122,7 @@ describe("OpenCode 2.x section", () => {
   });
 });
 
-describe("OpenCode config file", () => {
+describe.skipIf(!providerDocs)("OpenCode config file", () => {
   const example = (page = PAGE) => {
     const block = /```json\r?\n([\s\S]*?)```/u.exec(page.slice(page.indexOf("### OpenCode")));
     expect(block, "the OpenCode section has no json example").not.toBeNull();
@@ -160,7 +162,7 @@ describe("OpenCode config file", () => {
   });
 });
 
-describe("Keys exported on a server", () => {
+describe.skipIf(!providerDocs)("Keys exported on a server", () => {
   const exported = ["OPENROUTER_API_KEY", "FIREWORKS_API_KEY", "TOGETHER_API_KEY"];
 
   it("reach every engine, as the page warns", () => {
@@ -188,7 +190,7 @@ describe("Keys exported on a server", () => {
 
 });
 
-describe("Free OpenRouter models section", () => {
+describe.skipIf(!providerDocs)("Free OpenRouter models section", () => {
   it("quotes the turn errors and the picker mark the chat engine shows", () => {
     const text = section("### Free OpenRouter models");
     expect(OPENROUTER_FAILURES.credits).toMatch(/^This model needs OpenRouter credit\b/u);
