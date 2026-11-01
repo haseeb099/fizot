@@ -5,7 +5,7 @@ on:
   # with the workflow token never fires push events on its own.
   workflow_dispatch:
   push:
-    branches: [main, sandbox/s2-fix]
+    branches: [main]
     tags: ["v*"]
     paths:
       - Dockerfile
