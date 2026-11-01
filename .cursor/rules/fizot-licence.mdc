@@ -1,0 +1,10 @@
+---
+description: Licence and clean-room rules
+alwaysApply: true
+---
+- Never create, open, read or import anything under enterprise/. The folder is deleted from this fork. If it reappears after a sync, run scripts/fizot/remove-enterprise.mjs and stop.
+- Keep LICENSE, NOTICE, LICENSING.md and CLA.md unchanged.
+- Build the Fizot Admin only from docs/cloud-pro.md, docs/team-cloud.md and the Apache server code. Record the docs commit SHA used.
+- Never set OMB_ADMIN_URL, OMB_ADMIN_WORKSPACE or OMB_ADMIN_MEMBERSHIP on a Fizot machine.
+- No upstream product name, logo, mascot or domain in anything a user can see.
+- Any new hostname must be classified in brand/allowed-hosts.json with a reason before merge.

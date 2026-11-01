@@ -1,0 +1,7 @@
+---
+description: Change tracking
+alwaysApply: true
+---
+- At the end of every task output a CHANGE RECORD block with: Why we changed it; How it works; Why it is necessary; Impact (cost, risk, timeline); Files and Patch IDs; Tests run with results; Rollback.
+- Commit message format: FZ-<task number> <short summary>, then a blank line, then CL-<n> and PATCH-<n> lines if they exist.
+- If you edited an upstream file that is not in the Patch Registry, say so explicitly so a row can be added.

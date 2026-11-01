@@ -1,0 +1,12 @@
+---
+description: Fizot core engineering rules
+alwaysApply: true
+---
+- This repo is Fizot, a private hard fork of OpenMausBot pinned at an upstream release tag (see Patch Registry). Treat upstream files as vendor code.
+- Prefer new files under server/fizot/, scripts/fizot/, brand/, fizot-proxy/, fizot-admin/. Edit an upstream file only when unavoidable, keep the diff minimal, and name the Patch Registry id (PATCH-n) in the commit.
+- Do not rename internal identifiers (OMB_* env vars, ~/.openmausbot, package names). Rebrand only user-visible strings, through the build-time brand map.
+- Node >= 24, pnpm 10.33. Before saying a change works run: pnpm lint; NODE_OPTIONS=--max-old-space-size=7000 pnpm typecheck; pnpm exec vitest run <the affected test files>.
+- Verify server behaviour only against the isolated fixture (node --experimental-strip-types scripts/control-omb.ts launch). Never touch a real data directory.
+- Never log or return keys, tokens, prompts or customer content. Customer API keys must never reach the sandbox, Admin database, logs, exports or backups.
+- Comments: only for what code cannot say (a vendor fact with version, a security invariant, a known open risk). No narration.
+- Write tests with the change. Billing, auth, tenant isolation and key handling need every branch covered.
