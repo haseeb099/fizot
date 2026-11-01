@@ -93,6 +93,7 @@ async function restart(env: NodeJS.ProcessEnv = {}) {
   }, { timeout: 20_000 }).toBe(200);
 }
 
+describe.skipIf(enterpriseLayerMissing)("hosted bridge in the full server", () => {
 beforeAll(async () => {
   PORT = await freePortBlock([0, 1], 35_000, 5_000);
   home = mkdtempSync(join(tmpdir(), "omb-hosted-server-"));
@@ -153,7 +154,6 @@ afterAll(async () => {
   await removeTempDir(home);
 });
 
-describe("hosted bridge in the full server", () => {
   it.skipIf(enterpriseLayerMissing)("loads the optional hook before listening, redirects hosted navigation, and disables legacy sign-in", async () => {
     expect(log).toContain("enterprise edition for Fixture");
     expect((await call("/")).location).toBe("/api/auth/hosted/start");
@@ -412,4 +412,27 @@ describe("hosted bridge in the full server", () => {
     expect(config.membership).toEqual({ authority: "portal", pairingCodes: false, peopleUrl: "https://admin.example.test/people?workspace=acme" });
     policyEvidence.push({ loopbackTrust: "service", refused: refused.map(([method, path]) => `${method} ${path}`), membership: config.membership });
   }, 30_000);
+});
+
+it("refuses to boot when a hosted-admin variable is set", async () => {
+  const home = mkdtempSync(join(tmpdir(), "fizot-hosted-boot-"));
+  const output = await new Promise<{ code: number | null; text: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--experimental-strip-types", "server/index.ts"], {
+      cwd: ROOT,
+      env: {
+        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        HOME: home, USERPROFILE: home, OMB_DATA_DIR: home,
+        OMB_ADMIN_URL: "https://admin.example.test",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let text = "";
+    child.stdout?.on("data", (chunk) => { text += String(chunk); });
+    child.stderr?.on("data", (chunk) => { text += String(chunk); });
+    const timer = setTimeout(() => { child.kill(); reject(new Error("boot did not exit")); }, 90_000);
+    child.on("close", (code) => { clearTimeout(timer); resolve({ code, text }); });
+  });
+  expect(output.code).not.toBe(0);
+  expect(output.text).toContain("Fizot refuses to boot while OMB_ADMIN_URL is set");
 });

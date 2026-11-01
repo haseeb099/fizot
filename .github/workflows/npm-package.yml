@@ -1,20 +1,8 @@
 name: npm package
 
+# Fizot: enterprise/ was removed, so a tag or PR must not run this; manual only (FZ-9).
 on:
-  # release.yml dispatches this on the tag it just published: a tag created
-  # with the workflow token never fires push events on its own.
   workflow_dispatch:
-  push:
-    tags: ["v*"]
-  pull_request:
-    paths:
-      - server/cli.ts
-      - server/tunnel.ts
-      - server/tailscale.ts
-      - server/pair-cli.ts
-      - scripts/build-npm-package.mjs
-      - scripts/bundle-server.mjs
-      - .github/workflows/npm-package.yml
 
 permissions:
   contents: read

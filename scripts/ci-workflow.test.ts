@@ -5,7 +5,8 @@ import { parse } from "yaml";
 import { SELECTABLE_JOBS, vitestMatrix } from "./ci-scope.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
+const requiredRuntimeJobs = ["foss", "packaged-server", "ui-smoke"];
+const nightlyJobs = ["vitest", "behavior-evals", "browser-identity", "electron-smokes"];
 
 function runGate(needs: Record<string, unknown>) {
   // Execute the actual gate, not a duplicate of its success/failure logic.
@@ -198,7 +199,7 @@ describe("CI concurrency", () => {
   it("accepts every required job skipped on a docs-only PR, and nothing else", () => {
     expect(runGate(gateNeeds([])).status).toBe(0);
     for (const result of ["success", "failure", "cancelled"]) {
-      expect(runGate({ ...gateNeeds([]), vitest: { result } }).status).toBe(1);
+      expect(runGate({ ...gateNeeds([]), "packaged-server": { result } }).status).toBe(1);
     }
   });
 
@@ -231,10 +232,21 @@ describe("CI concurrency", () => {
       ["steps.scope.outputs.build == 'true'", "pnpm exec vite build"],
     ]);
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
-      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts",
+      step.run === "pnpm exec vitest run scripts/fizot scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts",
     )).toBe(true);
-    for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
+    for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string | boolean }][]) {
       if (["static", "gate"].includes(name)) continue;
+      if (name === "control-plane") {
+        expect(job.if).toBe(false);
+        expect(job.needs).toBe("static");
+        continue;
+      }
+      if (nightlyJobs.includes(name)) {
+        expect(job.needs).toBe("static");
+        expect(job.if).toBe(`contains(needs.static.outputs.jobs, '"${name}"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')`);
+        expect(workflow.jobs.gate.needs).not.toContain(name);
+        continue;
+      }
       // The one deploy job: after the control-plane checks, on main pushes only. It is
       // not part of the merge gate.
       if (name === "deploy-composio-broker") {

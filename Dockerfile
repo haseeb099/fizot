@@ -37,9 +37,6 @@ RUN npm install -g pnpm@10.33.0
 # The image never runs Electron, so skip its ~100MB postinstall download.
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-# every workspace member's manifest must exist before install resolves the lockfile
-COPY apps/docs/package.json ./apps/docs/package.json
-COPY cloudflare/control-plane/package.json ./cloudflare/control-plane/package.json
 # package.json's `prepare` runs during install. The script itself is written to
 # no-op without a .git (it exits 0 here), but node still has to be able to LOAD
 # it, and .dockerignore keeps .git out — so copy it in before install or the
@@ -51,6 +48,8 @@ COPY . .
 # The Data engine's native modules (server/data/engine.ts), staged like the
 # desktop app's extraResources; the runtime stages copy this tree.
 RUN node scripts/prepare-duckdb.mjs && chmod -R go-w dist-native/duckdb
+# Node's default heap aborts vite while rendering chunks (about 2 GB on this image).
+ENV NODE_OPTIONS=--max-old-space-size=7000
 RUN pnpm build:server && pnpm exec vite build && chmod -R go-w dist dist-server skills
 
 FROM node:24-bookworm-slim AS runtime

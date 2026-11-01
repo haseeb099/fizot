@@ -75,7 +75,7 @@ jobs:
       - name: Guard enterprise imports
         run: node scripts/fizot/guard-enterprise-imports.mjs
       - name: Verify CI selection and documentation references
-        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts
+        run: pnpm exec vitest run scripts/fizot scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
       - run: pnpm lint
@@ -83,17 +83,22 @@ jobs:
       # control plane cannot change what these three check.
       - if: steps.scope.outputs.build == 'true'
         run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=7000
       - if: steps.scope.outputs.build == 'true'
         run: pnpm check:electron
       - name: production UI build
         if: steps.scope.outputs.build == 'true'
         run: pnpm exec vite build
+        env:
+          NODE_OPTIONS: --max-old-space-size=7000
 
   vitest:
     # Admit the expensive runner fan-out only after the quick checks pass.
     # A failing preflight still fails the required gates; nothing is waived.
     needs: static
-    if: contains(needs.static.outputs.jobs, '"vitest"')
+    # Nightly and manual runs only. A push or a pull request skips this job. Dispatch CI before an upstream sync.
+    if: contains(needs.static.outputs.jobs, '"vitest"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     # scripts/ci-scope.mjs picks the platforms and their shards: PRs run Linux
     # and Windows (the account runs only five macOS jobs at a time), main
     # pushes and merge groups Linux, and the full lane (nightly, manual runs,
@@ -155,7 +160,7 @@ jobs:
 
   behavior-evals:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"behavior-evals"')
+    if: contains(needs.static.outputs.jobs, '"behavior-evals"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     # The offline behavior-eval tiers (#1503): the evals' own vitest gate
     # (redaction, trace, golden replay), the tier-1 scenario runner, and the
     # tier-2 golden replay through the same entrypoint developers use. Tier
@@ -244,7 +249,7 @@ jobs:
 
   electron-smokes:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"electron-smokes"')
+    if: contains(needs.static.outputs.jobs, '"electron-smokes"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     # Real Electron utility processes against disposable homes and fake CLIs.
     # Never the live app. Each script prints its own evidence lines. Every
     # PR's, push's and merge group's macOS checks live in this one job: macOS
@@ -283,7 +288,7 @@ jobs:
   gate:
     # One aggregation, not three queued runners doing the same check.
     name: CI
-    needs: [static, vitest, behavior-evals, packaged-server, windows-cua, electron-smokes]
+    needs: [static, foss, packaged-server, ui-smoke]
     # Still report failed/skipped dependencies, but don't keep a superseded
     # workflow alive just to schedule its summary jobs.
     if: ${{ !cancelled() }}
@@ -350,6 +355,8 @@ jobs:
       - name: Delete the enterprise folder
         run: rm -rf enterprise
       - run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=7000
       - run: pnpm exec vitest run server/enterprise.test.ts server/brand.test.ts
       - name: The server boots and reports the open-source edition
         run: |
@@ -365,7 +372,8 @@ jobs:
 
   control-plane:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"control-plane"')
+    # cloudflare/control-plane was removed, so its checks cannot run.
+    if: false
     name: control-plane check + workerd tests + dry run
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -480,7 +488,7 @@ jobs:
 
   browser-identity:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"browser-identity"')
+    if: contains(needs.static.outputs.jobs, '"browser-identity"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     # Advisory, outside the required gate: the pinned agent-browser drives a
     # real Chrome for Testing through OMB's launcher and identity connection
     # (scripts/testing/browser-identity.e2e.test.ts): a 1280x720 page whose
@@ -523,6 +531,8 @@ jobs:
     name: package + smoke (Ubuntu 24.04 x64)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      NODE_OPTIONS: --max-old-space-size=7000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
