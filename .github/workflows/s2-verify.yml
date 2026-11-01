@@ -1,0 +1,83 @@
+name: S2 verify
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [sandbox/s2-verify]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: S2.7 and S2.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Clean-machine commands
+        run: |
+          set -euo pipefail
+          node -v
+          start=$(date +%s)
+          step_start=$start
+          mark() {
+            now=$(date +%s)
+            echo "S2_STEP $1 seconds=$((now - step_start)) total=$((now - start))"
+            step_start=$now
+          }
+          pnpm install --frozen-lockfile
+          mark install
+          pnpm lint
+          mark lint
+          NODE_OPTIONS=--max-old-space-size=7000 pnpm typecheck
+          mark typecheck
+          pnpm exec vitest run server/bot-box server/brand.test.ts server/redact.test.ts server/cloud-home.test.ts
+          mark vitest
+          echo "S2_TOTAL seconds=$(( $(date +%s) - start ))"
+      - name: Removal script, guard and boot check
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run scripts/fizot scripts/ci-workflow.test.ts
+          node scripts/fizot/guard-enterprise-imports.mjs
+      - name: Removal on a copy of upstream-mirror
+        run: |
+          set -euo pipefail
+          git fetch origin upstream-mirror
+          copy="${RUNNER_TEMP}/upstream-copy"
+          git worktree add --detach "$copy" origin/upstream-mirror
+          node scripts/fizot/remove-enterprise.mjs --root "$copy"
+          second=$(node scripts/fizot/remove-enterprise.mjs --root "$copy")
+          printf '%s\n' "$second"
+          printf '%s\n' "$second" | grep -q 'nothing to remove'
+          if printf '%s\n' "$second" | grep -q '^removed '; then
+            exit 1
+          fi
+          test ! -e "$copy/enterprise"
+          test ! -e "$copy/apps/docs"
+          test ! -e "$copy/cloudflare/control-plane"
+          test ! -e "$copy/.tmpexp"
+          test -f "$copy/LICENSE"
+          test -f "$copy/NOTICE"
+          test -f "$copy/LICENSING.md"
+          test -f "$copy/CLA.md"
+          if grep -q 'apps/docs' "$copy/pnpm-workspace.yaml"; then
+            exit 1
+          fi
+          if grep -q 'control-plane' "$copy/pnpm-workspace.yaml"; then
+            exit 1
+          fi
+          grep -q 'supportedArchitectures' "$copy/pnpm-workspace.yaml"
+          cd "$copy"
+          pnpm install
+          pnpm exec vite build
+      - name: Hosted access after the boot check
+        run: pnpm exec vitest run server/hosted-access.test.ts
