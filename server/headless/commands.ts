@@ -31,9 +31,9 @@ async function doctorOnce(ctx: VerbContext): Promise<VerbOutcome> {
   const problems: string[] = [];
   const warnings: string[] = [];
   const isOmb = health.app === "openmausbot";
-  if (!isOmb) problems.push(`${client.baseUrl} answered, but it is not OpenMausBot`);
+  if (!isOmb) problems.push(`${client.baseUrl} answered, but it is not Fizot`);
   const tooOld = Boolean(server) && server!.capabilities?.jobs !== true;
-  if (tooOld) problems.push(`OpenMausBot ${server!.version ?? "(unknown version)"} is too old for the headless commands: it cannot report a conversation's job`);
+  if (tooOld) problems.push(`Fizot ${server!.version ?? "(unknown version)"} is too old for the headless commands: it cannot report a conversation's job`);
   if (isOmb && !availableEngines.length) problems.push("no engine is available: set one up with `openmausbot engine set KIND --key-env VAR`");
   if (session?.kind === "session" && typeof session.expiresAt === "number" && session.expiresAt - Date.now() < 14 * DAY) {
     warnings.push(`this session expires in ${Math.max(0, Math.floor((session.expiresAt - Date.now()) / DAY))} days: get a new one with openmausbot connect`);
@@ -54,7 +54,7 @@ async function doctorOnce(ctx: VerbContext): Promise<VerbOutcome> {
     },
     exitCode: ok ? EXIT.done : isOmb && !tooOld ? EXIT.failed : EXIT.unreachable,
     human: [
-      `${server ? `OpenMausBot ${server.version} ("${server.label}")` : "OpenMausBot"} at ${client.baseUrl}: ${ok ? "ready" : "not ready"}`,
+      `${server ? `Fizot ${server.version} ("${server.label}")` : "Fizot"} at ${client.baseUrl}: ${ok ? "ready" : "not ready"}`,
       `You are: ${who}`,
       `Engines available: ${availableEngines.length ? availableEngines.join(", ") : "none"}`,
       ...(browser ? [`Bots' browser: ${browser.kind === "engine" ? `installed${browser.version ? ` (${browser.version})` : ""}` : "not available"}`] : []),

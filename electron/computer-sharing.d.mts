@@ -78,7 +78,7 @@ export function createComputerSharing(options: {
   home?: string;
   activityFile?: string;
   /** The verified Cloud sign-in: { status, accountId, origin }; status "restoring" while a saved sign-in is read. */
-  /** The MausBot Cloud sign-in as `env`'s lending checks it (its own address for another Cloud of the person's own), else My Cloud's. */
+  /** The Fizot Cloud sign-in as `env`'s lending checks it (its own address for another Cloud of the person's own), else My Cloud's. */
   cloud?: (env?: Workspace | null) => { status: string; accountId: string | null; origin: string | null } | null;
   /** Signs this app back in to the person's own Cloud after its session there ended; true when it did. */
   reconnect?: ((origin: string) => Promise<boolean> | boolean) | null;

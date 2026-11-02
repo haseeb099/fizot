@@ -1,20 +1,24 @@
-export const APP_NAME = "OpenMausBot";
-export const APP_REPOSITORY = "https://github.com/milind-soni/OpenMausBot";
-export const DOCS_URL = `${APP_REPOSITORY}/tree/main/docs`;
+import { fizotEndpoint } from "./fizot-endpoints.ts";
+
+export const APP_NAME = "Fizot";
+const repository = fizotEndpoint("repositoryUrl");
+export const APP_REPOSITORY = repository;
+export const DOCS_URL = repository ? `${repository}/tree/main/docs` : "";
 export const HELP_CENTER_URL = DOCS_URL;
-export const APPROVAL_LEVELS_URL = `${APP_REPOSITORY}/blob/main/docs/approval-levels.md`;
-export const PASSKEY_HELP_URL = "https://docs.openmausbot.com/docs/troubleshooting/google-sign-in-cloud-browser";
+export const APPROVAL_LEVELS_URL = repository ? `${repository}/blob/main/docs/approval-levels.md` : "";
+export const PASSKEY_HELP_URL = fizotEndpoint("docsUrl");
 export const FEEDBACK_URL = "https://discord.gg/9Wb8MEpXRs";
-export const RELEASES_URL = `${APP_REPOSITORY}/releases`;
-export const PRICING_URL = "https://www.openmausbot.com/pricing";
+export const RELEASES_URL = repository ? `${repository}/releases` : "";
+export const PRICING_URL = fizotEndpoint("siteUrl");
 export function withSource(url: string, source: string): string {
+  if (!url) return "";
   const target = new URL(url);
   target.searchParams.set("src", source);
   return target.href;
 }
-export const LICENSE_URL = `${APP_REPOSITORY}/blob/main/LICENSE`;
+export const LICENSE_URL = repository ? `${repository}/blob/main/LICENSE` : "";
 export const IOS_APP_STORE_URL = "https://apps.apple.com/in/app/mausbot/id6803387923";
-export const ANDROID_APK_URL = `${APP_REPOSITORY}/releases/download/android-v1.5.0/OpenMausBot.apk`;
+export const ANDROID_APK_URL = repository ? `${repository}/releases/download/android-v1.5.0/Fizot.apk` : "";
 
 export function appVersion(): string {
   return typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";

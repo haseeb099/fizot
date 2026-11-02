@@ -153,7 +153,7 @@ describe("/api/move/freeze", () => {
     expect(await ask(route, "POST", "/api/bots/b1/messages")).toBe("pass");
   });
 
-  it("is only for OpenMausBot on this computer, never a paired device", async () => {
+  it("is only for Fizot on this computer, never a paired device", async () => {
     const freeze = createMoveFreeze({ dataDir: dataDir() });
     const route = createMoveFreezeRoutes({ freeze, busy: () => null, restart() {} });
     expect(await ask(route, "POST", undefined, {}, "session")).toMatchObject({ status: 403 });

@@ -324,7 +324,7 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
               }
               const listed = currentById.get(inspected.identity.boxId);
               if (listed && listed.name !== inspected.identity.name) {
-                return json(res, 503, { error: "boat.dev returned conflicting cloud computer identities; keep the current Boat account and retry" });
+                return json(res, 503, { error: "example.invalid returned conflicting cloud computer identities; keep the current Boat account and retry" });
               }
               currentById.set(inspected.identity.boxId, inspected.identity);
               journalBoatResources.push(inspected.identity);

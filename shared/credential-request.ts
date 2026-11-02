@@ -14,7 +14,7 @@ export const CREDENTIAL_TARGETS = {
     label: "Boat API key",
     description: "Gives bots an isolated cloud computer when Boat is selected.",
     placeholder: "Paste your Boat API key",
-    helpUrl: "https://docs.boat.dev/api-keys",
+    helpUrl: "",
   },
   opencodeGoApiKey: {
     label: "OpenCode API key",
@@ -130,7 +130,7 @@ export type CredentialConfig = {
   onePassword?: { connected?: boolean };
 };
 
-/** A secret OpenMausBot does not keep itself: the bot names it, and gets a one-use reference or a private file. */
+/** A secret Fizot does not keep itself: the bot names it, and gets a one-use reference or a private file. */
 export const CUSTOM_SECRET_TARGET = "customSecret";
 export type SecretDelivery = "ref" | "file";
 export const SECRET_DELIVERIES: readonly SecretDelivery[] = ["ref", "file"];

@@ -156,7 +156,7 @@ const PAIR_FORM = "Boolean(document.querySelector('form input') && /pairing code
     const sessions = (await fx.onCloud("GET", "/api/auth/sessions")).body.sessions as Array<{ id: string; label: string }>;
     const cookie = (await world.cloudCookies()).length;
     expect(cookie).toBeGreaterThan(0);
-    for (const session of sessions.filter((entry) => !entry.label.startsWith("OpenMausBot app (Cloud)"))) await fx.onCloud("DELETE", `/api/auth/sessions/${session.id}`);
+    for (const session of sessions.filter((entry) => !entry.label.startsWith("Fizot app (Cloud)"))) await fx.onCloud("DELETE", `/api/auth/sessions/${session.id}`);
     expect(await page("fetch('/api/auth/session').then((response) => response.status)")).toBe(401);
     let formSeen = false;
     const watching = (async () => {
@@ -174,7 +174,7 @@ const PAIR_FORM = "Boolean(document.querySelector('form input') && /pairing code
 
   it("an ended Admin grant with a lapsed session shows one Sign in, and My Cloud opens by itself once signed in", async () => {
     const sessions = (await fx.onCloud("GET", "/api/auth/sessions")).body.sessions as Array<{ id: string; label: string }>;
-    for (const session of sessions.filter((entry) => !entry.label.startsWith("OpenMausBot app (Cloud)"))) await fx.onCloud("DELETE", `/api/auth/sessions/${session.id}`);
+    for (const session of sessions.filter((entry) => !entry.label.startsWith("Fizot app (Cloud)"))) await fx.onCloud("DELETE", `/api/auth/sessions/${session.id}`);
     world.account.state = { status: "reauth-required", message: "access-ended", account: { id: "acct-fixture", email: "person@example.test" }, lastPlan: { tier: "pro", active: true } };
     await blank();
     await world.home.show();
@@ -287,7 +287,7 @@ const PAIR_FORM = "Boolean(document.querySelector('form input') && /pairing code
     await onTeamPage();
     const sessions = (await fx.onCloud("GET", "/api/auth/sessions")).body.sessions as Array<{ id: string; label: string }>;
     // The window's sessions (the page labels them itself); the fixture's own owner sessions stay.
-    for (const session of sessions.filter((entry) => !entry.label.startsWith("OpenMausBot app (Cloud)"))) await fx.onCloud("DELETE", `/api/auth/sessions/${session.id}`);
+    for (const session of sessions.filter((entry) => !entry.label.startsWith("Fizot app (Cloud)"))) await fx.onCloud("DELETE", `/api/auth/sessions/${session.id}`);
     expect(await page("fetch('/api/auth/session').then((response) => response.status)")).toBe(401);
     const pairings = world.admin.teamPairings.length;
     world.window.webContents.reload();
@@ -331,7 +331,7 @@ const PAIR_FORM = "Boolean(document.querySelector('form input') && /pairing code
     const after = await sessions();
     expect(after.filter((entry) => !known.includes(entry.id)).length, "a new session, made in the background").toBe(1);
     // The window's older sessions end (the fixture's own owner session stays): the page keeps working on the new one.
-    for (const entry of after) if (known.includes(entry.id) && !entry.label.startsWith("OpenMausBot app (Cloud)")) await fx.onCloud("DELETE", `/api/auth/sessions/${entry.id}`);
+    for (const entry of after) if (known.includes(entry.id) && !entry.label.startsWith("Fizot app (Cloud)")) await fx.onCloud("DELETE", `/api/auth/sessions/${entry.id}`);
     expect(await page("fetch('/api/auth/session').then((response) => response.json()).then((session) => session.kind)")).toBe("session");
     expect(await page("window.__samePage === true"), "the page never moved").toBe(true);
     expect(new URL(world.window.url).origin).toBe(world.teamOrigin);

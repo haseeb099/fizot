@@ -58,7 +58,7 @@ async function api(cloud: Cloud, method: string, path: string, body?: unknown) {
 }
 
 async function adminPairing(cloud: Cloud): Promise<string> {
-  const body = JSON.stringify({ label: "OpenMausBot app (Cloud)", ttlSeconds: 300 });
+  const body = JSON.stringify({ label: "Fizot app (Cloud)", ttlSeconds: 300 });
   const timestamp = String(Math.floor(Date.now() / 1000)), nonce = randomBytes(16).toString("base64url");
   const response = await fetch(`${cloud.base}/api/cloud/pairing`, { method: "POST", signal: AbortSignal.timeout(20_000), headers: {
     ...edge, "content-type": "application/json",

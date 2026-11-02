@@ -8,11 +8,11 @@ import type { BotRecord, Message, Store } from "./store.ts";
 
 export type DefaultBotStore = Pick<Store, "bots" | "bot" | "createBot" | "patchBot" | "appendMessage" | "messagesFor" | "createTask" | "setChiefOfStaff">;
 
-/** Where each place (key "") and Team Cloud member (their email) is recorded as having had its MausBot, so one that is
+/** Where each place (key "") and Team Cloud member (their email) is recorded as having had its Fizot, so one that is
  * gone is never made twice. */
 const LEDGER = "default-bot.json";
 
-/** The colour a new install gave its MausBot before Chrome, which an adopted MausBot trades for Chrome. */
+/** The colour a new install gave its Fizot before Chrome, which an adopted Fizot trades for Chrome. */
 const STARTER_COLOR = "silver";
 
 export const HELPER_ASKS = ["What are my bots up to?", "Set up a bot for my inbox", "Make me a morning routine", "How do I connect my email?"];
@@ -24,7 +24,7 @@ export function defaultBotRefusal(name: string): string {
 /** Why a PATCH may not change this bot so, or null. */
 export function defaultBotPatchRefusal(bot: BotRecord | null, body: Record<string, unknown>): string | null {
   for (const key of ["sidebarHidden", "welcomed"]) if (body[key] !== undefined && typeof body[key] !== "boolean") return `${key} must be true or false`;
-  if ((body.sidebarHidden !== undefined || body.welcomed !== undefined) && !bot?.defaultBot) return "Only MausBot is hidden this way; archive or delete other bots.";
+  if ((body.sidebarHidden !== undefined || body.welcomed !== undefined) && !bot?.defaultBot) return "Only Fizot is hidden this way; archive or delete other bots.";
   return body.hidden === true && bot?.defaultBot ? defaultBotRefusal(bot.name) : null;
 }
 
@@ -32,7 +32,7 @@ export function ownsDefaultBot(bot: BotRecord | null | undefined, email: string 
   return Boolean(email && bot?.defaultBot && defaultBotPerson(bot) === email.trim().toLowerCase());
 }
 
-/** The English intro: who MausBot is, what it does here, and that it is looking around (its follow-up comes after, from
+/** The English intro: who Fizot is, what it does here, and that it is looking around (its follow-up comes after, from
  * helper-followup.ts). Clients that know `helperIntro` say it in the viewer's own language. */
 export function helperIntroMessage(bot: Pick<BotRecord, "name" | "chiefOfStaff">, team?: string | null): Omit<Message, "id" | "at"> {
   const title = bot.chiefOfStaff ? `Hey! I'm ${bot.name}. I'm new here.` : `Hi! I'm ${bot.name}, your helper for everything here.`;
@@ -65,8 +65,8 @@ function remember(dataDir: string, person: string, botId: string): void {
   writeFileAtomic(join(dataDir, LEDGER), JSON.stringify({ v: 1, places: { ...places, [person]: botId } }), { mode: 0o600 });
 }
 
-/** A new install's own MausBot from before it was marked: the place's oldest bot, still live, outside any department,
- * not installed from a package, and still named MausBot or still in the colour a new install gave it. */
+/** A new install's own Fizot from before it was marked: the place's oldest bot, still live, outside any department,
+ * not installed from a package, and still named Fizot or still in the colour a new install gave it. */
 export function seededMausBot(bots: readonly BotRecord[]): BotRecord | undefined {
   const oldest = bots.reduce<BotRecord | undefined>((first, bot) => !first || bot.createdAt < first.createdAt ? bot : first, undefined);
   if (!oldest || oldest.hidden || oldest.movedTo || oldest.section?.trim() || oldest.installedPackage) return undefined;
@@ -81,10 +81,10 @@ function introduce(store: DefaultBotStore, bot: BotRecord, team?: string | null)
   if (threadId) store.appendMessage(threadId, helperIntroMessage(bot, team));
 }
 
-/** The first message a new MausBot says instead of its intro. */
+/** The first message a new Fizot says instead of its intro. */
 export type DefaultBotIntro = (bot: BotRecord) => Omit<Message, "id" | "at">;
 
-/** A new MausBot, with its intro as its first message. On a Team Cloud it is its member's alone. */
+/** A new Fizot, with its intro as its first message. On a Team Cloud it is its member's alone. */
 export function createDefaultBot(store: DefaultBotStore, options: { person?: string; team?: string | null; chief?: (id: string) => void; intro?: DefaultBotIntro } = {}): BotRecord {
   const person = options.person?.trim().toLowerCase() ?? "";
   const taken = new Set(person ? [] : store.bots.map((bot) => bot.name.trim().toLowerCase()));
@@ -99,9 +99,9 @@ export function createDefaultBot(store: DefaultBotStore, options: { person?: str
   return bot;
 }
 
-/** Makes sure this place (no `person`) or this Team Cloud member has had its MausBot once: the one it has, the new
- * install's own adopted, or a new one. A MausBot that is gone is never made again. Two marked ones keep the oldest. A
- * place with no Chief of Staff at all gets MausBot as its Chief, so someone keeps an eye on the day; one that has a
+/** Makes sure this place (no `person`) or this Team Cloud member has had its Fizot once: the one it has, the new
+ * install's own adopted, or a new one. A Fizot that is gone is never made again. Two marked ones keep the oldest. A
+ * place with no Chief of Staff at all gets Fizot as its Chief, so someone keeps an eye on the day; one that has a
  * Chief keeps it. */
 export function ensureDefaultBot(store: DefaultBotStore, options: { dataDir: string; person?: string; team?: string | null }): BotRecord | null {
   const person = options.person?.trim().toLowerCase() ?? "";
@@ -127,7 +127,7 @@ export function ensureDefaultBot(store: DefaultBotStore, options: { dataDir: str
   return bot;
 }
 
-/** A move brought this place's MausBot from another computer: it becomes the one MausBot here, and the one this place
+/** A move brought this place's Fizot from another computer: it becomes the one Fizot here, and the one this place
  * had becomes an ordinary bot (retireUnusedStarter archives it when nobody used it). */
 export function takeArrivingDefaultBot(store: Pick<Store, "bots" | "patchBot">, id: string): void {
   const arriving = store.bots.find((bot) => bot.id === id);
@@ -138,8 +138,8 @@ export function takeArrivingDefaultBot(store: Pick<Store, "bots" | "patchBot">, 
   if (!arriving.defaultBot || defaultBotPerson(arriving)) store.patchBot(id, { defaultBot: {} });
 }
 
-/** After a bot arrives by a move: the MausBot this place made for itself (by id, from the ledger), once it is neither
- * the MausBot nor the Chief and nobody has used it, is archived, so the move leaves one MausBot and nothing of the
+/** After a bot arrives by a move: the Fizot this place made for itself (by id, from the ledger), once it is neither
+ * the Fizot nor the Chief and nobody has used it, is archived, so the move leaves one Fizot and nothing of the
  * person's is lost. */
 export function retireUnusedStarter(store: Pick<Store, "bot" | "patchBot" | "messagesFor">, dataDir: string): void {
   const own = ledger(dataDir)[""];

@@ -35,7 +35,7 @@ describe("what the credit's engine is made of", () => {
     for (const body of [null, "models", { data: "x" }, { models: [] }]) expect(parseCreditModels(body)).toEqual([]);
   });
 
-  it("is OpenMausBot's own chat engine on the relay, with this machine's token as its own key: never Claude Code, Codex or an Anthropic route", () => {
+  it("is Fizot's own chat engine on the relay, with this machine's token as its own key: never Claude Code, Codex or an Anthropic route", () => {
     const configs = cloudCreditInstanceConfig(credential, parseCreditModels(MODELS));
     expect(Object.keys(configs)).toEqual([CLOUD_CREDIT_INSTANCE]);
     const entry = configs[CLOUD_CREDIT_INSTANCE]!;

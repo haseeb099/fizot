@@ -7,7 +7,7 @@ describe("BotMRR package deep links", () => {
   it("accepts a public GitHub package URL", () => {
     const target = "https://raw.githubusercontent.com/acme/bots/main/reddit-lead-miner.md";
     assert.equal(packageUrlFromDeepLink(`openmausbot://install?url=${encodeURIComponent(target)}`), target);
-    assert.equal(packageUrlFromCommandLine(["OpenMausBot", "--flag", `openmausbot://install?url=${encodeURIComponent(target)}`]), target);
+    assert.equal(packageUrlFromCommandLine(["Fizot", "--flag", `openmausbot://install?url=${encodeURIComponent(target)}`]), target);
   });
 
   it("accepts a Grok Bot share link as its canonical x.ai address", () => {

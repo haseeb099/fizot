@@ -27,9 +27,9 @@ vi.mock("@/state/store", () => ({ useStore: () => ({ state: f.state, dispatch: f
 vi.mock("@/lib/analytics", () => ({ emailGateDone: () => false, track: vi.fn(), identifyEmail: vi.fn(), analyticsChoiceKnown: () => true }));
 vi.mock("@/lib/updater", () => ({ useUpdaterState: () => f.updater }));
 vi.mock("./cloud-buy/NightCard", () => ({ NightCard: ({ children }: { children: unknown }) => children }));
-// Who MausBot belongs to: unknown (as before the session answers) unless a test says otherwise.
+// Who Fizot belongs to: unknown (as before the session answers) unless a test says otherwise.
 vi.mock("@/lib/default-bot", async original => ({ ...await original<typeof import("@/lib/default-bot")>(), useViewerEmail: () => f.viewerEmail }));
-vi.mock("@/lib/brand", () => ({ brandStatus: () => ({ brand: { name: "OpenMausBot" }, source: f.brand, file: "" }), productName: () => "MausBot" }));
+vi.mock("@/lib/brand", () => ({ brandStatus: () => ({ brand: { name: "Fizot" }, source: f.brand, file: "" }), productName: () => "Fizot" }));
 vi.mock("@/components/EngineLibrary", () => ({ engineReady: (instance: { snapshot: { state: string; authenticated?: boolean } }) =>
   instance.snapshot.state === "available" && instance.snapshot.authenticated !== false }));
 import { AppNotices } from "./AppNotices";
@@ -48,7 +48,7 @@ const plans = [
 const TRIAL_OFFER: CloudOffer = { plans, recommended: "pro", creditUsd: 5, refundDays: 14 };
 const PLAIN_OFFER: CloudOffer = { plans: plans.map(({ trialDays: _days, ...plan }) => plan), recommended: "pro", refundDays: 14 };
 const INTRO = "Keep your bots working when this computer is off";
-const STAR = "Enjoying MausBot?";
+const STAR = "Enjoying Fizot?";
 const signedOut: CloudAccountState = { status: "signed-out" };
 const free: CloudAccountState = { status: "connected", account: { id: "a", email: "person@example.test" }, entitlement: { plan: "free", status: "inactive", expiresAt: null, version: 1 } };
 const paid = (extra: Partial<CloudAccountState> = {}): CloudAccountState => ({ ...free, entitlement: { plan: "pro", tier: "pro", status: "active", expiresAt: NOW + 30 * DAY, version: 2 }, ...extra });
@@ -162,7 +162,7 @@ describe("the card after the update", () => {
   it("offers the free trial to someone signed out who has used the app before, in the Admin's numbers, with Start free trial and Show me how", async () => {
     returning();
     const html = await launch();
-    const words = [INTRO, "Free for 7 days", "MausBot Cloud runs your bots for you in the cloud, always on.", "Routines run on time, day and night",
+    const words = [INTRO, "Free for 7 days", "Fizot Cloud runs your bots for you in the cloud, always on.", "Routines run on time, day and night",
       "Reach your bots from your phone, even with this computer off", "$5 of Claude credit to start", "Then from $15/month + tax. Cancel any time.",
       "14-day money-back on every plan.", "Start free trial", "Show me how", "Sign in to your Cloud plan", "Not now"];
     for (const text of words) expect(html).toContain(text);
@@ -425,7 +425,7 @@ describe("the Product Hunt launch card", () => {
 });
 
 describe("the Cloud Pro popup after the update", () => {
-  const POPUP = "MausBot Cloud Pro";
+  const POPUP = "Fizot Cloud Pro";
   const ID = CLOUD_PRO_UPDATE_NOTICE;
   let modal: boolean;
   const popupEvents = (action: string) => vi.mocked(track).mock.calls.filter(([event, props]) => event === "cloud_pro_popup" && (props as { action?: string }).action === action);
@@ -460,9 +460,9 @@ describe("the Cloud Pro popup after the update", () => {
   it("every install gets it once, before every other card, as a modal dialog with the Admin's offer; Start free trial opens Add a Cloud from it", async () => {
     returning(); storage.delete(PRODUCT_HUNT_NOTICE);
     const html = await launch();
-    const words = [POPUP, "Free for 7 days", "MausBot Cloud runs your bots for you in the cloud, always on.", "Routines run on time, day and night",
+    const words = [POPUP, "Free for 7 days", "Fizot Cloud runs your bots for you in the cloud, always on.", "Routines run on time, day and night",
       "Reach your bots from your phone, even with this computer off", "$5 of Claude credit to start", "Then from $15/month + tax. Cancel any time.",
-      "14-day money-back on every plan.", "Start free trial", "Compare plans", "OpenMausBot on this computer stays free and open source.", "Not now"];
+      "14-day money-back on every plan.", "Start free trial", "Compare plans", "Fizot on this computer stays free and open source.", "Not now"];
     for (const text of words) expect(html).toContain(text);
     for (let i = 1; i < words.length; i++) expect(html.indexOf(words[i - 1]!), words[i]).toBeLessThan(html.indexOf(words[i]!));
     for (const part of ['role="dialog"', 'aria-modal="true"', 'aria-labelledby="cloud-pro-popup-title"', 'aria-describedby="cloud-pro-popup-body"']) expect(html).toContain(part);
@@ -506,17 +506,17 @@ describe("the Cloud Pro popup after the update", () => {
     expect(await launch()).toContain(POPUP);
   });
 
-  it("goes after MausBot's first-launch card: never in the launch that card opened, then in the next one", async () => {
+  it("goes after Fizot's first-launch card: never in the launch that card opened, then in the next one", async () => {
     f.viewerEmail = null;
     f.state.bots = [{ ...structuredClone(FIRST_REPLY[0]), id: "maus", defaultBot: {} }];
-    expect(await launch(), "MausBot's card is due: the popup waits for it").not.toContain(POPUP);
+    expect(await launch(), "Fizot's card is due: the popup waits for it").not.toContain(POPUP);
     markLaunchDialog("mausbot"); f.state.bots[0].welcomed = true;
     expect(await launch(), "the card opened and was answered in this launch").not.toContain(POPUP);
     session.clear();
     expect(await launch(), "the next launch").toContain(POPUP);
   });
 
-  it("claims the launch when it opens, so MausBot's card waits for a later one", async () => {
+  it("claims the launch when it opens, so Fizot's card waits for a later one", async () => {
     returning();
     expect(await launch()).toContain(POPUP);
     expect(launchDialogShown()).toBe("notices");
@@ -546,7 +546,7 @@ describe("the Cloud Pro popup after the update", () => {
   it("someone signed in with no plan: each click is tied to their Cloud account's email before it is counted, and only once across reloads", async () => {
     account = free; offer = { ...PLAIN_OFFER };
     const html = await launch();
-    expect(html).toContain("Upgrade to Cloud Pro"); expect(html).toContain("MausBot Cloud plans from $15/month + tax.");
+    expect(html).toContain("Upgrade to Cloud Pro"); expect(html).toContain("Fizot Cloud plans from $15/month + tax.");
     for (const gone of ["Free for", "Start free trial", "Claude credit"]) expect(html).not.toContain(gone);
     expect(popupEvents("shown")).toEqual([event("shown", "none", true, "local")]);
     expect(identifyEmail).not.toHaveBeenCalled();
@@ -570,12 +570,12 @@ describe("the Cloud Pro popup after the update", () => {
     expect(lastOrder(vi.mocked(identifyEmail))).toBeLessThan(lastOrder(vi.mocked(track)));
   });
 
-  it("a trial or any plan gets Manage plan in Settings → MausBot Cloud, in the app; no Compare plans, never a checkout or the browser", async () => {
+  it("a trial or any plan gets Manage plan in Settings → Fizot Cloud, in the app; no Compare plans, never a checkout or the browser", async () => {
     const cases = [
-      { state: paid({ trial: trial("active") }), plan: "trial", line: "Pro free trial · verified by MausBot Cloud" },
-      { state: paid(), plan: "pro", line: "Pro active · verified by MausBot Cloud" },
-      { state: tierPlan("max"), plan: "max", line: "Max active · verified by MausBot Cloud" },
-      { state: tierPlan("personal"), plan: "personal", line: "Personal active · verified by MausBot Cloud" },
+      { state: paid({ trial: trial("active") }), plan: "trial", line: "Pro free trial · verified by Fizot Cloud" },
+      { state: paid(), plan: "pro", line: "Pro active · verified by Fizot Cloud" },
+      { state: tierPlan("max"), plan: "max", line: "Max active · verified by Fizot Cloud" },
+      { state: tierPlan("personal"), plan: "personal", line: "Personal active · verified by Fizot Cloud" },
     ];
     for (const { state, plan, line } of cases) {
       vi.clearAllMocks(); fresh(); account = state; showWindow(LOCAL_ORIGIN);
@@ -603,11 +603,11 @@ describe("the Cloud Pro popup after the update", () => {
     expect(popupEvents("shown")).toEqual([event("shown", "pro", true, "local")]);
   });
 
-  it("a desktop whose window opens on My Cloud gets it there once; Manage plan opens Settings → MausBot Cloud on that page", async () => {
+  it("a desktop whose window opens on My Cloud gets it there once; Manage plan opens Settings → Fizot Cloud on that page", async () => {
     account = paid();
     onMyCloud({ status: "paid", tier: "pro" });
     const html = await launch();
-    expect(html).toContain(POPUP); expect(html).toContain("Manage plan"); expect(html).toContain("Pro active · verified by MausBot Cloud");
+    expect(html).toContain(POPUP); expect(html).toContain("Manage plan"); expect(html).toContain("Pro active · verified by Fizot Cloud");
     for (const gone of ["Compare plans", "Upgrade to Cloud Pro", "Start free trial", "/month", "Continue on this computer"]) expect(html).not.toContain(gone);
     expect(popupEvents("shown")).toEqual([event("shown", "pro", true, "my_cloud")]);
     expect(bridges.cloud.state).not.toHaveBeenCalled();
@@ -626,8 +626,8 @@ describe("the Cloud Pro popup after the update", () => {
 
   it("on My Cloud: a trial, a lapsed plan and an ended sign-in get Manage plan in that page's Settings; no plan read, or one being checked, never offers one", async () => {
     const cases: Array<[CloudPlanSnapshot, string, boolean, string]> = [
-      [{ status: "paid", tier: "pro", trial: trial("active") }, "trial", true, "Pro free trial · verified by MausBot Cloud"],
-      [{ status: "paid", tier: "max" }, "max", true, "Max active · verified by MausBot Cloud"],
+      [{ status: "paid", tier: "pro", trial: trial("active") }, "trial", true, "Pro free trial · verified by Fizot Cloud"],
+      [{ status: "paid", tier: "max" }, "max", true, "Max active · verified by Fizot Cloud"],
       [{ status: "attention", tier: "pro" }, "none", true, "Pro · not active right now"],
       [{ status: "signin", tier: "pro" }, "unknown", false, "Sign in again to use the Cloud on this computer. Your plan is not affected."],
     ];
@@ -826,7 +826,7 @@ describe("the Cloud Pro popup after the update", () => {
 });
 
 describe("the product-updates question after the update", () => {
-  const QUESTION = "Get MausBot updates?", POPUP = "MausBot Cloud Pro";
+  const QUESTION = "Get Fizot updates?", POPUP = "Fizot Cloud Pro";
   const RECEIPT = "R".repeat(43);
   let saved: unknown;
   let accountAnswer: { status: string; textVersion: string } | null;
@@ -884,7 +884,7 @@ describe("the product-updates question after the update", () => {
     expect(render(), "right after the popup closes, as #3379 orders it").toContain(QUESTION);
   });
 
-  it("waits while MausBot's first-launch card is due, then follows it in the same launch once it closes", async () => {
+  it("waits while Fizot's first-launch card is due, then follows it in the same launch once it closes", async () => {
     f.viewerEmail = null;
     f.state.bots = [{ ...structuredClone(FIRST_REPLY[0]), id: "maus", defaultBot: {} }];
     expect(await launch(), "the card is due: the question waits for it").not.toContain(QUESTION);
@@ -952,7 +952,7 @@ describe("no Use my Mac popup", () => {
 });
 
 describe("the Simple mode popup after the update", () => {
-  const TITLE = "Try the new Simple mode", ON = "You&#x27;re on Simple mode", POPUP = "MausBot Cloud Pro";
+  const TITLE = "Try the new Simple mode", ON = "You&#x27;re on Simple mode", POPUP = "Fizot Cloud Pro";
   let modal: boolean;
   const prompts = () => vi.mocked(track).mock.calls.filter(([event]) => event === "simple_mode_prompt").map(([, props]) => props);
 

@@ -2,7 +2,7 @@
 // journal, this computer's server's freeze, My Cloud's owner sessions, the person's typing, and coming home when My
 // Cloud ends (one-home-again.mjs). The Admin's word decides: a move starts only for an account it lets move, to a Cloud
 // that is ready, and a Cloud it holds after it ended is the one signal that brings everything home. The person's own
-// choice to keep this computer's bots here (Settings → MausBot Cloud, Advanced) is kept beside the journal.
+// choice to keep this computer's bots here (Settings → Fizot Cloud, Advanced) is kept beside the journal.
 import { createHash } from "node:crypto";
 import { createReadStream, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -32,7 +32,7 @@ export function installationOf(environmentId) {
  * none) and what it is (server/routes/move-freeze.ts). */
 export function freezeAnswer(got) {
   if (got.status === 409 && typeof got.body?.busy === "string") return { busy: got.body.busy, ...(typeof got.body.what === "string" ? { what: got.body.what } : {}) };
-  if (!got.ok || got.body?.frozen !== true) throw Object.assign(new Error("OpenMausBot on this computer could not pause."), { status: got.status });
+  if (!got.ok || got.body?.frozen !== true) throw Object.assign(new Error("Fizot on this computer could not pause."), { status: got.status });
   return { frozen: true };
 }
 
@@ -91,7 +91,7 @@ async function answer(response) {
  *   teamJournal?: { read(): unknown, write(value: unknown): void },
  *   keep?: { read(): unknown, write(value: unknown): void },
  *   reportTimers?: { set(work: () => void, ms: number): unknown, clear(timer: unknown): void },
- * }} deps `localRequest`: this computer's server, as its owner (main adds the owner's header). `account`: the MausBot
+ * }} deps `localRequest`: this computer's server, as its owner (main adds the owner's header). `account`: the Fizot
  * Cloud sign-in (cloud-account.mjs). `journal`: where the move's journal is kept, journalFile by default; `keep`: the
  * person's choice to keep this computer's bots here, one-home-keep.json beside it by default. `openTeam`:
  * shows a team's page, where a bot moved into it from My Cloud now lives (team-move-main.mjs, whose journal is
@@ -140,7 +140,7 @@ export function installOneHome({ localRequest, account, journalFile, tempRoot, l
       ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) })),
     async json(route) {
       const got = await local.call("GET", route);
-      if (!got.ok) throw new Error("OpenMausBot on this computer did not answer. Try again in a moment.");
+      if (!got.ok) throw new Error("Fizot on this computer did not answer. Try again in a moment.");
       return got.body;
     },
   };
@@ -167,7 +167,7 @@ export function installOneHome({ localRequest, account, journalFile, tempRoot, l
   const again = createHomeAgain({
     async exportGrant() {
       const asked = await account()?.exportHome({ installation: (await installation()) ?? undefined });
-      if (!asked) throw new Error("Sign in to MausBot Cloud first.");
+      if (!asked) throw new Error("Sign in to Fizot Cloud first.");
       // The code goes only to the Cloud this computer moved to.
       if ("grant" in asked && asked.grant.origin !== cloudOrigin()) throw new Error("This is not the Cloud this computer moved to.");
       return asked;
@@ -198,7 +198,7 @@ export function installOneHome({ localRequest, account, journalFile, tempRoot, l
       freeze: async (origin) => freezeAnswer(await local.call("POST", "/api/move/freeze", { cloud: origin })),
       async unfreeze(options) {
         const got = await local.call("DELETE", "/api/move/freeze", options?.automations === "off" ? { automations: "off" } : undefined);
-        if (!got.ok) throw Object.assign(new Error("OpenMausBot on this computer could not go on again."), { status: got.status });
+        if (!got.ok) throw Object.assign(new Error("Fizot on this computer could not go on again."), { status: got.status });
       },
       frozen: async () => (await local.json("/api/move/freeze"))?.frozen === true,
       async forget() {
@@ -247,7 +247,7 @@ export function installOneHome({ localRequest, account, journalFile, tempRoot, l
     ...send,
     /** The switch "Keep this computer's bots on this computer", as Settings shows it, and the person turning it. */
     keep: { state: keepState, set: (on) => home.keep(on === true) },
-    /** Goes on with the move, and with any bot moving into a team: at launch, and whenever the MausBot Cloud sign-in changes. */
+    /** Goes on with the move, and with any bot moving into a team: at launch, and whenever the Fizot Cloud sign-in changes. */
     kick: () => { void teamMove.kick(); return home.kick(); },
     /** Home is My Cloud: this computer's own server is frozen for good, and its phone link stays off. */
     away: () => home.away(),

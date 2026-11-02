@@ -1,4 +1,4 @@
-// Boat (boat.dev) public API v1: https://docs.boat.dev/api/v1 (OpenAPI https://docs.boat.dev/openapi/boat-v1.yaml).
+// Boat (example.invalid) public API v1:  (OpenAPI ).
 // Probed 2026-07-24, v1 2026-10-13: POST /sandboxes/{id}/commands runs shell synchronously (~0.2s); create answers 202
 // and is ready in ~2s; stop→archived ~5s, resume→idle ~8s; disk persists, tmux does not. Stream tokens rotate on every
 // state change and the dedicated IP across archive/resume, so never persist either.
@@ -71,7 +71,7 @@ const MAX_BOAT_INVENTORY_PAGES = 10;
 const LEGACY_MANAGED_BOAT_NAME = /^ogb-[a-z0-9]{1,8}-[a-f0-9]{6}$/;
 const SCOPED_MANAGED_BOAT_NAME = /^ogb-[a-f0-9]{12}-[a-z0-9]{1,8}-[a-f0-9]{6}$/;
 const BOAT_ID = /^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
-/** Sandbox.state in v1, plus OpenMausBot's own `removing` for a sandbox whose deletion is under way. */
+/** Sandbox.state in v1, plus Fizot's own `removing` for a sandbox whose deletion is under way. */
 const BOAT_STATES = new Set([
   "init", "provisioning", "provisioned", "cloning", "ready", "idle", "running", "archiving", "archived", "error", "cancelled", "removing",
 ]);
@@ -137,8 +137,8 @@ function snapshotBoatConfig(cfg: AppConfig): AppConfig {
 
 /** An own token goes to Boat; Cloud Pro's included token only to its relay. */
 function boatFetch(cfg: AppConfig, path: string, opts: RequestInit = {}) {
-  const account = boatAccount(cfg);
-  return fetch(`${account?.api ?? boatProviderApi()}${relayPath(account, path)}`, {
+  const account = boatAccount(cfg), api = account?.api ?? boatProviderApi();
+  if (!api) return Promise.resolve(new Response(JSON.stringify({ ok: false }), { status: 503, headers: { "content-type": "application/json" } })); return fetch(`${api}${relayPath(account, path)}`, {
     ...opts,
     headers: {
       authorization: `Bearer ${account?.token}`,
@@ -224,7 +224,7 @@ async function reconcileRecordedBoatDeletion(
   }
   if (inspected.identity.name !== record.name) {
     throw Object.assign(
-      new Error("A cloud computer being deleted no longer has its remembered name — repair it in boat.dev before continuing"),
+      new Error("A cloud computer being deleted no longer has its remembered name — repair it in example.invalid before continuing"),
       { status: 503 },
     );
   }
@@ -287,7 +287,7 @@ async function confirmAcceptedBoatDeletion(
       return "confirmed";
     }
     throw Object.assign(
-      new Error(`boat.dev returned an invalid deletion receipt for ${record.boxId}; its deletion fence was kept`),
+      new Error(`example.invalid returned an invalid deletion receipt for ${record.boxId}; its deletion fence was kept`),
       { status: 503 },
     );
   }
@@ -312,7 +312,7 @@ async function requestRecordedBoatDeletion(
     });
   } catch (error) {
     throw Object.assign(
-      new Error("Could not confirm whether boat.dev accepted the delete. The computer was kept fenced; retry Delete to reconcile it"),
+      new Error("Could not confirm whether example.invalid accepted the delete. The computer was kept fenced; retry Delete to reconcile it"),
       { status: 503, cause: error },
     );
   }
@@ -417,7 +417,7 @@ const boatIdCache = new Map<string, string>();
 
 function boatInventoryProblem(status: number, body: any, included = false): string {
   if (status === 401 || status === 403) {
-    return included ? INCLUDED_BOAT_UNAVAILABLE : "boat.dev rejected the Boat API key — update it in Settings → API keys";
+    return included ? INCLUDED_BOAT_UNAVAILABLE : "example.invalid rejected the Boat API key — update it in Settings → API keys";
   }
   const service = boatServiceName(included);
   if (status === 429) return `${service} is rate-limiting this account — wait a minute and refresh`;
@@ -461,16 +461,16 @@ async function listBoatPages(
     const next = listed.body?.pageInfo?.nextCursor;
     if (next === undefined || next === null || next === "") return { ok: true, boats };
     if (typeof next !== "string" || next.length > 4_096) {
-      return { ok: false, problem: "boat.dev returned an invalid cloud computer page cursor" };
+      return { ok: false, problem: "example.invalid returned an invalid cloud computer page cursor" };
     }
     if (seenCursors.has(next)) {
-      return { ok: false, problem: "boat.dev repeated a cloud computer page cursor — refresh and try again" };
+      return { ok: false, problem: "example.invalid repeated a cloud computer page cursor — refresh and try again" };
     }
     seenCursors.add(next);
     cursor = next;
   }
 
-  return { ok: false, problem: "boat.dev returned too many cloud computer pages — narrow the account inventory and refresh" };
+  return { ok: false, problem: "example.invalid returned too many cloud computer pages — narrow the account inventory and refresh" };
 }
 
 /** Only rows with this installation's name shape leave, without provider links, IPs or env; foreign rows never become deletion targets. */
@@ -506,7 +506,7 @@ export async function listManagedBoats(
     try {
       recoveries = boatCreateRecoverySnapshot();
     } catch {
-      return invalidInventory("OpenMausBot could not safely read its cloud computer recovery records");
+      return invalidInventory("Fizot could not safely read its cloud computer recovery records");
     }
     for (const recovery of recoveries) {
       if (!recovery.resolved || !recovery.boxId) continue;
@@ -515,12 +515,12 @@ export async function listManagedBoats(
 
       const matchingRows = candidates.filter((candidate) => candidate?.id === recovery.boxId);
       if (matchingRows.length > 1) {
-        return invalidInventory("boat.dev returned a conflicting id for an OpenMaus-managed cloud computer — refresh or repair it in boat.dev");
+        return invalidInventory("example.invalid returned a conflicting id for an OpenMaus-managed cloud computer — refresh or repair it in example.invalid");
       }
       if (matchingRows.length === 1) {
         const listedName = typeof matchingRows[0]?.name === "string" ? matchingRows[0].name : "";
         if (listedName !== namedOwner.currentName && listedName !== namedOwner.legacyName) {
-          return invalidInventory("A remembered cloud computer no longer has its OpenMausBot owner name — repair it in boat.dev before continuing");
+          return invalidInventory("A remembered cloud computer no longer has its Fizot owner name — repair it in example.invalid before continuing");
         }
         continue;
       }
@@ -538,7 +538,7 @@ export async function listManagedBoats(
         inspected.identity.name !== namedOwner.currentName
         && inspected.identity.name !== namedOwner.legacyName
       ) {
-        return invalidInventory("A remembered cloud computer no longer has its OpenMausBot owner name — repair it in boat.dev before continuing");
+        return invalidInventory("A remembered cloud computer no longer has its Fizot owner name — repair it in example.invalid before continuing");
       }
       const directCandidate = {
         id: inspected.identity.boxId,
@@ -552,7 +552,7 @@ export async function listManagedBoats(
     try {
       deletions = boatDeletionSnapshot();
     } catch {
-      return invalidInventory("OpenMausBot could not safely read its cloud computer deletion records");
+      return invalidInventory("Fizot could not safely read its cloud computer deletion records");
     }
     for (const deletion of deletions) {
       let state: BoatDeletionReconciliation;
@@ -568,11 +568,11 @@ export async function listManagedBoats(
 
       const matchingRows = candidates.filter((candidate) => candidate?.id === deletion.boxId);
       if (matchingRows.length > 1) {
-        return invalidInventory("boat.dev returned a conflicting id for a cloud computer being deleted");
+        return invalidInventory("example.invalid returned a conflicting id for a cloud computer being deleted");
       }
       if (matchingRows.length === 1) {
         if (matchingRows[0]?.name !== deletion.name) {
-          return invalidInventory("A cloud computer being deleted no longer has its remembered name — repair it in boat.dev before continuing");
+          return invalidInventory("A cloud computer being deleted no longer has its remembered name — repair it in example.invalid before continuing");
         }
         if (getBoatDeletion(deletion.boxId)?.phase === "accepted") {
           matchingRows[0] = { ...matchingRows[0], state: "removing" };
@@ -614,11 +614,11 @@ export async function listManagedBoats(
     if (!owner) continue;
     const boxId = typeof candidate.id === "string" ? candidate.id : "";
     if (!BOAT_ID.test(boxId)) {
-      return invalidInventory("boat.dev returned an invalid id for an OpenMaus-managed cloud computer — refresh or repair it in boat.dev");
+      return invalidInventory("example.invalid returned an invalid id for an OpenMaus-managed cloud computer — refresh or repair it in example.invalid");
     }
     const existing = ownedBoatByBot.get(owner.botId);
     if (existing && existing !== boxId) {
-      return invalidInventory("boat.dev returned conflicting cloud computers for one OpenMaus bot — repair them in boat.dev before continuing");
+      return invalidInventory("example.invalid returned conflicting cloud computers for one OpenMaus bot — repair them in example.invalid before continuing");
     }
     ownedBoatByBot.set(owner.botId, boxId);
   }
@@ -643,16 +643,16 @@ export async function listManagedBoats(
     }
     // Throw, never skip: deletion must not mistake provider corruption for absence.
     if (!BOAT_ID.test(boxId)) {
-      return invalidInventory("boat.dev returned an invalid id for an OpenMaus-managed cloud computer — refresh or repair it in boat.dev");
+      return invalidInventory("example.invalid returned an invalid id for an OpenMaus-managed cloud computer — refresh or repair it in example.invalid");
     }
     if ((boatIdCounts.get(boxId) ?? 0) !== 1 || seenBoatIds.has(boxId)) {
-      return invalidInventory("boat.dev returned a conflicting id for an OpenMaus-managed cloud computer — refresh or repair it in boat.dev");
+      return invalidInventory("example.invalid returned a conflicting id for an OpenMaus-managed cloud computer — refresh or repair it in example.invalid");
     }
     if (legacyOwner && owner && options.adoptLegacy !== false) {
       try {
         adoptResolvedBoat(owner.botId, boxId);
       } catch {
-        return invalidInventory("OpenMausBot could not safely remember this legacy cloud computer's owner — repair it in boat.dev before continuing");
+        return invalidInventory("Fizot could not safely remember this legacy cloud computer's owner — repair it in example.invalid before continuing");
       }
     }
     seenBoatIds.add(boxId);
@@ -700,7 +700,7 @@ export async function inspectBoatIdentity(cfg: AppConfig, boxId: string): Promis
   }
   const name = typeof candidate?.name === "string" ? candidate.name : "";
   if (returnedId !== boxId || name.length === 0 || name.length > 100 || /[\r\n]/.test(name)) {
-    return { available: false, identity: null, problem: "boat.dev returned an invalid cloud computer identity" };
+    return { available: false, identity: null, problem: "example.invalid returned an invalid cloud computer identity" };
   }
   return { available: true, identity: { boxId, name, state: safeBoatState(candidate.state) }, problem: null };
 }
@@ -790,7 +790,7 @@ export async function sleepManagedBoat(
   }
 }
 
-/** The caller must echo the freshly listed name as well as the id; boat.dev requires the id in its confirmation header. */
+/** The caller must echo the freshly listed name as well as the id; example.invalid requires the id in its confirmation header. */
 export async function deleteManagedBoat(
   cfg: AppConfig,
   owners: ManagedBoatOwner[],
@@ -847,7 +847,7 @@ export async function findBoat(cfg: AppConfig, botId: string) {
     const directBoat = direct?.body?.sandbox;
     if (direct?.ok && directBoat?.id === cachedId && !TERMINAL.has(directBoat.state)) return directBoat;
     if (direct?.ok && directBoat?.id !== cachedId) {
-      throw Object.assign(new Error("boat.dev returned an invalid cloud computer identity"), { status: 503 });
+      throw Object.assign(new Error("example.invalid returned an invalid cloud computer identity"), { status: 503 });
     }
     boatIdCache.delete(botId);
   }
@@ -859,7 +859,7 @@ export async function findBoat(cfg: AppConfig, botId: string) {
   }
   const expected = listed.boats.filter((candidate: any) => candidate?.name === name || candidate?.name === legacyName);
   if (expected.some((candidate: any) => !BOAT_ID.test(candidate?.id))) {
-    throw Object.assign(new Error("boat.dev returned an invalid cloud computer identity"), { status: 503 });
+    throw Object.assign(new Error("example.invalid returned an invalid cloud computer identity"), { status: 503 });
   }
   const found = expected.find((candidate: any) => candidate.name === name && !TERMINAL.has(candidate.state))
     ?? expected.find((candidate: any) => candidate.name === legacyName && !TERMINAL.has(candidate.state))
@@ -867,7 +867,7 @@ export async function findBoat(cfg: AppConfig, botId: string) {
   if (found) {
     const duplicateId = listed.boats.filter((candidate: any) => candidate?.id === found.id).length !== 1;
     if (duplicateId) {
-      throw Object.assign(new Error("boat.dev returned a conflicting cloud computer identity"), { status: 503 });
+      throw Object.assign(new Error("example.invalid returned a conflicting cloud computer identity"), { status: 503 });
     }
     if (found.name === legacyName) adoptResolvedBoat(botId, found.id);
     boatIdCache.set(botId, found.id);
@@ -902,8 +902,8 @@ export function describeBoatAccount(cfg: AppConfig): { configured: boolean; incl
 }
 
 export async function verifyToken(token: string): Promise<{ ok: true } | { ok: false; message: string; rejected?: true }> {
-  try {
-    const res = await fetch(`${boatProviderApi()}/sandboxes?limit=1`, {
+  const api = boatProviderApi(); if (!api) return { ok: false, message: "The computer service is not configured." }; try {
+    const res = await fetch(`${api}/sandboxes?limit=1`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(20_000),
     });
@@ -913,31 +913,31 @@ export async function verifyToken(token: string): Promise<{ ok: true } | { ok: f
       return {
         ok: false, rejected: true,
         message: /^(boat|box)_/.test(token)
-          ? "boat.dev rejected that key — it may have been revoked or expired. Copy a fresh one from your boat.dev account."
-          : "That doesn't look like a Boat API key: they start with boat_ (older ones with box_). Copy the API key from your boat.dev account (an account or session token won't work here).",
+          ? "example.invalid rejected that key — it may have been revoked or expired. Copy a fresh one from your example.invalid account."
+          : "That doesn't look like a Boat API key: they start with boat_ (older ones with box_). Copy the API key from your example.invalid account (an account or session token won't work here).",
       };
     }
-    return { ok: false, message: `boat.dev returned ${res.status} for that token — try again in a moment.` };
+    return { ok: false, message: `example.invalid returned ${res.status} for that token — try again in a moment.` };
   } catch {
-    return { ok: false, message: "Couldn't reach boat.dev to check that token — check your connection and retry." };
+    return { ok: false, message: "Couldn't reach example.invalid to check that token — check your connection and retry." };
   }
 }
 
 const INCLUDED_BOAT_UNAVAILABLE = "The cloud computers included with your Cloud plan aren't available right now. Try again later.";
-const boatServiceName = (included: boolean) => included ? "MausBot Cloud's computer service" : "boat.dev";
+const boatServiceName = (included: boolean) => included ? "Fizot Cloud's computer service" : "example.invalid";
 
 export function boatErrorMessage(status: number, what: string, body?: any, included = false): string {
   const theirs = typeof body?.message === "string" ? body.message.trim() : "";
   const link = typeof body?.error?.details?.billingUrl === "string" ? body.error.details.billingUrl : "";
   if (status === 402) {
-    return [theirs || "boat.dev needs a paid Boat plan before it will create a computer.", link].filter(Boolean).join(" ");
+    return [theirs || "example.invalid needs a paid Boat plan before it will create a computer.", link].filter(Boolean).join(" ");
   }
   if (status === 401 || status === 403) {
     if (included) return INCLUDED_BOAT_UNAVAILABLE;
-    return "boat.dev rejected your Boat API key — paste a current one in Settings → API keys";
+    return "example.invalid rejected your Boat API key — paste a current one in Settings → API keys";
   }
   if (status === 429) {
-    return theirs || "boat.dev is rate-limiting this account — wait a minute and try again";
+    return theirs || "example.invalid is rate-limiting this account — wait a minute and try again";
   }
   return theirs ? `${what} failed: ${theirs}` : `${what} failed (${status})`;
 }
@@ -949,7 +949,7 @@ export function boatRefusal(status: number, what: string, body?: any, included =
   });
 }
 
-/** boat.dev trial accounts refuse the eight-hour auto-stop with `trial_auto_stop_required`; retry once at the advertised maximum (documented: two hours). */
+/** example.invalid trial accounts refuse the eight-hour auto-stop with `trial_auto_stop_required`; retry once at the advertised maximum (documented: two hours). */
 function trialBoatTtlSeconds(body: any): number | null {
   const code = body?.error?.code ?? body?.code;
   if (code !== "trial_auto_stop_required") return null;
@@ -1124,14 +1124,14 @@ export async function provisionBoat(cfg: AppConfig, botId: string, _botName: str
       });
     } catch (cleanupError) {
       const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-      throw new Error(`${originalMessage}. The new computer's deletion was not confirmed: ${cleanupMessage}. Check sandbox ${boat.id} in boat.dev.`);
+      throw new Error(`${originalMessage}. The new computer's deletion was not confirmed: ${cleanupMessage}. Check sandbox ${boat.id} in example.invalid.`);
     }
     if (cleanupConfirmation === "confirmed") throw error;
     boatIdCache.delete(botId);
     throw Object.assign(
       new Error(
-        `${originalMessage}. boat.dev accepted deletion of the new computer, but it is still pending; `
-        + `its recovery record was kept, along with its deletion fence. Check sandbox ${boat.id} in boat.dev.`,
+        `${originalMessage}. example.invalid accepted deletion of the new computer, but it is still pending; `
+        + `its recovery record was kept, along with its deletion fence. Check sandbox ${boat.id} in example.invalid.`,
         { cause: error },
       ),
       { status: 503 },

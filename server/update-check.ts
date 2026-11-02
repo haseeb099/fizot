@@ -1,8 +1,13 @@
 // A self-hosted server cannot replace itself, so this only says whether a newer release exists and how this install is updated.
+import { fizotEndpoint } from "../shared/fizot-endpoints.ts";
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
 
-export const LATEST_RELEASE_URL = "https://api.github.com/repos/milind-soni/OpenMausBot/releases/latest";
+export function releaseLookupUrl(): string {
+  return fizotEndpoint("updateReleaseUrl");
+}
+
+export const LATEST_RELEASE_URL = releaseLookupUrl();
 const CACHE_MS = 60 * 60_000;
 
 /** "managed" is a hosted or Cloud server that is updated for its owner. */
@@ -75,6 +80,7 @@ export function createUpdateChecker(options: {
   install: InstallKind;
   fetch?: typeof fetch;
   now?: () => number;
+  lookupUrl?: string;
 }) {
   const fetchRelease = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
@@ -89,10 +95,12 @@ export function createUpdateChecker(options: {
 
   return async function check(): Promise<UpdateCheck> {
     if (options.install === "desktop" || options.install === "managed") return base();
+    const lookup = options.lookupUrl ?? releaseLookupUrl();
+    if (!lookup) return base();
     if (cached && now() - cached.at < CACHE_MS) return cached.result;
     inflight ??= (async () => {
       try {
-        const response = await fetchRelease(LATEST_RELEASE_URL, {
+        const response = await fetchRelease(lookup, {
           headers: { accept: "application/vnd.github+json", "user-agent": "openmausbot-update-check" },
           signal: AbortSignal.timeout(8_000),
         });

@@ -34,7 +34,7 @@ beforeEach(() => {
 
 describe("why a key save failed", () => {
   it("calls it rejected only when the provider refused the key", () => {
-    expect(keySaveFailure(new ApiError("boat.dev rejected that key", 400, { error: "boat.dev rejected that key", code: "key_rejected" }))).toBe("rejected");
+    expect(keySaveFailure(new ApiError("example.invalid rejected that key", 400, { error: "example.invalid rejected that key", code: "key_rejected" }))).toBe("rejected");
     expect(keySaveFailure(new Error("Error invoking remote method 'credential:set': KeyRejected: That doesn't look like a Boat API key"))).toBe("rejected");
   });
 

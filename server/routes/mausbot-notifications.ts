@@ -1,4 +1,4 @@
-// The internal calls behind MausBot's list_unread_notifications and mark_notifications_read tools. Runs inside index.ts's
+// The internal calls behind Fizot's list_unread_notifications and mark_notifications_read tools. Runs inside index.ts's
 // /api/internal/ block after the capability bearer is checked; the bot is the capability's. The only write is "read".
 import type { ServerResponse } from "node:http";
 
@@ -40,6 +40,6 @@ export function createMausBotNotificationRoutes(deps: LiveNotificationsDeps | No
       result = markRead(host, ctx.botId, body && typeof body === "object" ? (body as Record<string, unknown>).ids : undefined);
     }
     if (result.ok) return void ctx.json(ctx.res, 200, { text: result.text });
-    return void ctx.json(ctx.res, result.error.startsWith("Only MausBot") ? 403 : 400, { error: result.error });
+    return void ctx.json(ctx.res, result.error.startsWith("Only Fizot") ? 403 : 400, { error: result.error });
   };
 }

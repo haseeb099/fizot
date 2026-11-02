@@ -1,4 +1,4 @@
-// Published pages' access on the desktop: every signed-in MausBot account may publish (a free one has its free pages),
+// Published pages' access on the desktop: every signed-in Fizot account may publish (a free one has its free pages),
 // so as soon as this computer is signed in, its sign-in's own pages token is fetched from the Admin once and handed to
 // the local server over the private parent port (server/pages/access.ts). Kept in memory only; a sign-out clears it.
 import { createIncludedXSync } from "./included-x.mjs";

@@ -52,7 +52,7 @@ export interface ThreadRouteDeps {
   messageFileRootsForThread(senderId: string, threadId: string): string[];
   viewerFor(auth: RequestAuth): Viewer;
   visibleTo(viewer: Viewer): VisibleSet;
-  /** A Team Cloud: gives a member their own MausBot once, before their first list of bots. */
+  /** A Team Cloud: gives a member their own Fizot once, before their first list of bots. */
   memberDefaultBot?(email: string): unknown;
 }
 

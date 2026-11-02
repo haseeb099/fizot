@@ -76,7 +76,7 @@ export const VERB_HELP: Record<string, string> = {
   Get a token for a workspace you reach over the network, saved to FILE (only you can read it).
   On this computer's own server the code is made for you; elsewhere, get one from Settings → Phone.
   Then use it: --url URL --token-file FILE (or OPENMAUSBOT_URL and OPENMAUSBOT_TOKEN).`,
-  mcp: "openmausbot mcp\n  Serve the OpenMausBot MCP tools on stdin and stdout, for an agent (docs/mcp-server.md).",
+  mcp: "openmausbot mcp\n  Serve the Fizot MCP tools on stdin and stdout, for an agent (docs/mcp-server.md).",
 };
 
 export interface HeadlessOptions {

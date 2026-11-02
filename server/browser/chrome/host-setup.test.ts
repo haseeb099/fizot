@@ -11,8 +11,8 @@ afterAll(async () => { for (const folder of folders) await removeTempDir(folder)
 
 describe("host setup", () => {
   it("pins the AppArmor exemption to one root-owned executable", () => {
-    const profile = appArmorProfile("/opt/OpenMausBot/resources/chrome/chrome");
-    expect(profile).toContain("profile openmausbot-chrome /opt/OpenMausBot/resources/chrome/chrome flags=(unconfined)");
+    const profile = appArmorProfile("/opt/Fizot/resources/chrome/chrome");
+    expect(profile).toContain("profile openmausbot-chrome /opt/Fizot/resources/chrome/chrome flags=(unconfined)");
     expect(profile).toContain("userns,");
     for (const path of ["/opt/**/chrome", "/home/a/chrome", "relative/chrome", "/opt/a b/chrome"]) expect(() => appArmorProfile(path)).toThrow();
   });

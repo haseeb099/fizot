@@ -1,0 +1,27 @@
+{
+  "productName": "Fizot",
+  "botDefaultName": "Fizot",
+  "windowTitle": "Fizot",
+  "installerName": "Fizot",
+  "uiCopy": "Fizot",
+  "mascotLabel": "Fizot",
+  "replace": [
+    ["OpenMausBot", "Fizot"],
+    ["Open MausBot", "Fizot"],
+    ["Open Maus", "Fizot"],
+    ["MausBot", "Fizot"],
+    ["Supamaus", "Fizot"]
+  ],
+  "mascotLabels": {
+    "Cursor": "Fizot",
+    "Blob": "Fizot",
+    "Circle": "Fizot",
+    "Squircle": "Fizot",
+    "Capsule": "Fizot",
+    "Drop": "Fizot",
+    "Shield": "Fizot",
+    "Hexagon": "Fizot",
+    "Diamond": "Fizot",
+    "Star": "Fizot"
+  }
+}

@@ -1,4 +1,4 @@
-# Run OpenMausBot from scripts and CI
+# Run Fizot from scripts and CI
 
 The `openmausbot` command can drive a running workspace without a screen: set
 up a team from a file, give a bot a job, wait until it and every teammate it
@@ -82,7 +82,7 @@ one of its conversations.
 | `engine set KIND`, `engine list` | Gives the workspace an engine key without a screen (below). |
 | `connect [URL]` | Gets a token for a workspace elsewhere. |
 | `new-bot`, `new-channel`, `set-model`, `edit` | Make a bot or a room, change a bot's model, rewrite an earlier message. |
-| `mcp` | The OpenMausBot MCP server on stdin and stdout ([docs/mcp-server.md](mcp-server.md)). |
+| `mcp` | The Fizot MCP server on stdin and stdout ([docs/mcp-server.md](mcp-server.md)). |
 
 The message for `send` and `run` can be the next word, `--text TEXT`,
 `--message-file FILE`, or `-` to read it from stdin.

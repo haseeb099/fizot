@@ -37,7 +37,7 @@ const freeOpenCode: InstanceInfo = {
   snapshot: { state: "available", authenticated: true, freeFallback: true }, models: { default: "opencode/big-pickle", options: [] }, aiTest: "passed",
 };
 const signIn = (): InstanceInfo => ({ ...claude(false), snapshot: { state: "available", authenticated: false }, authentication: { method: "paste-code" } } as InstanceInfo);
-const maus = { id: "maus", threadId: "t", name: "MausBot", title: "", description: "", notifications: true, color: "chrome", unread: false,
+const maus = { id: "maus", threadId: "t", name: "Fizot", title: "", description: "", notifications: true, color: "chrome", unread: false,
   modelSelection: { instanceId: "claude", model: "m" }, messages: [], defaultBot: {}, chiefOfStaff: true };
 
 let host: HTMLDivElement, root: Root;
@@ -100,7 +100,7 @@ afterEach(async () => {
 describe("a new install's first run", () => {
   it("is two screens with an AI already working: Next, then Create, and it lands in the Chief's chat", async () => {
     await show();
-    expect(host.querySelector("h1")?.textContent).toBe("Meet MausBot");
+    expect(host.querySelector("h1")?.textContent).toBe("Meet Fizot");
     expect(host.querySelector("[data-demo-composer]")?.textContent, "reduced motion shows the whole sentence").toContain("Hand off any task to your team of bots");
     for (const gone of ["Step 1", "Back", "Skip", "Your name", "Connect an AI", "Set up later"]) expect(text()).not.toContain(gone);
     expect(button("Next")!.disabled).toBe(false);
@@ -148,7 +148,7 @@ describe("the Chief step", () => {
     expect(chiefStep).toBe(false);
   };
 
-  it("is skipped once MausBot has met the person", async () => {
+  it("is skipped once Fizot has met the person", async () => {
     f.state = { ...f.state, bots: [{ ...maus, welcomed: true }] };
     await finishesAtNext();
   });
@@ -158,7 +158,7 @@ describe("the Chief step", () => {
     await finishesAtNext();
   });
 
-  it("is skipped where there is no MausBot", async () => {
+  it("is skipped where there is no Fizot", async () => {
     f.state = { ...f.state, bots: [] };
     await finishesAtNext();
   });
@@ -199,7 +199,7 @@ describe("with no AI working yet", () => {
   it("keeps the screen's shape: the pill signs in, and the line under it offers other ways or later", async () => {
     f.state = { ...f.state, instances: [signIn()] };
     await show();
-    expect(host.querySelector("h1")?.textContent).toBe("Meet MausBot");
+    expect(host.querySelector("h1")?.textContent).toBe("Meet Fizot");
     expect(button("Next")).toBeUndefined();
     expect(button("Sign in with Claude")).toBeDefined();
     expect(button("Other ways to connect")).toBeDefined();
@@ -220,7 +220,7 @@ describe("with no AI working yet", () => {
     expect(dialog.querySelector('[data-engine-setup="claude"]')).not.toBeNull();
     await act(async () => { dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     expect(host.querySelector("[data-connect-ai]")).toBeNull();
-    expect(text(), "Escape closed the dialog only").toContain("Meet MausBot");
+    expect(text(), "Escape closed the dialog only").toContain("Meet Fizot");
   });
 
   it("says why an AI didn't answer its test, under the pill and in the dialog with Check again", async () => {
@@ -261,7 +261,7 @@ describe("with no AI working yet", () => {
     await show();
     await key("Enter");
     expect(host.querySelector("[data-connect-ai]"), "Enter pressed Connect Claude").not.toBeNull();
-    expect(text()).toContain("Meet MausBot");
+    expect(text()).toContain("Meet Fizot");
     await act(async () => { host.querySelector("[data-connect-ai]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     await key("Escape");
     await tick(100);
@@ -272,7 +272,7 @@ describe("with no AI working yet", () => {
 describe("other first runs", () => {
   it("gives a hosted place's admin the first screen only, then the chat", async () => {
     await show({ hosted: true });
-    expect(text()).toContain("This is your team's shared MausBot");
+    expect(text()).toContain("This is your team's shared Fizot");
     await press("Next");
     expect(text()).not.toContain("Introducing your Chief of Staff");
     expect(f.onDone).toHaveBeenCalledExactlyOnceWith(null);

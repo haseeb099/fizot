@@ -1,4 +1,4 @@
-// Who this server publishes pages as: the MausBot account it is signed in to. One mechanism on every surface: ask the
+// Who this server publishes pages as: the Fizot account it is signed in to. One mechanism on every surface: ask the
 // Admin for a short-lived upload token, then send the page to the pages Worker with it. Only the credential differs:
 //   a Cloud home signs its request with the bootstrap secret it already shares with the Admin;
 //   a desktop's main process fetches its sign-in's own pages token and hands it over on the private parent port.
@@ -68,7 +68,7 @@ export function pagesNotOffered(home: unknown): boolean {
   return !home && !desktopPages && desktopPagesNotOffered;
 }
 
-/** A Cloud home's own credential, else a signed-in desktop's; null when this server is signed in to no MausBot account. */
+/** A Cloud home's own credential, else a signed-in desktop's; null when this server is signed in to no Fizot account. */
 export function pagesAccess(home: { adminOrigin: string; machineId: string; bootstrapSecret: string } | null): PagesAccess | null {
   if (home) return { kind: "home", url: `${home.adminOrigin}${PAGES_TOKEN_PATH}`, machineId: home.machineId, secret: home.bootstrapSecret };
   return desktopPages ? { kind: "desktop", ...desktopPages } : null;

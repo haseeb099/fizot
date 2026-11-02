@@ -60,7 +60,7 @@ const RECONNECTING_MS = 60_000;
 const RECONNECT_WAIT_MS = 15_000;
 const OFFLINE = "This shared computer is offline. Keep its desktop app open; do not substitute files on the server.";
 const RESTARTING = "This server is restarting. Lending resumes by itself once it is back.";
-const lentButOffline = (name: string, seen: number, device: "PC" | "Mac" | "computer" = "computer") => `${name} is lent but has been offline for ${Math.max(1, Math.round((Date.now() - seen) / 60_000))} min: OpenMausBot on it is closed, the ${device} is asleep or locked, or its desktop app is signed out of MausBot Cloud. Tell the person in one sentence to open OpenMausBot on that ${device}; do not substitute files on the server.`;
+const lentButOffline = (name: string, seen: number, device: "PC" | "Mac" | "computer" = "computer") => `${name} is lent but has been offline for ${Math.max(1, Math.round((Date.now() - seen) / 60_000))} min: Fizot on it is closed, the ${device} is asleep or locked, or its desktop app is signed out of Fizot Cloud. Tell the person in one sentence to open Fizot on that ${device}; do not substitute files on the server.`;
 
 /** Aborts when the client of a long poll goes away before it is answered. */
 export function responseGone(res: { once(event: "close", listener: () => void): unknown; readonly writableEnded: boolean }): AbortSignal {
@@ -308,7 +308,7 @@ export class SharedComputers {
     if (!known) return OFFLINE;
     const device = deviceWord(known.platform);
     return known.stoppedAt === null
-      ? `${known.name} is offline: OpenMausBot on that ${device} is closed, or the ${device} is asleep or off. Ask them to open it; it reconnects by itself. Do not substitute files on the server.`
+      ? `${known.name} is offline: Fizot on that ${device} is closed, or the ${device} is asleep or off. Ask them to open it; it reconnects by itself. Do not substitute files on the server.`
       : `${known.name} is no longer lent: lending was turned off on that ${device}. Do not substitute files on the server.`;
   }
   close() {

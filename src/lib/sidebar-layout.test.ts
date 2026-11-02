@@ -291,7 +291,7 @@ describe("the primary tile", () => {
     expect(tiled.unsectionedBots.map((candidate) => candidate.id)).toEqual(["bea"]);
   });
 
-  it("falls back to the person's MausBot, and leaves a department's Chief in its department", () => {
+  it("falls back to the person's Fizot, and leaves a department's Chief in its department", () => {
     const parts = partitionSidebarBots([bot("lead", { chiefOfStaff: true, section: "Work" }), bot("mausbot"), bot("bea")]);
     const tiled = withPrimaryTile(parts, "mausbot");
     expect(tiled.primary?.id).toBe("mausbot");

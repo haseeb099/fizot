@@ -82,7 +82,7 @@ describe("Settings → General: Product updates by email", () => {
     expect(toggle()!.getAttribute("aria-checked")).toBe("false");
     await click(toggle()!);
     expect(dialog()).not.toBeNull();
-    expect(dialog()!.textContent).toContain("Get MausBot updates?");
+    expect(dialog()!.textContent).toContain("Get Fizot updates?");
     expect(document.querySelector<HTMLInputElement>('input[type="email"]')!.value).toBe("");
     expect(document.querySelector('input[type="checkbox"]')).toBeNull();
     await click(button("No thanks"));

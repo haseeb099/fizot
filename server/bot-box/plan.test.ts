@@ -62,7 +62,7 @@ linuxBox("the box plan", () => {
     expect(text).not.toContain("--new-session");
   });
 
-  it("puts the engines OpenMausBot installed back whole and read-only, whatever else the turn may write", () => {
+  it("puts the engines Fizot installed back whole and read-only, whatever else the turn may write", () => {
     // npm's bin entries are relative links into the prefix: `bin/opencode -> ../lib/node_modules/opencode-ai/bin/opencode.exe`.
     const prefix = join(dataDir, "tools", "npm");
     const engineFiles = [`${prefix}/bin/opencode`, `${prefix}/lib/node_modules/opencode-ai/bin/opencode.exe`, `${prefix}/bin/codex`,

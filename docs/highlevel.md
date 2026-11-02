@@ -45,7 +45,7 @@ OMB server (desktop or Cloud home)         accounts.openmausbot.com (relay)     
 ### "Please reach out to the agency admin for assistance with installation"
 
 HighLevel's Marketplace install page shows this when the agency that owns the sub-account (often a white-label agency,
-e.g. Growably) does not let sub-account users install apps. It comes from HighLevel, not OpenMausBot, and Connect
+e.g. Growably) does not let sub-account users install apps. It comes from HighLevel, not Fizot, and Connect
 cannot get past it. Either ask the agency admin to install the app for that sub-account (or to allow sub-account
 installs), or use **Use a Private Integration token instead** on the card: a sub-account admin can create one under Settings →
 Private Integrations when the agency allows it.

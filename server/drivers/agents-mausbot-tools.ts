@@ -1,6 +1,6 @@
-// MausBot's notification tools: read the unread notifications, then mark finished work read. The catalog shows them
-// only to a MausBot; the internal route (server/routes/mausbot-notifications.ts) refuses every other bot regardless.
-// The guidance lives in their results, so the descriptions that ride every MausBot turn stay short.
+// Fizot's notification tools: read the unread notifications, then mark finished work read. The catalog shows them
+// only to a Fizot; the internal route (server/routes/mausbot-notifications.ts) refuses every other bot regardless.
+// The guidance lives in their results, so the descriptions that ride every Fizot turn stay short.
 import type { ToolCallContext, ToolCallResult } from "./agents-call.ts";
 import type { Json } from "./agents-client.ts";
 import { agentToolAnnotations } from "../agent-tool-policy.ts";

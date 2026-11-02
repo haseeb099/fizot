@@ -15,7 +15,7 @@ export interface PublishedPageCard {
   plan?: string;
 }
 
-/** The MausBot pages Worker's page ids: one DNS label of lowercase letters and digits. */
+/** The Fizot pages Worker's page ids: one DNS label of lowercase letters and digits. */
 export const PAGE_ID = /^[a-z0-9]{20,63}$/;
 
 /** What a page's files may be, as the pages Worker serves them (openmaus-cloud pages-worker/src/files.ts refuses the rest). */

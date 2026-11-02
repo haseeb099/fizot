@@ -1,6 +1,6 @@
 // The phone integration's per-turn pieces: the mount, the prompt part and the internal MCP handler (owner check, per-bot
 // verdict, decision rows, the phone job, write activity). A send waits on the person's Send tap on the phone, never on a
-// card of OpenMausBot's own.
+// card of Fizot's own.
 import { isOutboundTool } from "../../shared/outbound.ts";
 import { PHONE_MCP_SERVER, phoneToolCapability, type PhoneCapability, type PhoneToolName } from "../../shared/phone-apps.ts";
 import { appendDecision } from "../decision-log.ts";
@@ -135,7 +135,7 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
           };
           const outcome = await jobs.request(phone.key, name, args, {
             active, timeoutMs: isOutboundTool(name) ? PHONE_SEND_TIMEOUT_MS : PHONE_JOB_TIMEOUT_MS,
-            offlineText: `${phone.name} is offline. Open the MausBot app on it.`, online: () => registry.online(phone.key),
+            offlineText: `${phone.name} is offline. Open the Fizot app on it.`, online: () => registry.online(phone.key),
           });
           if (outcome.ok) registry.used(phone.key);
           return outcome;

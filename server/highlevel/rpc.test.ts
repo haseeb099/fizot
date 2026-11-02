@@ -84,7 +84,7 @@ describe("per-bot access", () => {
     expect(verdict.ok).toBe(false);
     if (verdict.ok) throw new Error("unreachable");
     expect(verdict.text).toBe(connectorScopeRefusalText({ kind: "tools", invoked: "HIGHLEVEL_ADD_NOTE", names: ["HIGHLEVEL_ADD_NOTE"] }, "write", "Reader", "HighLevel", "Add note"));
-    expect(verdict.text).toBe("OpenMausBot did not run this: HighLevel is read-only for Reader, and Add note would write to it. Ask the user before trying again.");
+    expect(verdict.text).toBe("Fizot did not run this: HighLevel is read-only for Reader, and Add note would write to it. Ask the user before trying again.");
     expect(verdict.rows).toEqual([{ tool: "HIGHLEVEL_ADD_NOTE", decision: "auto-denied", rule: "scope:highlevel:write" }]);
     expect(highlevelAccess(readOnly, "HIGHLEVEL_GET_CONTACT")).toMatchObject({ ok: true, rows: [{ decision: "auto-approved", rule: "scope:highlevel" }] });
   });
@@ -93,7 +93,7 @@ describe("per-bot access", () => {
     const verdict = highlevelAccess(contactsOnly, "HIGHLEVEL_LIST_PIPELINES");
     expect(verdict.ok).toBe(false);
     if (verdict.ok) throw new Error("unreachable");
-    expect(verdict.text).toBe('"HIGHLEVEL_LIST_PIPELINES" is not granted to this bot. This call was not performed. Ask the person to grant it in OpenMausBot if they want it run.');
+    expect(verdict.text).toBe('"HIGHLEVEL_LIST_PIPELINES" is not granted to this bot. This call was not performed. Ask the person to grant it in Fizot if they want it run.');
     expect(verdict.text).not.toContain("HIGHLEVEL_GET_CONTACT");
     expect(verdict.rows[0]).toMatchObject({ decision: "auto-denied", rule: "connectorTools.highlevel", summary: "tool is not in this service's grant" });
     expect(highlevelAccess(contactsOnly, "HIGHLEVEL_ADD_NOTE")).toMatchObject({ ok: true, rows: [{ rule: "connectorTools.highlevel" }] });
@@ -170,7 +170,7 @@ describe("highlevelRpc", () => {
     const { deps, writes } = harness(readOnly);
     const refused = await highlevelRpc(call("HIGHLEVEL_ADD_TAGS", { contactId: "contact_1", tags: ["vip"] }), deps) as { isError?: boolean; content: Array<{ text: string }> };
     expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toBe("OpenMausBot did not run this: HighLevel is read-only for Reader, and Add tags would write to it. Ask the user before trying again.");
+    expect(refused.content[0].text).toBe("Fizot did not run this: HighLevel is read-only for Reader, and Add tags would write to it. Ask the user before trying again.");
     expect(hl.calls).toEqual([]);
     expect(writes).toEqual([]);
     const allowed = await highlevelRpc(call("HIGHLEVEL_LIST_NOTES", { contactId: "contact_1" }), deps) as { isError?: boolean };

@@ -123,7 +123,7 @@ export function createTeamOwnerRoutes(deps: TeamOwnerRouteDeps): RouteHandler {
     if (!parsed.success) return json(res, 400, { error: "Send the email of the person it reports to." });
     const bot = deps.store.bot(one![1]!);
     if (!bot || !deps.sees(auth, bot.id)) return json(res, 404, { error: "no such bot" });
-    if (bot.defaultBot?.person) return json(res, 409, { error: `${bot.name} is ${nameOf(ownerEmail(bot.defaultBot.person))}'s own MausBot: it always reports to them.` });
+    if (bot.defaultBot?.person) return json(res, 409, { error: `${bot.name} is ${nameOf(ownerEmail(bot.defaultBot.person))}'s own Fizot: it always reports to them.` });
     if (!admin && (me === null || botOwner(bot) !== me)) {
       return json(res, 403, { error: `Only ${team.name}'s admins, or the person ${bot.name} reports to, can change who it reports to.` });
     }

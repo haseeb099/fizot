@@ -23,7 +23,7 @@ describe("Boat credential", () => {
   });
 
   it("uses the person's own key, sent only to Boat, whenever there is one", () => {
-    expect(boatCredential("box_own", cloud)).toEqual({ token: "box_own", api: "https://boat.dev/api/v1", included: false });
+    expect(boatCredential("box_own", cloud)).toEqual({ token: "box_own", api: "", included: false });
     // OMB_BOAT_API points own keys at a stub for dev and tests.
     expect(boatCredential("box_own", { ...cloud, OMB_BOAT_API: "http://127.0.0.1:9/api/v1" }))
       .toEqual({ token: "box_own", api: "http://127.0.0.1:9/api/v1", included: false });

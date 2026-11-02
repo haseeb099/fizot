@@ -225,7 +225,7 @@ export interface HomeWorld {
   home: ReturnType<typeof createHomeWindow>;
   /** A launch of the app: the startup screen, then show() as main's launch does. */
   launch(): Promise<void>;
-  /** The MausBot Cloud sign-in main reads: its state, and the power word of a Cloud that sleeps. */
+  /** The Fizot Cloud sign-in main reads: its state, and the power word of a Cloud that sleeps. */
   account: { state: Record<string, any>; power: { state: "awake" | "asleep" | "waking"; since: number; sleeps: true } | null; wakeMs: number; wakes: number; signIns: string[] };
   /** Down: every request on the way to My Cloud fails, the window's and main's alike; `teamDown`: the team's Cloud only;
    * `nameMissing`: My Cloud's name isn't found (a resolver kept the answer it got while My Cloud was set up). */
@@ -242,7 +242,7 @@ export interface HomeWorld {
   environments(): { environments: any[]; activeId: string };
   /** The switcher's entries as main's native menu would list them (environments.cjs). */
   menu(): Array<{ label?: string; sublabel?: string; checked?: boolean }>;
-  /** The MausBot Cloud sign-in changed: main's own two steps (the places follow the session, then the window). */
+  /** The Fizot Cloud sign-in changed: main's own two steps (the places follow the session, then the window). */
   sync(): Promise<void>;
   /** Each request My Cloud's edge passed on, in order. */
   cloudRequests: Array<{ path: string; at: number }>;
@@ -362,7 +362,7 @@ export async function launchHomeWorld(fx: CloudSendFixture, { chrome, ports, ver
       const listed = req.method === "POST" && req.headers.authorization === "Bearer omc_fixture" && account.state.status === "connected" && (account.state.teams ?? []).some((team: any) => team.id === id) && !admin.removed.has(id);
       if (!listed) return reply(404, { error: "not_found" });
       admin.teamPairings.push(id);
-      const grant = await fx.grant("OpenMausBot app (Team Cloud)");
+      const grant = await fx.grant("Fizot app (Team Cloud)");
       return reply(200, { cloudContractVersion: 1, origin: teamOrigin, code: grant.code, pairingUrl: `${teamOrigin}/pair#code=${grant.code}`, expiresAt: grant.expiresAt, credential: "omb_pair_fixture" });
     }
     if (!sync && !asked) { res.writeHead(200, { "content-type": "text/html" }); res.end("<!doctype html><title>Another server</title><p>Another server</p>"); return; }
@@ -447,7 +447,7 @@ export async function launchHomeWorld(fx: CloudSendFixture, { chrome, ports, ver
   });
   const pairHome = async () => {
     if (account.state.status !== "connected" || network.down) throw new Error("My Cloud is not ready to connect yet.");
-    const grant = await fx.grant("OpenMausBot app (Cloud)");
+    const grant = await fx.grant("Fizot app (Cloud)");
     return { ...grant, origin: cloudOrigin };
   };
   /** The real client's `pairTeam` shape against the fake Admin's route: the Admin's answer, read as the app reads it. */

@@ -43,7 +43,7 @@ export function phoneAccess(bot: PhoneBot, allowed: Readonly<Partial<Record<Phon
   if (!allowed[cap]) {
     return {
       ok: false,
-      text: `${bot.name} can't use ${Cap} on this phone: it is not allowed in the MausBot app on the phone.`,
+      text: `${bot.name} can't use ${Cap} on this phone: it is not allowed in the Fizot app on the phone.`,
       rows: [{ tool: name, summary: `${Cap} is not allowed on the phone`, decision: "auto-denied", rule: `phone:${cap}:not-allowed-on-phone` }],
     };
   }

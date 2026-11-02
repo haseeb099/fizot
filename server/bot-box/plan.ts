@@ -10,7 +10,7 @@
 //     sign-ins bound into it, so no other audience's transcripts are there;
 //   - put back inside that empty folder: this turn's working folder, the bot's own folder (workspaces/<bot>) and what the
 //     caller names (the turn's permission socket, a read-only file the command line points at); and, read-only, the
-//     bot's own SOUL.md (bots/<bot>/SOUL.md, which it may read but never write) and the engines OpenMausBot installed
+//     bot's own SOUL.md (bots/<bot>/SOUL.md, which it may read but never write) and the engines Fizot installed
 //     there, whole, since npm's bin links point into the prefix by relative paths;
 //   - a private /proc (its own PID namespace: other turns' processes do not exist for it), /dev, /tmp and /run;
 //   - a network namespace with loopback only. Two loopback ports inside are bridged to unix sockets bound in from outside:
@@ -35,7 +35,7 @@ export interface BoxSetup {
   home: string;
   /** Folders of code the box may read: the server's own files, the bots' browser. */
   codeRoots: readonly string[];
-  /** Folders of engine code OpenMausBot installed in the data folder, read-only at their own paths; absent ones are skipped. */
+  /** Folders of engine code Fizot installed in the data folder, read-only at their own paths; absent ones are skipped. */
   engineRoots: readonly string[];
   /** Host unix sockets bridged to loopback ports inside the box, when the box has its own network. */
   bridges: readonly BoxBridge[];

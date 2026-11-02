@@ -1,22 +1,14 @@
 appId: com.openmausbot.app
-productName: OpenMausBot
+productName: Fizot
 artifactName: OpenMausBot-${version}-${arch}.${ext}
 
 protocols:
-  - name: OpenMausBot package install
+  - name: Fizot package install
     schemes: [openmausbot]
 
-# In-app auto-update reads latest-mac.yml + the .zip (macOS) or latest.yml +
-# the NSIS .exe (Windows) from the PUBLIC releases in this source repo.
-# Public → no token on users' machines. Baked into
-# app-update.yml; both metadata files are emitted here even with
-# --publish never, and must be uploaded to the GitHub release alongside the
-# artifacts — a release missing latest.yml leaves every Windows install
-# stranded on its installed version.
-publish:
-  - provider: github
-    owner: milind-soni
-    repo: OpenMausBot
+# Desktop auto-update is off. A publish target would bake an upstream
+# repository into app-update.yml, and this fork has no update feed yet.
+publish: null
 
 directories:
   buildResources: build
@@ -25,6 +17,10 @@ directories:
 # electron-builder makes copied directories group-writable by default. The
 # Linux CUA trust boundary requires root-owned package ancestors to be 0755.
 afterPack: ./scripts/after-pack.mjs
+# app-builder-lib 26.15.3 writes resources/package-type only in FpmTarget's
+# publish-config branch, which would also write an update URL. This hook
+# stamps the deb marker after the AppImage has already been packed.
+afterAllArtifactBuild: ./scripts/deb-package-type.mjs
 
 # The app is three self-contained pieces, none needing node_modules at
 # runtime: the Electron main/preload (plain .mjs/.cjs), the built UI
@@ -131,10 +127,10 @@ mac:
     - from: dist-native/duckdb/darwin-${arch}/node_modules
       to: duckdb/node_modules
   extendInfo:
-    NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
-    NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
-    NSAccessibilityUsageDescription: OpenMausBot uses Accessibility when you let a bot control this Mac.
-    NSScreenCaptureUsageDescription: OpenMausBot uses Screen Recording so bots can see this Mac before acting.
+    NSMicrophoneUsageDescription: Fizot uses the microphone for voice dictation into the composer.
+    NSSpeechRecognitionUsageDescription: Fizot transcribes your voice on-device to type messages for you.
+    NSAccessibilityUsageDescription: Fizot uses Accessibility when you let a bot control this Mac.
+    NSScreenCaptureUsageDescription: Fizot uses Screen Recording so bots can see this Mac before acting.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
@@ -191,7 +187,7 @@ win:
 nsis:
   oneClick: true
   perMachine: false
-  shortcutName: OpenMausBot
+  shortcutName: Fizot
   # Versioned, like the .dmg. The README's /latest/download/ button needs a
   # STABLE filename, so ship a second copy named OpenMausBot-setup.exe on the
   # release — the same trick as OpenMausBot.dmg beside OpenMausBot-${version}.dmg.
@@ -211,7 +207,7 @@ linux:
   synopsis: Your own team of AI bots, in a chat app
   description: A local-first chat app for running a team of AI agents.
   maintainer: Milind Soni <46266943+milind-soni@users.noreply.github.com>
-  vendor: OpenMausBot
+  vendor: Fizot
   syncDesktopName: true
   # The reviewed x64 CLI runtime is staged before packaging and remains
   # outside ASAR so executable modes and adjacent sidecars are preserved.
@@ -228,7 +224,7 @@ linux:
       to: openmausbot-browser.apparmor
   desktop:
     entry:
-      Name: OpenMausBot
+      Name: Fizot
       Comment: Your own team of AI bots, in a chat app
       Keywords: AI;Agents;Chat;Productivity;
 

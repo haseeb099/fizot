@@ -17,7 +17,7 @@ describe("BoxRunner.wrap", () => {
 
   // An engine installed in the app's npm prefix: the absolute path the driver resolved, or the bare name looked up on the
   // PATH it was handed (the prefix's bin first), both read through the bin link's relative target.
-  it.skipIf(process.platform === "win32")("an engine OpenMausBot installed runs inside: its path, the bin folder on PATH and the package the link points at are there, read-only", () => {
+  it.skipIf(process.platform === "win32")("an engine Fizot installed runs inside: its path, the bin folder on PATH and the package the link points at are there, read-only", () => {
     const runner = new BoxRunner({ bwrap: "/usr/bin/bwrap", bridge, setup, denyEnv: new Set() });
     const bin = join(npmEnginesPrefix(setup.dataDir), "bin");
     const target = join(bin, "..", "lib", "node_modules", "opencode-ai", "bin", "opencode.exe");
@@ -230,7 +230,7 @@ describe("spawnCli goes through the box", () => {
     expect(boxed.argv).toContain("--unshare-net");
     expect(boxed.argv).toContain("/run/omb/egress.sock");
     const engines = npmEnginesPrefix(join(dir, "data"));
-    expect(boxed.argv, "the engines OpenMausBot installed, read-only").toContain(`--ro-bind-try\n${engines}\n${engines}\n`);
+    expect(boxed.argv, "the engines Fizot installed, read-only").toContain(`--ro-bind-try\n${engines}\n${engines}\n`);
     expect((await run("openmausbot")).boxed).toBe(false);
     expect((await run("bot", false)).boxed).toBe(false);
     expect(botBox.report().boxed).toBe(1);

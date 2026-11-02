@@ -6,7 +6,7 @@ import { useAdvancedMode } from "@/lib/interface-mode";
 import { Switch } from "./SettingsPrimitives";
 
 /**
- * Settings → MausBot Cloud, in Advanced mode only, for someone with a Cloud of their own the move applies to: "Keep this
+ * Settings → Fizot Cloud, in Advanced mode only, for someone with a Cloud of their own the move applies to: "Keep this
  * computer's bots on this computer". Turned on once this computer's bots live on My Cloud, it asks first, since they come
  * back here; while they are on their way it can't be turned back.
  */

@@ -144,7 +144,7 @@ result and scheduled/manual trigger must agree with the saved server record.
 
 ## Run on startup
 
-A repeating routine's **Advanced** section offers **Also run when OpenMausBot
+A repeating routine's **Advanced** section offers **Also run when Fizot
 starts**. In the isolated renderer, create a daily routine with it ticked, then
 reopen the editor: the box stays ticked. A one-time routine does not offer it.
 Startup needs a restart on the same data, which this launcher does not do;

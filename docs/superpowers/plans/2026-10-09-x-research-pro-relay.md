@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans. Each task is test-first (superpowers:test-driven-development). Omkar asked for one pass; this plan names files, interfaces and tests rather than listing full code.
 
-**Goal:** X research becomes an included service of paid OpenMausBot Cloud plans: an Admin relay with per-tier monthly allowances, tokens for Cloud homes and signed-in desktops, and no bring-your-own token.
+**Goal:** X research becomes an included service of paid Fizot Cloud plans: an Admin relay with per-tier monthly allowances, tokens for Cloud homes and signed-in desktops, and no bring-your-own token.
 
 **Spec:** `docs/superpowers/specs/2026-10-09-x-research-pro-relay-design.md`
 
@@ -54,7 +54,7 @@
 - `cloud-machines.ts` passes `accountAccess` from billing's entitlement; `main.ts` reads `OMB_CLOUD_TREG_KEY` and `OMB_CLOUD_X_CALLS_PER_MONTH` and adds them to the Fly requirement, startup lines and docs.
 - Tests: paid gets a token that the relay accepts; free gets 402; a second request replaces the first token; sign-out revokes; the route through the portal (native device path, no same-origin header needed).
 
-## App tasks (OpenMausBot)
+## App tasks (Fizot)
 
 ### Task A1: Remove the person's treg token
 - Files:

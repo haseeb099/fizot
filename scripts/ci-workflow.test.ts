@@ -234,6 +234,14 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
       step.run === "pnpm exec vitest run scripts/fizot scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts",
     )).toBe(true);
+    const staticSteps = workflow.jobs.static.steps as { if?: string; run?: string }[];
+    const buildAt = staticSteps.findIndex((step) => step.run === "pnpm exec vite build");
+    const hostScans = staticSteps.flatMap((step, index) =>
+      step.run === "node scripts/fizot/scan-upstream-hosts.mjs" ? [index] : [],
+    );
+    expect(hostScans).toHaveLength(2);
+    expect(hostScans[1]).toBeGreaterThan(buildAt);
+    expect(staticSteps[hostScans[1]!]!.if).toBeUndefined();
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string | boolean }][]) {
       if (["static", "gate"].includes(name)) continue;
       if (name === "control-plane") {
@@ -282,6 +290,11 @@ describe("CI concurrency", () => {
       .flatMap((job) => job.steps ?? []).flatMap((step) => (step.uses && !step.uses.startsWith("./") ? [step.uses] : []));
     expect(uses.length).toBeGreaterThan(0);
     for (const action of uses) expect(action).toMatch(/^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/);
+  });
+
+  it("keeps the Windows browser vendor build manual until this repo publishes the engine", () => {
+    const vendor = parse(readFileSync(new URL("../.github/workflows/browser-vendor-windows.yml", import.meta.url), "utf8"));
+    expect(vendor.on).toEqual({ workflow_dispatch: null });
   });
 
   it("keeps the redundant Windows workflow available only for manual debugging", () => {

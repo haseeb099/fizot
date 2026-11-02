@@ -84,7 +84,7 @@ it("delivers a pending peer-comm approval card to the Chief's escalations thread
     ), { timeout: 10_000 }).toBe(true);
     const run = await dump(escalations.threadId);
     const prompt = JSON.stringify(run.prompt);
-    expect(prompt).toContain("[Escalation notice from OpenMausBot — not from the person.");
+    expect(prompt).toContain("[Escalation notice from Fizot — not from the person.");
     expect(prompt).toContain("approval card to contact @Hedge is waiting on the person");
     expect(prompt).toContain("Hedge, a quick one before I file the memo.");
     expect(prompt).toContain(`bot_id \\"${ada.id}\\"`);
@@ -122,7 +122,7 @@ it("delivers a teammate turn that ends needing input to the Chief's escalations 
     ), { timeout: 10_000 }).toBe(true);
     const run = await dump(escalations.threadId);
     const prompt = JSON.stringify(run.prompt);
-    expect(prompt).toContain("[Escalation notice from OpenMausBot — not from the person.");
+    expect(prompt).toContain("[Escalation notice from Fizot — not from the person.");
     expect(prompt).toContain("which repository should I tag?");
     expect(prompt).toContain(`thread_id \\"${mira.activeTaskId}\\"`);
     const noticeLine = (await messages(escalations.threadId)).find((m) => m.role === "user" && /Escalation notice/.test(m.text ?? ""));
@@ -152,12 +152,12 @@ it("carries the provenance fence header on a bot-raised escalation", async () =>
     const escalations = await escalationsThread(chief.id);
     const run = await dump(escalations.threadId);
     const prompt = JSON.stringify(run.prompt);
-    expect(prompt).toContain("[Escalation notice from OpenMausBot — not from the person.");
+    expect(prompt).toContain("[Escalation notice from Fizot — not from the person.");
     expect(prompt).toContain("The deploy needs the production key only the person can unlock.");
     expect(prompt).toContain("it raised this flag itself");
     expect(prompt).toContain(`thread_id \\"${mira.activeTaskId}\\"`);
     const noticeLine = (await messages(escalations.threadId)).find((m) => m.role === "user" && /Escalation notice/.test(m.text ?? ""));
-    expect(noticeLine?.text?.split("\n")[0]).toMatch(/^\[.+ from OpenMausBot — not from the person\. .+\]$/);
+    expect(noticeLine?.text?.split("\n")[0]).toMatch(/^\[.+ from Fizot — not from the person\. .+\]$/);
     expect(noticeLine?.peerAsk).toEqual({ botId: mira.id, name: "Mira", unattended: true, incident: { threadId: mira.activeTaskId } });
     await turnEnded(chief.id, escalations.threadId);
   } finally {

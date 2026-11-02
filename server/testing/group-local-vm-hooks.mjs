@@ -61,7 +61,7 @@ registerHooks({
         while (read().blocked || read().blockedTarget === target.key) await new Promise(r => setTimeout(r, 30));
         const missing = !(await containerComputerExists('podman', target));
         const stopped = read().stopped?.includes(target.key);
-        // An old desktop: made by OpenMausBot, on an image this release no longer runs (and maybe not yet rebuilt).
+        // An old desktop: made by Fizot, on an image this release no longer runs (and maybe not yet rebuilt).
         const image = !read().imageMissing;
         const outdated = !missing && Boolean(read().outdated?.includes(target.key));
         const ready = !missing && !stopped && !outdated && image && !read().failed;

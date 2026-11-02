@@ -1,4 +1,4 @@
-// @devs: a person's message that tags it sends exactly one bug report to the MausBot team. The bot answering it is
+// @devs: a person's message that tags it sends exactly one bug report to the Fizot team. The bot answering it is
 // asked (a note on its turn, and report_bug) to add a summary; when none comes, because its engine has no tools, its
 // turn failed, it never called report_bug or no bot answered, the server sends the report with its own facts once
 // nothing runs in the conversation any more. The person's message and that summary are the only words that go, never
@@ -95,21 +95,21 @@ export interface DevsReportContext {
 }
 
 export const sentLine = (reportId: string, contact?: string) =>
-  `Sent to the MausBot team (report ${reportId}). Milind and Omkar get it by email${contact ? ` and will reply to ${contact}` : ""}.`;
+  `Sent to the Fizot team (report ${reportId}). Milind and Omkar get it by email${contact ? ` and will reply to ${contact}` : ""}.`;
 const laterLine = (reportId: string, contact?: string) =>
-  `Sent to the MausBot team (report ${reportId}) after an earlier try did not go through. Milind and Omkar get it by email${contact ? ` and will reply to ${contact}` : ""}.`;
+  `Sent to the Fizot team (report ${reportId}) after an earlier try did not go through. Milind and Omkar get it by email${contact ? ` and will reply to ${contact}` : ""}.`;
 function notYetLine(outcome: Extract<SendOutcome, { retry: true }>): string {
   const minutes = outcome.retryAfterMs ? Math.max(1, Math.ceil(outcome.retryAfterMs / 60_000)) : 0;
-  const why = outcome.why === "limited" ? "the MausBot team takes only a few reports an hour from each app"
-    : outcome.why === "offline" ? "the MausBot team's server could not be reached" : "the MausBot team's server could not take it right now";
+  const why = outcome.why === "limited" ? "the Fizot team takes only a few reports an hour from each app"
+    : outcome.why === "offline" ? "the Fizot team's server could not be reached" : "the Fizot team's server could not take it right now";
   return `Not sent yet: ${why}. The report is saved and goes on its own${minutes ? ` in about ${minutes} minute${minutes === 1 ? "" : "s"}` : " as soon as it can"}, so there is no need to send it again.`;
 }
-const refusedLine = (detail: string) => `The MausBot team's server refused this bug report, so nothing was sent: ${detail.replace(/[.\s]+$/, "")}.`;
-const fullLine = `Not sent: ${MAX_OUTBOX} bug reports are already waiting to go to the MausBot team. Type @devs again once they have gone.`;
-const droppedLine = "A bug report from this conversation could not reach the MausBot team for a week, so it was dropped. Type @devs again to send a new one.";
+const refusedLine = (detail: string) => `The Fizot team's server refused this bug report, so nothing was sent: ${detail.replace(/[.\s]+$/, "")}.`;
+const fullLine = `Not sent: ${MAX_OUTBOX} bug reports are already waiting to go to the Fizot team. Type @devs again once they have gone.`;
+const droppedLine = "A bug report from this conversation could not reach the Fizot team for a week, so it was dropped. Type @devs again to send a new one.";
 
 /** Rides on the turn that answers a @devs message. */
-const TURN_NOTE = "\n\n[From OpenMausBot, not the person: this message tags @devs, so it is a bug report for the MausBot team, OpenMausBot's developers. Call report_bug once, first: what the person says went wrong; what you saw yourself in this conversation (errors, failed tools, stuck steps), or that you saw nothing unusual; and steps to reproduce. Leave out passwords, keys, tokens and file contents; OpenMausBot adds the app's own diagnostics. Then tell the person, word for word, the line report_bug returns, and help with the problem if you can.]";
+const TURN_NOTE = "\n\n[From Fizot, not the person: this message tags @devs, so it is a bug report for the Fizot team, Fizot's developers. Call report_bug once, first: what the person says went wrong; what you saw yourself in this conversation (errors, failed tools, stuck steps), or that you saw nothing unusual; and steps to reproduce. Leave out passwords, keys, tokens and file contents; Fizot adds the app's own diagnostics. Then tell the person, word for word, the line report_bug returns, and help with the problem if you can.]";
 
 const iso = (at: number) => new Date(at).toISOString();
 const firstLine = (text: string | undefined) => (text ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
@@ -233,11 +233,11 @@ export function createDevsReports(deps: DevsReportsDeps) {
       lastSent.set(entry.threadId, { reportId: outcome.id, at: now() });
       return { ok: true, line: sentLine(outcome.id, contact), marker: outcome.id };
     }
-    if (!outcome.retry) return { ok: false, line: refusedLine(outcome.detail), marker: "MausBot team" };
-    if (outbox.length >= MAX_OUTBOX) return { ok: false, line: fullLine, marker: "MausBot team" };
+    if (!outcome.retry) return { ok: false, line: refusedLine(outcome.detail), marker: "Fizot team" };
+    if (outbox.length >= MAX_OUTBOX) return { ok: false, line: fullLine, marker: "Fizot team" };
     outbox.push({ messageId: entry.messageId, threadId: entry.threadId, payload, firstAt: now(), attempts: 1,
       nextAt: now() + (outcome.retryAfterMs ?? RETRY_MS[0]) });
-    return { ok: false, line: notYetLine(outcome), marker: "MausBot team" };
+    return { ok: false, line: notYetLine(outcome), marker: "Fizot team" };
   }
 
   function deliver(entry: Waiting, author: Author): Promise<Told> {
@@ -257,9 +257,9 @@ export function createDevsReports(deps: DevsReportsDeps) {
 
   /** Why no bot wrote the summary, read once the conversation is quiet. */
   function why(entry: Waiting): string {
-    if (entry.restored) return "OpenMausBot restarted before a bot wrote one";
+    if (entry.restored) return "Fizot restarted before a bot wrote one";
     if (!entry.answered) return "no bot answered the message";
-    if (entry.offered === false) return "the bot's engine cannot use OpenMausBot's tools";
+    if (entry.offered === false) return "the bot's engine cannot use Fizot's tools";
     const path = store.activePath(entry.threadId);
     const after = path.slice(path.findIndex((line) => line.id === entry.messageId) + 1);
     if (after.some((line) => line.kind === "activity" && line.tool && failedTurnCause(line.tool.name) !== null)) return "the bot's turn failed";
@@ -316,7 +316,7 @@ export function createDevsReports(deps: DevsReportsDeps) {
     if (!bot || !entry) {
       const last = lastSent.get(threadId);
       if (last && now() - last.at < REPEAT_MS) return { status: 200, text: `Already sent as report ${last.reportId}: report_bug sends once per @devs message. Do not call it again for it.` };
-      return { status: 409, text: "report_bug sends only for a message that tags @devs, once per message. To report a problem to the MausBot team, the person types @devs and a few words about what went wrong." };
+      return { status: 409, text: "report_bug sends only for a message that tags @devs, once per message. To report a problem to the Fizot team, the person types @devs and a few words about what went wrong." };
     }
     const fallingBack = inFlight.has(entry.messageId);
     const said = await deliver(entry, { bot, summary });
@@ -352,7 +352,7 @@ export function createDevsReports(deps: DevsReportsDeps) {
 
   return {
     /** The note on a turn in this conversation while a @devs message waits for its summary; empty otherwise, and for a
-     * turn without OpenMausBot's tools. */
+     * turn without Fizot's tools. */
     note(threadId: string, tools: boolean): string {
       const entry = waiting.filter((one) => one.threadId === threadId && !inFlight.has(one.messageId)).at(-1);
       if (!entry) return "";

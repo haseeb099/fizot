@@ -1,9 +1,9 @@
-# MausBot, everyone's helper
+# Fizot, everyone's helper
 
-MausBot is the bot every place and every Team Cloud member gets once: a new
+Fizot is the bot every place and every Team Cloud member gets once: a new
 install's first bot and its Chief of Staff, or, for an install that already has
 bots, a helper beside them. It is never deleted or archived; the person takes it
-off the sidebar with "Show MausBot in the sidebar" in Settings → General, which
+off the sidebar with "Show Fizot in the sidebar" in Settings → General, which
 its menu's **Hide from sidebar** also turns off.
 
 ## Automated checks
@@ -14,17 +14,17 @@ pnpm exec vitest run server/default-bot.test.ts server/default-bot.e2e.test.ts \
   src/lib/mausbot-landing.test.ts
 ```
 
-- `server/default-bot.test.ts`: a fresh install gets one MausBot once; an
+- `server/default-bot.test.ts`: a fresh install gets one Fizot once; an
   existing install gets one once on update and its Chief is untouched; a new
-  install's renamed MausBot is adopted, not duplicated; the intro shows once,
+  install's renamed Fizot is adopted, not duplicated; the intro shows once,
   not after it was answered or dismissed; delete and archive are refused; a
   move to My Cloud and coming home leave exactly one; each Team Cloud member
-  gets their own; a Team User's MausBot holds no Chief tools.
+  gets their own; a Team User's Fizot holds no Chief tools.
 - `server/default-bot.e2e.test.ts`: on a real fixture server, `DELETE
-  /api/bots/:id` answers 409, the switch hides and shows it, and a MausBot that
+  /api/bots/:id` answers 409, the switch hides and shows it, and a Fizot that
   is not the Chief creates a bot with `create_bot`.
 - `server/mausbot-notifications.test.ts`, `server/drivers/agents-mausbot-tools.test.ts`
-  and the second case of `server/default-bot.e2e.test.ts`: MausBot alone gets
+  and the second case of `server/default-bot.e2e.test.ts`: Fizot alone gets
   `list_unread_notifications` and `mark_notifications_read`, listed last.
   The list returns the unread feed (bounded, trimmed) with a lean per item;
   marking read takes only finished work (`done`, `delegation-settled`), leaves
@@ -37,33 +37,33 @@ pnpm exec vitest run server/default-bot.test.ts server/default-bot.e2e.test.ts \
   them. The list is annotated read-only like the other reviewed reads.
   `server/drivers/agents-catalog-wire.test.ts` budgets the `+mausbot` profiles,
   each within 2% of the same Chief's list without them.
-- `server/team-setup-requests.test.ts` ("MausBot's Chief-level team setup"):
+- `server/team-setup-requests.test.ts` ("Fizot's Chief-level team setup"):
   it adds specialists like a Chief but never changes who the Chief is.
 - `src/components/MausBotWelcome.test.ts` and `src/lib/default-bot.test.ts`:
   the first-launch welcome shows once with its panel closed, Add pins it and Not
   now turns the switch off, a name, colour, look or uploaded picture is saved as
-  the bot's own edit screen saves it, a renamed MausBot is still found by its
+  the bot's own edit screen saves it, a renamed Fizot is still found by its
   mark, and a new install's intro offers only the setup still to do.
 - `src/lib/mausbot-landing.test.ts`: the rows already in the sidebar glide down
   by the new row's height, the avatar lands in the new slot and leaves nothing
   behind, reduced motion only fades the row in, and a hidden sidebar just adds it.
-- `server/default-bot.test.ts` also: a place with no Chief gets MausBot as its
+- `server/default-bot.test.ts` also: a place with no Chief gets Fizot as its
   Chief; a place with a Chief keeps it. Either way the daily brief comes from
-  MausBot, hidden from the sidebar or not, and its intro says so. How the watch
-  moves to MausBot is in [Proactive routines and the brief](proactive-routines.md).
+  Fizot, hidden from the sidebar or not, and its intro says so. How the watch
+  moves to Fizot is in [Proactive routines and the brief](proactive-routines.md).
 
 ## By hand
 
 Launch the app against an isolated fixture (`docs/verification/README.md`),
 finish the first-run welcome and its tour, then:
 
-1. The **Meet MausBot** popup appears once, with MausBot out of the sidebar
+1. The **Meet Fizot** popup appears once, with Fizot out of the sidebar
    while it is open. Its picture opens the customise panel (name first, then
    colour, look, **Upload a picture · Generate a picture with AI**); the title
    and the Add button follow the name. **Add** makes the sidebar rows glide down
    while the avatar travels into the new top slot and the row fades in; with
    reduced motion it only fades in. Reopen the app: it does not appear again.
-2. MausBot's first message says what it does in the app's language, with
+2. Fizot's first message says what it does in the app's language, with
    example asks and, on a new install, only the setup steps still to do. Each
    step opens the app's own flow.
 3. Its sidebar menu offers **Hide from sidebar**, not Archive or Delete; the

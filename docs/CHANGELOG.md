@@ -4,7 +4,7 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32.
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 
@@ -323,4 +323,49 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. A push to main no longer starts the docs workflow or the npm package workflow. The Linux package job gets the heap that the image build already uses. The code is commit `6b9e43a277f7c1a8ef9627a399b37f8bc0b936c4`, which is already on main.
 - Files / Patch IDs: PATCH-20. Notion PR 29.
 - Rollback: Restore the push and pull_request triggers, and remove the package job heap.
+
+## CL-30 Stop phone-home when Fizot endpoints are empty
+
+- Type: Code
+- Date: 2026-11-01
+- Area: Fork & brand, Sandbox & egress
+- Risk: Medium
+- Logged by: Cursor
+- Commit: the commit that adds this row
+- Why we changed it: S2.3 (FZ-10) asks Fizot to stop calling upstream hosts that this fork does not use. Bug reports, analytics, update checks, cloud and account origins, and the computer-service default were still aimed at upstream.
+- How it works: `brand/endpoints.json` holds those URLs and every value is empty. Each feature reads that value, or an existing `OMB_*` variable when one is set, and does nothing when both are empty. A packaged copy that does not include the file boots with every endpoint empty. Desktop packages do not bake an upstream update repository into app-update.yml. The deb still gets a `package-type` marker of `deb` after the AppImage is packed, and that step writes no update URL. The Linux package check still fails when an `app-update.yml` names the upstream owner. While the analytics URL is empty, the production UI build replaces `posthog-js` with an empty module so the built output does not contain the library's default hosts. A fake-engine boot records outbound fetch URLs and fails if any match an upstream host. The host allow-list keeps fixture hostnames used by upstream tests, plus the two scanner files that name a host on purpose.
+- Why it is necessary: A default install must not contact upstream bug, analytics, update, cloud, account, or computer-service hosts. The env names stay, so a later config can turn a feature on without renaming variables.
+- Impact (cost / risk / timeline): No spend. Bug reports, analytics, update checks, and the computer service stay off until a Fizot URL or the existing env var is set. An empty-allow host scan was 281 hits before this change and 25 after. Those 25 are fixture hosts and the scanner files. The scan reports no unlisted host.
+- Files / Patch IDs: PATCH-21. Notion PR 30. https://app.notion.com/p/40bdd43e0a9d81839b6dc2bdac07e44a
+- Rollback: Restore the upstream URL defaults and the previous host allow-list. Remove the fetch log and the boot test.
+
+## CL-31 Replace user-visible upstream names with Fizot
+
+- Type: Code
+- Date: 2026-11-01
+- Area: Fork & brand, CI & tests
+- Risk: Medium
+- Logged by: Cursor
+- Commit: the commit that adds this row
+- Why we changed it: S2.2 (FZ-9) asks for a brand map and for user-visible product and mascot names to say Fizot. The brand allow-list still covered whole source trees.
+- How it works: `brand/brand-map.json` maps the upstream product names and mascot labels to Fizot. User-visible strings, window titles, installer display names, and the app icon use Fizot. Internal identifiers are unchanged. The brand allow-list no longer covers `server`, `src`, `shared`, `electron`, `companion`, `public`, or `scripts` as folders. It lists attribution files, the change history, the scanners, the vocabulary test, and files whose ordinary English matches a mascot label. The static job scans brand leaks and upstream hosts again after the renderer build, and that host scan has no skip. The Linux package installs under `/opt/Fizot`, and the package hooks and smoke steps use that path. The renderer reads `brand/endpoints.json` directly, so the UI build does not pull in the node reader. `scripts/fizot/apply-brand.mjs` names the vocabulary test without the catalog-directory word, so the locale-reader scan does not treat the brand-map test as a translation reader.
+- Why it is necessary: People should see Fizot, and a new user-visible upstream name should fail the scan instead of hiding inside a folder allow.
+- Impact (cost / risk / timeline): No spend. An empty-allow brand scan was 4028 hits before this change and 179 after. Those 179 are the listed files. The scan reports no unlisted brand leak. Chat messages still draw the geometric body. The picker labels and the app icon do not show it. The built renderer is scanned in CI after `vite build`; this machine did not run that build.
+- Files / Patch IDs: PATCH-22. Notion PR 31. https://app.notion.com/p/40bdd43e0a9d81acbc1fcad35e3e280f
+- Rollback: Restore the previous strings and the folder allow-list. Remove the brand map and the post-build scan step.
+
+## CL-32 Keep the Windows browser vendor build manual
+
+- Type: Config
+- Date: 2026-11-02
+- Area: CI & tests
+- Risk: Low
+- Logged by: Cursor
+- Commit: the commit that adds this row
+- Why we changed it: The Windows browser vendor smoke downloads a pinned engine asset. This repository does not publish that release. The workflow had not run on main. A pull request must not fail on an asset that is not here, and the pin must not be changed to an upstream URL.
+- How it works: `browser-vendor-windows.yml` runs only on `workflow_dispatch`. The cold-start job still uses the existing pin. A pull request no longer starts the workflow.
+- Why it is necessary: The smoke step cannot succeed until this repository publishes the pinned Windows engine. Pointing the download at an upstream release is not allowed.
+- Impact (cost / risk / timeline): No spend. Pull requests no longer run this workflow. A manual run still needs a Windows engine asset published by this repository. On main the pin still names an upstream release path. This pull request's earlier string change rewrote that path, and the smoke then failed with `Could not download agent-browser-win32-x64-0.36.0-omb.1.exe: HTTP 404`. There were no runs of this workflow on main.
+- Files / Patch IDs: PATCH-23. Notion PR 32. https://app.notion.com/p/40cdd43e0a9d81c5ba28f0fe7ef28f6d
+- Rollback: Restore the pull_request path filter on `browser-vendor-windows.yml`.
 

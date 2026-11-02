@@ -57,7 +57,7 @@ const originOf = (url) => { try { return new URL(url).origin; } catch { return n
 
 /**
  * Who the window opens. `journal`: one-home.json read back; `frozenCloud`: this computer's freeze marker when there is no
- * journal (its Cloud's origin, or true when it names none); `state`: the MausBot Cloud sign-in's state.
+ * journal (its Cloud's origin, or true when it names none); `state`: the Fizot Cloud sign-in's state.
  * @returns {{ kind: "computer" } | { kind: "cloud", origin: string } | { kind: "signin", other?: true }}
  */
 export function homeOf({ journal = null, frozenCloud = null, state = null }) {
@@ -312,7 +312,7 @@ export function createHomeWindow(deps) {
     clearRetry();
   }
   const signInNeeded = () => ["reauth-required", "signed-out"].includes(state()?.status);
-  /** This device has no MausBot Cloud sign-in to pair a team with (homeOf's rule for My Cloud). */
+  /** This device has no Fizot Cloud sign-in to pair a team with (homeOf's rule for My Cloud). */
   const signedOut = () => { const current = state(); return !current?.account?.id || ["signed-out", "connecting"].includes(current.status); };
 
   async function answers(origin) {
@@ -337,7 +337,7 @@ export function createHomeWindow(deps) {
   async function redeem(origin, grant) {
     try {
       const response = await cookieFetch(`${origin}/api/auth/pair`, { method: "POST", credentials: "include", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(15_000),
-        headers: { "content-type": "application/json", origin }, body: JSON.stringify({ code: grant.code, cookie: true, label: "OpenMausBot app" }) });
+        headers: { "content-type": "application/json", origin }, body: JSON.stringify({ code: grant.code, cookie: true, label: "Fizot app" }) });
       await response.body?.cancel?.().catch(() => {});
       return response.ok;
     } catch { return false; }
@@ -548,14 +548,14 @@ export function createHomeWindow(deps) {
     shown: () => shown,
     /** The person asked again (the screen's timer, back online, or the window focused). */
     retry: () => show(),
-    /** The screen's one button: this device's MausBot Cloud sign-in, again. */
+    /** The screen's one button: this device's Fizot Cloud sign-in, again. */
     async signIn() {
       const client = account();
       if (!client) return;
       await (client.state().status === "reauth-required" ? client.signInAgain() : client.begin());
     },
     repair,
-    /** The MausBot Cloud sign-in changed: a window that waits on it, a home that changed, or a team shown that the
+    /** The Fizot Cloud sign-in changed: a window that waits on it, a home that changed, or a team shown that the
      * session no longer lists (or lists at another address), shows again. */
     async changed() {
       const before = home;

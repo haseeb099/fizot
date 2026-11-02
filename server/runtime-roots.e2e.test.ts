@@ -17,16 +17,16 @@ import { ownTurnText } from "./testing/room-handoff-agent.ts";
 import { withAnswer } from "./testing/your-computer.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const RERUN_NOTE = "OpenMausBot restarted while your previous turn here was running";
+const RERUN_NOTE = "Fizot restarted while your previous turn here was running";
 const RERUN_CHIP = "Resuming after a restart";
-const SECRET_PROVIDED = "OpenMausBot credential update: the user securely provided";
-const CONNECTED = "OpenMausBot connection update: the user securely connected";
+const SECRET_PROVIDED = "Fizot credential update: the user securely provided";
+const CONNECTED = "Fizot connection update: the user securely connected";
 const STEP_CAP_CONTINUES = "stopped at the step limit";
 const SEAT_FREE = "the computer this conversation waited for is free again";
-const SIGNED_IN = "OpenMausBot sign-in update: the person finished signing in to";
-const INTERRUPTED_OUTWARD = "Interrupted by an OpenMausBot restart after it already";
+const SIGNED_IN = "Fizot sign-in update: the person finished signing in to";
+const INTERRUPTED_OUTWARD = "Interrupted by an Fizot restart after it already";
 const SETTLED = "Your downstream room requests have settled.";
-const REPORT_FROM_MIRA = "[OpenMausBot report from @Mira";
+const REPORT_FROM_MIRA = "[Fizot report from @Mira";
 
 const jsonl = (path: string): any[] => existsSync(path)
   ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
@@ -351,7 +351,7 @@ it("T5 reruns a person's cut turn once after a restart, with the restart note fi
   expect(f.roots()[0]).toMatchObject({ id: cut.id, status: "completed", outcome: "done", restarts: 1, executions: 2, result: "T5-FINAL: migrated once." });
   expect(f.eventsOf(cut.id)).toContain("restart_reconciled");
   expect(await f.chips(job, RERUN_CHIP)).toHaveLength(1);
-  expect(await f.chips(job, "turn interrupted — OpenMausBot restarted")).toHaveLength(0);
+  expect(await f.chips(job, "turn interrupted — Fizot restarted")).toHaveLength(0);
   await f.settle(500);
   expect(f.turns(f.clive.id).filter((record: any) => record.planKey === "C-RERUN")).toHaveLength(1);
 }), hostTimeout(90_000));
@@ -711,7 +711,7 @@ it("T11 does not rerun a cut turn that already pushed: the root ends with what i
       expect(line.tool.name.startsWith("error: ")).toBe(true);
       expect(line.tool.name).toContain("git push");
       expect(await f.chips(job, RERUN_CHIP)).toHaveLength(0);
-      expect(await f.chips(job, "turn interrupted — OpenMausBot restarted")).toHaveLength(0);
+      expect(await f.chips(job, "turn interrupted — Fizot restarted")).toHaveLength(0);
       await f.settle(1_500);
       expect(f.roots()).toHaveLength(1);
       expect(f.roots()[0]).toMatchObject({ status: "failed", executions: 1 });

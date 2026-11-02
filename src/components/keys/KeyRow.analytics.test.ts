@@ -94,7 +94,7 @@ describe("a key saved in Settings → API keys", () => {
     expectNoKeyIn(fixture.track.mock.calls);
   });
 
-  it("reports a Boat key boat.dev refused over the desktop bridge as rejected, from the Computer panel", async () => {
+  it("reports a Boat key example.invalid refused over the desktop bridge as rejected, from the Computer panel", async () => {
     const setCredential = vi.fn().mockRejectedValue(new Error(`Error invoking remote method 'credential:set': KeyRejected: That doesn't look like a Boat API key: ${KEY.slice(0, 12)}`));
     vi.stubGlobal("window", { ogb: { setCredential } });
     await enterKey({ id: "box", via: "computer_panel" });

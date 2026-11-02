@@ -326,7 +326,7 @@ export function answersFor(
 
 
 /** No dots, no control characters, at most 63 bytes of UTF-8. */
-export function dnsLabel(text: string, fallback = "OpenMausBot"): string {
+export function dnsLabel(text: string, fallback = "Fizot"): string {
   let label = text
     // oxlint-disable-next-line no-control-regex -- control characters are not valid in a DNS label
     .replace(/[\u0000-\u001f\u007f]/g, "")

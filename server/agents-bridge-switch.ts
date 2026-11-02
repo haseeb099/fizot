@@ -177,7 +177,7 @@ function walkSettings(value: unknown, found: SettingsFindings): void {
 type SettingsReading = "silent" | "names" | "hooks" | "wildcard" | "managed-only" | "unreadable";
 
 /** What one Claude settings file means for the bridge; the first reading that holds wins. Security:
- * OpenMausBot's own hooks reach the CLI through a private --settings file this never reads, so none of
+ * Fizot's own hooks reach the CLI through a private --settings file this never reads, so none of
  * them may be a PreToolUse or PermissionRequest hook. */
 function claudeSettings(file: string, managed: boolean): SettingsReading {
   const text = textOf(file);

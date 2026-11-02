@@ -1,6 +1,6 @@
 // A move to the person's own Cloud carries this computer's connections, end to end: this computer's server and a Cloud
 // home (scripts/testing/cloud-send-fixture.ts), main's own functions between them (electron/cloud-connections.mjs) over
-// the private port and the owner session, OpenMausBot's connected-apps service with a fake Composio behind it, a fake
+// the private port and the owner session, Fizot's connected-apps service with a fake Composio behind it, a fake
 // sign-in server for an MCP server's own account, and a fake HighLevel with its relay. Disposable homes; no network.
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";

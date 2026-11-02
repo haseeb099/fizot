@@ -3,10 +3,10 @@ import { macCuaPermissionMessage, missingMacCuaPermissions } from "./mac-cua-per
 
 describe("macOS CUA permission recovery", () => {
   it("names only the grants the host reported missing", () => {
-    expect(missingMacCuaPermissions("embedded host failed: Screen Recording required; restart OpenMausBot")).toEqual(["screen"]);
+    expect(missingMacCuaPermissions("embedded host failed: Screen Recording required; restart Fizot")).toEqual(["screen"]);
     expect(missingMacCuaPermissions("Accessibility and Screen Recording required")).toEqual(["screen", "accessibility"]);
-    expect(macCuaPermissionMessage(["accessibility"])).toContain("Accessibility is required for MausBot");
-    expect(macCuaPermissionMessage(["screen"])).toContain("relaunch MausBot");
+    expect(macCuaPermissionMessage(["accessibility"])).toContain("Accessibility is required for Fizot");
+    expect(macCuaPermissionMessage(["screen"])).toContain("relaunch Fizot");
   });
 
   it("does not diagnose missing or malformed status as a grant failure", () => {

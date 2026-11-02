@@ -80,7 +80,7 @@ the row's name, else its position), the list is required unless it says
 `confirm`, the only thing that can send the pick. The message a press is
 recorded as names the pick: `Pick this` then `Dinner tonight: Margherita pizza`. `title`, `caption`, `meta`, the selectable list, the `dot` badge variant,
 the `Progress`, `TimePicker` and `DayPicker` nodes and the `label` on every
-field are MausBot additions; everything else is ChatKit's.
+field are Fizot additions; everything else is ChatKit's.
 
 Every field may carry its own `label`. A renderer draws it above the control
 unless a `Label` node already names that field (a Checkbox draws it beside the

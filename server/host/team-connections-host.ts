@@ -104,7 +104,7 @@ export function createTeamConnectionsHost(deps: TeamConnectionsHostDeps) {
     connect: (name: string) => {
       const where = link();
       return `${name} is connected by each person in ${team?.name ?? "the team"}, and this person hasn't connected theirs. Reply with this one line and nothing more about it: `
-        + (where ? `"Connect your ${name} here: ${where}"` : `"Connect your own ${name} on your team's page in MausBot Cloud."`);
+        + (where ? `"Connect your ${name} here: ${where}"` : `"Connect your own ${name} on your team's page in Fizot Cloud."`);
     },
     elsewhere: (name: string) => `${name} is connected by each person in ${team?.name ?? "the team"} and works only in that person's own private chat with this bot, `
       + "for their own requests. It can't be used here: say so in one plain line. Nothing was run.",
@@ -246,7 +246,7 @@ export function createTeamConnectionsHost(deps: TeamConnectionsHostDeps) {
       const where = link();
       return (ownApps.length ? ` ${list(ownApps.map(appLabel))} ${ownApps.length === 1 ? "is" : "are"} ${whose} own: use ${ownApps.length === 1 ? "it" : "them"} through the ${OWN_APPS_SERVER} tools, which act as their own accounts; ${team.name}'s shared apps stay under composio.` : "")
         + (ownServers.length ? ` The MCP ${ownServers.length === 1 ? "server" : "servers"} ${list(ownServers)} act${ownServers.length === 1 ? "s" : ""} as ${whose} own account.` : "")
-        + (missing.length ? ` Each person connects these for themselves, and this person hasn't yet: ${list(missing)}. If the task needs one, reply with one plain line and nothing more about it: "Connect your <name> here: ${where ?? "your team's page in MausBot Cloud"}".` : "");
+        + (missing.length ? ` Each person connects these for themselves, and this person hasn't yet: ${list(missing)}. If the task needs one, reply with one plain line and nothing more about it: "Connect your <name> here: ${where ?? "your team's page in Fizot Cloud"}".` : "");
     },
 
     /** An MCP server was removed: every person's key and sign-in for it go, and it is the team's again if re-added. */

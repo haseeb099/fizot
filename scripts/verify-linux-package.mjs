@@ -68,12 +68,15 @@ function requirePackageType(resources, label, expected) {
   }
 }
 
+export function appUpdateNamesUpstreamOwner(text) {
+  return /^owner: milind-soni$/m.test(text);
+}
+
 function requireUpdaterTarget(resources, label) {
   const updateFile = path.join(resources, "app-update.yml");
-  requireFile(updateFile);
-  const update = readFileSync(updateFile, "utf8");
-  if (!/^owner: milind-soni$/m.test(update) || !/^repo: OpenMausBot$/m.test(update)) {
-    fail(`${label} app-update.yml does not point at milind-soni/OpenMausBot`);
+  if (!statSync(updateFile, { throwIfNoEntry: false })?.isFile()) return;
+  if (appUpdateNamesUpstreamOwner(readFileSync(updateFile, "utf8"))) {
+    fail(`${label} app-update.yml names the upstream owner`);
   }
 }
 
@@ -393,6 +396,15 @@ function verifyCloudflaredResources(resources, label, { directoryMode = 0o755 } 
   return actualHash;
 }
 
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
+verifyLinuxPackage();
+}
+
+function verifyLinuxPackage() {
 const appImage = exactlyOne(".AppImage");
 const deb = exactlyOne(".deb");
 const unpacked = path.join(releaseDir, "linux-unpacked");
@@ -432,7 +444,7 @@ for (const expected of [
 const extracted = mkdtempSync(path.join(tmpdir(), "omb-deb-verify-"));
 try {
   execFileSync("dpkg-deb", ["--extract", deb, extracted]);
-  const debAppRoot = path.join(extracted, "opt", "OpenMausBot");
+  const debAppRoot = path.join(extracted, "opt", "Fizot");
   requireDirectoryMode(debAppRoot, 0o755);
   const debResources = path.join(debAppRoot, "resources");
   // Routes the in-app updater to the package-manager hand-off.
@@ -468,8 +480,8 @@ try {
   requireFile(scalableIcon);
   const desktop = readFileSync(desktopFile, "utf8");
   for (const expected of [
-    "Name=OpenMausBot",
-    "Exec=/opt/OpenMausBot/openmausbot %U",
+    "Name=Fizot",
+    "Exec=/opt/Fizot/openmausbot %U",
     "Icon=openmausbot",
     "StartupWMClass=com.openmausbot.app",
     "Categories=Utility;",
@@ -529,3 +541,4 @@ try {
 }
 
 console.log(`[verify-linux-package] OK\n- ${path.basename(appImage)}\n- ${path.basename(deb)}`);
+}

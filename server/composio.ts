@@ -923,7 +923,7 @@ const CURATED: Array<ToolkitCard & { slug: CuratedConnectorSlug }> = [
   { slug: "notion", label: "Notion", blurb: "Pages and databases", domain: "notion.so", logo: null, categories: ["Productivity"] },
   { slug: "linear", label: "Linear", blurb: "Issues and project tracking", domain: "linear.app", logo: null, categories: ["Developer tools"] },
   { slug: "sentry", label: "Sentry", blurb: "Errors and alerts", domain: "sentry.io", logo: null, categories: ["Developer tools"] },
-  { slug: "posthog", label: "PostHog", blurb: "Analytics, feature flags, experiments", domain: "posthog.com", logo: null, categories: ["Analytics"] },
+  { slug: "posthog", label: "PostHog", blurb: "Analytics, feature flags, experiments", domain: "example.invalid", logo: null, categories: ["Analytics"] },
   { slug: "discord", label: "Discord", blurb: "Messages and channels", domain: "discord.com", logo: null, categories: ["Communication"] },
   { slug: "twitter", label: "X (Twitter)", blurb: "Post and read on X", domain: "x.com", logo: null, categories: ["Social"] },
   { slug: "reddit", label: "Reddit", blurb: "Browse and post", domain: "reddit.com", logo: null, categories: ["Social"] },

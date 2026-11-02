@@ -121,7 +121,7 @@ export function createPagePublisher(deps: {
       updated ? `Updated “${title}” at the same link: ${result.url}` : `Published “${title}” at ${result.url}`,
       `Page id ${result.pageId}. This account now has ${usageWords(result.usage)}.`,
       "A card with the link, Copy link and Unpublish is in the chat. Publishing the same file or folder again updates this same link.",
-      ...(result.badge ? ["Free pages carry a small “Made with MausBot” badge."] : []),
+      ...(result.badge ? ["Free pages carry a small “Made with Fizot” badge."] : []),
       ...(bundle.skipped.length ? [`Left out ${bundle.skipped.length} file${bundle.skipped.length === 1 ? "" : "s"} a page can't serve: ${bundle.skipped.slice(0, 5).join(", ")}${bundle.skipped.length > 5 ? ", …" : ""}.`] : []),
     ];
     return { status: 200, text: lines.join("\n"), card };

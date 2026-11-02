@@ -4,14 +4,14 @@
 // default), which on a 1M-token model is nearly always: every model call pays for every connected
 // app's schemas, and a session writes them into the prompt cache again and again. Claude Code
 // 2.1.312 defers by default when nothing is set, but holds a resumed conversation that ran without
-// ToolSearch to the old way ("ENABLE_TOOL_SEARCH=true overrides this"), and OpenMausBot resumes every
+// ToolSearch to the old way ("ENABLE_TOOL_SEARCH=true overrides this"), and Fizot resumes every
 // thread. So a turn runs with ENABLE_TOOL_SEARCH=true unless the person chose otherwise.
 //
 // The value goes in the turn's private --settings file. Claude Code applies a settings file's `env`
 // over its own process environment, so a value in the project's or the person's .claude settings
 // would beat one set on the process; settings passed with --settings beat both.
 //
-// OpenMausBot's own small servers stay loaded (`alwaysLoad` in claude.ts): `ogb` (approvals and
+// Fizot's own small servers stay loaded (`alwaysLoad` in claude.ts): `ogb` (approvals and
 // questions) and `agents` (bots, rooms, jobs), plus the browser when the turn plans to browse.
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";

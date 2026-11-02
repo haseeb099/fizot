@@ -1,17 +1,13 @@
 # Temporary, reviewed Windows-only agent-browser backport. This workflow
 # produces a candidate, never publishes it. Pin its verified artifact digest
 # before the normal package/release gates consume it.
+#
+# Manual only. The cold-start smoke downloads a pinned Windows engine asset
+# that this repository does not publish. The pin must not be an upstream URL.
 name: Windows browser vendor build
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/browser-vendor-windows.yml
-      - scripts/build-windows-browser-vendor.mjs
-      - scripts/build-windows-browser-vendor.test.mjs
-      - scripts/smoke-browser-bundle.mjs
-      - third_party/browser/agent-browser-windows-stdio.patch
 
 permissions:
   contents: read

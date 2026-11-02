@@ -29,7 +29,7 @@ describe("whose a bot's ask is on a Team Cloud", () => {
     expect(route.askedPerson("stray", "stray-main")).toBeNull();
     expect([ada, bob, olive].map((viewer) => route.asks(viewer, "stray", "stray-main"))).toEqual([true, false, true]);
     expect(route.askedPerson("fox", "room-1")).toBe(BOB);
-    // A member's own MausBot is theirs, whatever else it says.
+    // A member's own Fizot is theirs, whatever else it says.
     expect(route.askedPerson("bobs-mausbot", "bobs-mausbot-main")).toBe(BOB);
   });
 

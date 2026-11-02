@@ -9,7 +9,7 @@ import { PASS } from "./routes/table.ts";
 import type { BotRecord } from "./store.ts";
 
 const NOW = 1_000_000_000;
-const MAUS = { id: "maus", name: "MausBot", defaultBot: {} } as BotRecord;
+const MAUS = { id: "maus", name: "Fizot", defaultBot: {} } as BotRecord;
 const ALL_KINDS = ["approval", "question", "done", "routine-failed", "routine-deferred", "turn-failed", "incident", "sign-in", "delegation-settled", "mention", "spend", "brief", "wait"] satisfies NotifyKind[];
 const entry = (id: string, kind: string, extra: Partial<NotificationLogEntry> = {}): NotificationLogEntry =>
   ({ id, kind, botId: "pip", botName: "Pip", threadId: `t-${id}`, title: `Title ${id}`, body: `Body ${id}`, at: NOW - 5 * 60_000, read: false, ...extra }) as NotificationLogEntry;
@@ -88,14 +88,14 @@ describe("marking read", () => {
 });
 
 describe("who may", () => {
-  it("is MausBot alone, and on a personal install", () => {
+  it("is Fizot alone, and on a personal install", () => {
     const pip = { id: "pip", name: "Pip" } as BotRecord;
     const chief = { id: "chief", name: "Chief", chiefOfStaff: true } as BotRecord;
-    const team = { id: "ada", name: "MausBot", defaultBot: { person: "ada@example.com" } } as BotRecord;
+    const team = { id: "ada", name: "Fizot", defaultBot: { person: "ada@example.com" } } as BotRecord;
     readTeamRolesWith(() => "admin");
     const { host, rows } = setup([entry("a", "done")], [MAUS, pip, chief, team]);
     for (const id of ["pip", "chief", "missing"]) {
-      expect(listUnread(host, id)).toEqual({ ok: false, error: "Only MausBot reads notifications in chat." });
+      expect(listUnread(host, id)).toEqual({ ok: false, error: "Only Fizot reads notifications in chat." });
       expect(markRead(host, id, ["a"])).toMatchObject({ ok: false });
     }
     expect(listUnread(host, "ada")).toMatchObject({ ok: false, error: expect.stringContaining("On a team") });
@@ -103,7 +103,7 @@ describe("who may", () => {
     expect(rows[0]!.read).toBe(false);
   });
 
-  it("refuses on any team server, even for a MausBot with no person", () => {
+  it("refuses on any team server, even for a Fizot with no person", () => {
     const { host, rows } = setup([entry("a", "done")], [MAUS], true);
     expect(listUnread(host, "maus")).toMatchObject({ ok: false, error: expect.stringContaining("On a team") });
     expect(markRead(host, "maus", ["a"])).toMatchObject({ ok: false });
@@ -115,7 +115,7 @@ describe("who may", () => {
     expect(hints).toEqual([["list_unread_notifications", true], ["mark_notifications_read", false]]);
   });
 
-  it("is mounted for the MausBot profile and flat", () => {
+  it("is mounted for the Fizot profile and flat", () => {
     expect([...MAUSBOT_TOOL_NAMES]).toEqual(["list_unread_notifications", "mark_notifications_read"]);
     expect(MAUSBOT_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([...MAUSBOT_TOOL_NAMES]);
     expect(JSON.stringify(MAUSBOT_TOOL_DEFINITIONS)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)"/);
@@ -131,7 +131,7 @@ describe("the internal route", () => {
     return { outcome, status: status as number | undefined, payload: payload as { text?: string; error?: string } | undefined, rows };
   }
 
-  it("lists and marks for MausBot, 403 for any other bot, 400 for a bad body, and passes other paths", async () => {
+  it("lists and marks for Fizot, 403 for any other bot, 400 for a bad body, and passes other paths", async () => {
     expect((await call("maus", "GET", "/api/internal/notifications")).status).toBe(200);
     const marked = await call("maus", "POST", "/api/internal/notifications/read", { ids: ["a", "b"] });
     expect([marked.status, marked.rows.map((row) => row.read)]).toEqual([200, [true, false]]);

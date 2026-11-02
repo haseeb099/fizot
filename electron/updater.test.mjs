@@ -224,7 +224,7 @@ it("a downloaded update installs when the app quits, except a system package, wh
     for (const [os, marker, image, installsOnQuit] of [
       ["darwin", null, null, true],
       ["win32", null, null, true],
-      ["linux", null, "/home/a/OpenMausBot.AppImage", true],
+      ["linux", null, "/home/a/Fizot.AppImage", true],
       ["linux", "deb", null, false],
       ["linux", "rpm", null, false],
     ]) {
@@ -258,7 +258,7 @@ it("a downloaded update installs by itself at a quiet moment on macOS and Window
     for (const [os, marker, image, installs] of [
       ["darwin", null, null, true],
       ["win32", null, null, true],
-      ["linux", null, "/home/a/OpenMausBot.AppImage", false],
+      ["linux", null, "/home/a/Fizot.AppImage", false],
       ["linux", "deb", null, false],
       ["linux", "rpm", null, false],
     ]) {

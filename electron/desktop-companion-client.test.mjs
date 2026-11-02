@@ -58,11 +58,11 @@ describe("desktop companion endpoint", () => {
     expect(normalizeTailscaleCompanionEndpoint("http://HOST.example-tailnet.ts.net:9910/")).toBe(
       "http://host.example-tailnet.ts.net:9910",
     );
-    expect(normalizeDesktopCompanionEndpoint(`https://${LABEL}.openmausbot.com`)).toBe(
-      `https://${LABEL}.openmausbot.com`,
+    expect(normalizeDesktopCompanionEndpoint(`https://${LABEL}.example.invalid`)).toBe(
+      `https://${LABEL}.example.invalid`,
     );
-    expect(normalizeDesktopCompanionEndpoint(`${LABEL}.openmausbot.com`)).toBe(
-      `https://${LABEL}.openmausbot.com`,
+    expect(normalizeDesktopCompanionEndpoint(`${LABEL}.example.invalid`)).toBe(
+      `https://${LABEL}.example.invalid`,
     );
     // The control plane's second Cloudflare account gives addresses here.
     expect(normalizeDesktopCompanionEndpoint(`https://${LABEL}.mausbot.si`)).toBe(
@@ -73,15 +73,15 @@ describe("desktop companion endpoint", () => {
     );
     for (const endpoint of [
       "https://unrelated.example.com",
-      `http://${LABEL}.openmausbot.com`,
+      `http://${LABEL}.example.invalid`,
       "http://10.0.0.4:8810",
       "http://host.local:8810",
       "https://10.0.0.4",
       "http://host.example-tailnet.ts.net/path",
-      `https://${LABEL}.openmausbot.com/path`,
+      `https://${LABEL}.example.invalid/path`,
       "http://user@host.example-tailnet.ts.net",
       "http://host.example-tailnet.ts.net.evil.test",
-      `https://${LABEL}.openmausbot.com.evil.test`,
+      `https://${LABEL}.example.invalid.evil.test`,
       `http://${LABEL}.mausbot.si`,
       `https://${LABEL}.mausbot.si/path`,
       `https://${LABEL}.mausbot.si.evil.test`,
@@ -91,7 +91,7 @@ describe("desktop companion endpoint", () => {
       `https://${LABEL}.evilmausbot.si`,
       "https://www.mausbot.si",
       "https://app.mausbot.si",
-      "https://accounts.openmausbot.com",
+      "",
       "https://c-opaque.openmausbot.com",
       "https://c-opaque.mausbot.si",
       `https://${LABEL.slice(0, -1)}.mausbot.si`,
@@ -105,7 +105,7 @@ describe("desktop companion endpoint", () => {
   });
 
   it("validates, adds, and removes the encrypted credential document field", () => {
-    const hostedAccess = { ...access, endpoint: `https://${LABEL}.openmausbot.com` };
+    const hostedAccess = { ...access, endpoint: `https://${LABEL}.example.invalid` };
     expect(desktopCompanionAccess({ [DESKTOP_COMPANION_FIELD]: hostedAccess })).toEqual(
       hostedAccess,
     );
@@ -165,15 +165,15 @@ describe("desktop companion pairing", () => {
       }),
     );
     const paired = await pairDesktopCompanion({
-      endpoint: `https://${LABEL}.openmausbot.com`,
+      endpoint: `https://${LABEL}.example.invalid`,
       code: "654321",
       deviceName: "Desktop client",
       requestId: "request-https-01",
       fetchImpl,
     });
-    expect(paired).toEqual({ ...access, endpoint: `https://${LABEL}.openmausbot.com` });
+    expect(paired).toEqual({ ...access, endpoint: `https://${LABEL}.example.invalid` });
     expect(fetchImpl).toHaveBeenCalledWith(
-      `https://${LABEL}.openmausbot.com/api/pair`,
+      `https://${LABEL}.example.invalid/api/pair`,
       expect.objectContaining({ method: "POST" }),
     );
 
@@ -198,7 +198,7 @@ describe("desktop companion pairing", () => {
         requestId: "request-https-03",
         fetchImpl,
       }),
-    ).rejects.toThrow("OpenMausBot HTTPS companion address");
+    ).rejects.toThrow("Fizot HTTPS companion address");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

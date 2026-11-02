@@ -214,7 +214,7 @@ describe("permission proxy", () => {
     // What the broker actually sends on a timeout: `answer`, source "timeout", and a full sentence.
     answerWith = () => ({
       behavior: "answer",
-      message: "OpenMausBot: nobody answered in time. Use your best judgment and continue.",
+      message: "Fizot: nobody answered in time. Use your best judgment and continue.",
       source: "timeout",
     });
     rpc({
@@ -229,7 +229,7 @@ describe("permission proxy", () => {
   it("treats the turn ending the same way — system words are not the user's answer", async () => {
     answerWith = () => ({
       behavior: "answer",
-      message: "OpenMausBot: the turn is ending — wrap up.",
+      message: "Fizot: the turn is ending — wrap up.",
       source: "system",
     });
     rpc({
@@ -242,7 +242,7 @@ describe("permission proxy", () => {
   });
 
   it("denies when the broker is gone, rather than reporting an empty answer", async () => {
-    answerWith = () => ({ behavior: "deny", message: "OpenMausBot: permission broker unavailable" });
+    answerWith = () => ({ behavior: "deny", message: "Fizot: permission broker unavailable" });
     rpc({
       jsonrpc: "2.0",
       id: 2,

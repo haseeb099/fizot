@@ -744,7 +744,7 @@ export interface SecretRequestCardData {
   description: string;
   placeholder: string;
   helpUrl: string;
-  /** A custom secret's use the person agrees to: "ref", OpenMausBot's own tools only; "file", the bot's commands. */
+  /** A custom secret's use the person agrees to: "ref", Fizot's own tools only; "file", the bot's commands. */
   delivery?: SecretDelivery;
   /** A custom secret: the bot's own words on why; `description` adds what the bot may do with it, and helpUrl is empty. */
   reason?: string;

@@ -9,7 +9,7 @@ const LINE_AND_BIDI = /[\u2028-\u202e\u2066-\u2069]/g;
 const isControl = (code: number): boolean => code < 0x20 || (code >= 0x7f && code <= 0x9f);
 const FORGED_END = /\[\s*end\s+of\s+records\s*\]/gi;
 // An opening bracket that would start one of our markers: a records block, a routine header, an untrusted-data or
-// instructions block, or one of OpenMausBot's own notes.
+// instructions block, or one of Fizot's own notes.
 const FORGED_START = /\[(?=\s*\/?\s*(?:records\s+from\b|scheduled\s+routine\b|routine\s+"|untrusted\b|user-configured\b|authenticated\b|default\b|openmausbot\b))/gi;
 
 const defuseMarkers = (text: string): string => text.replace(FORGED_END, "(end of records)").replace(FORGED_START, "(");

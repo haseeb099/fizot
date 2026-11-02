@@ -77,7 +77,7 @@ test("lease held elsewhere: DataDirLeaseError becomes locked, old lease reacquir
   const { calls, deps } = makeDeps({
     acquireLease: (targetDir) => {
       calls.push("acquire");
-      throw new DataDirLeaseError(`OpenMausBot is already using this data directory (process 123). ${targetDir}`);
+      throw new DataDirLeaseError(`Fizot is already using this data directory (process 123). ${targetDir}`);
     },
   });
   const result = await switchLocalEnvironment({ targetDir: dir, targetId: "env-2", deps });

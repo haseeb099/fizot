@@ -1,5 +1,5 @@
 // pi's MCP client: pi core ships none ("does not include built-in MCP"), so this extension, loaded with
-// `-e`, mounts every server in the OMB_MCP_CONFIG file as pi tools. OpenMausBot's proxies speak raw
+// `-e`, mounts every server in the OMB_MCP_CONFIG file as pi tools. Fizot's proxies speak raw
 // JSON-RPC 2.0 over stdio, one frame per line, without Content-Length framing.
 import { Type, type TObjectOptions, type TSchema, type TSchemaOptions } from "typebox";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -578,9 +578,9 @@ export default async function (pi: PiExtensionApi): Promise<void> {
   try {
     config = JSON.parse(readFileSync(configPath, "utf8")) as McpConfig;
   } catch {
-    throw new Error("OpenMausBot Pi MCP configuration could not be read");
+    throw new Error("Fizot Pi MCP configuration could not be read");
   }
-  if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("OpenMausBot Pi MCP configuration is invalid");
+  if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Fizot Pi MCP configuration is invalid");
   const parsed = parseToolScope(config.toolScope);
   if (!parsed.ok) throw new Error(parsed.error);
   const scope = parsed.scope;

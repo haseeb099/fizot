@@ -190,8 +190,8 @@ describe("drawing a widget", () => {
     expect(find("img")).toBeNull();
     act(() => find<HTMLButtonElement>(`button[title="${t("attach.externalHidden")}"]`)!.click());
     const image = find<HTMLImageElement>("img")!;
-    expect(image.getAttribute("src")).toBe("https://mausbot.com/og.png");
-    expect(image.getAttribute("alt")).toBe("MausBot");
+    expect(image.getAttribute("src")).toBe("");
+    expect(image.getAttribute("alt")).toBe("Fizot");
     expect(image.getAttribute("loading")).toBe("lazy");
     expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(Number.parseFloat(image.style.aspectRatio)).toBeCloseTo(16 / 9);
@@ -226,7 +226,7 @@ describe("drawing a widget", () => {
   it("lets a clipped button label be read in full, with a link's address under it", () => {
     mount(row(sample("kitchenSink")));
     expect(button("Send feedback")!.title).toBe("Send feedback");
-    expect(button("Open the docs")!.title).toBe("Open the docs\nhttps://mausbot.com/docs");
+    expect(button("Open the docs")!.title).toBe("Open the docs\n");
     mount(row(sample("pullRequests")));
     expect(button("Merge the two ready")!.title).toBe("Merge the two ready");
     expect(button("Fix #719 first")!.title).toBe("Fix #719 first");
@@ -526,7 +526,7 @@ describe("pressing", () => {
 
     mount(row(sample("kitchenSink")));
     await press(button("Open the docs")!);
-    expect(openExternal).toHaveBeenLastCalledWith("https://mausbot.com/docs");
+    expect(openExternal).toHaveBeenLastCalledWith("");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

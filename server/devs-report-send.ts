@@ -1,10 +1,9 @@
-// Sending one @devs report to the MausBot team's endpoint and reading its answer: 201 {id}; 400 or 413 {error}; 429
+// Sending one @devs report to the Fizot team's endpoint and reading its answer: 201 {id}; 400 or 413 {error}; 429
 // {error, retryAfter} (seconds, also Retry-After).
+import { fizotEndpoint } from "../shared/fizot-endpoints.ts";
 import { DEVS_REPORT_LIMITS, withoutContact, type DevsReportPayload } from "./devs-report.ts";
 
 export const BUG_REPORT_PATH = "/api/bug-reports";
-export const PRODUCTION_CLOUD_ORIGIN = "https://cloud.openmausbot.com";
-export const STAGING_CLOUD_ORIGIN = "https://omb-cloud-staging.fly.dev";
 const SEND_TIMEOUT_MS = 20_000;
 const ANSWER_MAX_BYTES = 16 * 1024;
 
@@ -15,19 +14,18 @@ export type SendOutcome =
   /** The endpoint refused this report; sending it again would be refused again. */
   | { ok: false; retry: false; why: "refused"; detail: string };
 
-/** OMB_BUG_REPORT_URL (an https address, or http on this machine's loopback, for fixtures), else a Cloud home's own
- * Admin origin, else the staging or production Cloud. */
-export function bugReportEndpoint(env: NodeJS.ProcessEnv, cloudOrigin?: string | null): string {
-  const explicit = env.OMB_BUG_REPORT_URL?.trim();
-  if (explicit) {
-    try {
-      const url = new URL(explicit);
-      const loopback = url.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
-      if ((url.protocol === "https:" || loopback) && !url.username && !url.password) return url.href;
-    } catch { /* not an address: the default below */ }
-  }
-  const origin = cloudOrigin ?? (env.OMB_CLOUD_STAGING === "1" ? STAGING_CLOUD_ORIGIN : PRODUCTION_CLOUD_ORIGIN);
-  return `${origin.replace(/\/+$/, "")}${BUG_REPORT_PATH}`;
+/** OMB_BUG_REPORT_URL (an https address, or http on this machine's loopback, for fixtures), else brand/endpoints.json.
+ * Empty means bug reports stay on this machine. A configured Cloud origin still gets the bug-report path. */
+export function bugReportEndpoint(env: NodeJS.ProcessEnv, cloudOrigin?: string | null): string | null {
+  const configured = env.OMB_BUG_REPORT_URL?.trim() || fizotEndpoint("bugReportUrl");
+  const explicit = configured || (cloudOrigin?.trim() ? `${cloudOrigin.trim().replace(/\/+$/, "")}${BUG_REPORT_PATH}` : "");
+  if (!explicit) return null;
+  try {
+    const url = new URL(explicit);
+    const loopback = url.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
+    if ((url.protocol === "https:" || loopback) && !url.username && !url.password) return url.href;
+  } catch { /* not an address */ }
+  return null;
 }
 
 async function boundedJson(response: Response): Promise<Record<string, unknown>> {
@@ -67,7 +65,8 @@ async function post(endpoint: string, payload: DevsReportPayload, fetcher: typeo
   }
 }
 
-export const devsReportSender = (endpoint: string, fetcher: typeof fetch = fetch) => (payload: DevsReportPayload) => sendDevsReport(endpoint, payload, fetcher);
+export const devsReportSender = (endpoint: string | null, fetcher: typeof fetch = fetch) => (payload: DevsReportPayload) =>
+  endpoint ? sendDevsReport(endpoint, payload, fetcher) : Promise.resolve({ ok: false as const, retry: false as const, why: "refused" as const, detail: "Bug reports are off." });
 
 export async function sendDevsReport(endpoint: string, payload: DevsReportPayload, fetcher: typeof fetch = fetch): Promise<SendOutcome> {
   let answer = await post(endpoint, payload, fetcher);

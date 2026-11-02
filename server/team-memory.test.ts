@@ -174,9 +174,9 @@ describe("resolve, update, remove", () => {
   });
 
   it("lets the person edit and delete, and keeps the file private", () => {
-    const { entry } = memory.propose("", { kind: "term", name: "OMB", detail: "OpenMausBot" }, source);
-    const edited = memory.update("", entry.id, { detail: "OpenMausBot, the app", aliases: ["OpenMaus"] });
-    expect(edited?.detail).toBe("OpenMausBot, the app");
+    const { entry } = memory.propose("", { kind: "term", name: "OMB", detail: "Fizot" }, source);
+    const edited = memory.update("", entry.id, { detail: "Fizot, the app", aliases: ["OpenMaus"] });
+    expect(edited?.detail).toBe("Fizot, the app");
     expect(edited?.aliases).toEqual(["OpenMaus"]);
     expect(memory.remove("", entry.id)).toBe(true);
     expect(memory.remove("", entry.id)).toBe(false);
@@ -184,7 +184,7 @@ describe("resolve, update, remove", () => {
   });
 
   it("survives a restart", () => {
-    memory.propose("", { kind: "term", name: "OMB", detail: "OpenMausBot" }, source);
+    memory.propose("", { kind: "term", name: "OMB", detail: "Fizot" }, source);
     const reopened = new TeamMemory(join(dir, "team-memory.json"));
     expect(reopened.list("")).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(dir, "team-memory.json"), "utf8")).version).toBe(2);

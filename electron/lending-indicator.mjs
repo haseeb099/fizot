@@ -17,7 +17,7 @@ export function createLendingIndicator({ Tray, Menu, nativeImage, iconPath, onPa
   let shown = null;
   const draw = view => {
     const { line, title } = indicatorText(view, device);
-    tray.setToolTip(`OpenMausBot: ${line}`);
+    tray.setToolTip(`Fizot: ${line}`);
     // Electron shows a tray title beside the icon on macOS only.
     tray.setTitle?.(title);
     tray.setContextMenu(Menu.buildFromTemplate([

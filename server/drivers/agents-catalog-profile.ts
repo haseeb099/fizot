@@ -17,7 +17,7 @@ export interface CatalogProfile {
   escalations?: boolean;
   /** A Team Cloud: message_person is mounted. */
   team?: boolean;
-  /** The person's MausBot with a Chief's powers: its notification tools are mounted. */
+  /** The person's Fizot with a Chief's powers: its notification tools are mounted. */
   mausbot?: boolean;
   /** A person's own request that may pick its computer: select_computer is mounted. Every other turn (a hand-off, a
    * routine, a room, a continuation) is refused a selection, so it is not shown the tool. */
