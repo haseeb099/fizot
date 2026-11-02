@@ -197,6 +197,15 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
   // @devs reports reach a loopback fake only, else a closed port: never the Fizot team.
   const bugReportUrl = parentEnv.OMB_BUG_REPORT_URL?.trim() ?? "";
   childEnv.OMB_BUG_REPORT_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}\/[A-Za-z0-9/_-]*$/.test(bugReportUrl) ? bugReportUrl : "http://127.0.0.1:9/api/bug-reports";
+  // Spike A forces outbound traffic through a loopback logging proxy only.
+  const proxyUrl = parentEnv.HTTPS_PROXY?.trim() || parentEnv.HTTP_PROXY?.trim() || "";
+  if (/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(proxyUrl)) {
+    childEnv.HTTPS_PROXY = proxyUrl;
+    childEnv.HTTP_PROXY = proxyUrl;
+    childEnv.https_proxy = proxyUrl;
+    childEnv.http_proxy = proxyUrl;
+    childEnv.NODE_USE_ENV_PROXY = "1";
+  }
   const tregUrl = parentEnv.OMB_TREG_URL?.trim() ?? "";
   if (/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(tregUrl)) childEnv.OMB_TREG_URL = tregUrl;
   // Loopback only, for harness mechanics: a fake ElevenLabs the measurement
