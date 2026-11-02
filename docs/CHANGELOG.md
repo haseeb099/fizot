@@ -4,7 +4,7 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35.
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 
@@ -353,6 +353,19 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. An empty-allow brand scan was 4028 hits before this change and 179 after. Those 179 are the listed files. The scan reports no unlisted brand leak. Chat messages still draw the geometric body. The picker labels and the app icon do not show it. The built renderer is scanned in CI after `vite build`; this machine did not run that build.
 - Files / Patch IDs: PATCH-22. Notion PR 31. https://app.notion.com/p/40bdd43e0a9d81acbc1fcad35e3e280f
 - Rollback: Restore the previous strings and the folder allow-list. Remove the brand map and the post-build scan step.
+
+## CL-35 Spike B: Fizot proxy, ledger caps and canary secrets
+
+- Date: 2026-11-02
+- Type: Code
+- Area: Proxy & billing; Sandbox & egress
+- Why we changed it: Keep model keys out of the bot sandbox and answer whether `OMB_CLOUD_AI_URL` is honoured (S2.9 / G2).
+- Why it is necessary: xAI keys are unbrokered in the box; Spike B decides the patch-vs-separate-sandbox path (K5).
+- How it works: `server/fizot/proxy` mints hashed `omb_ai_` tokens, proxies OpenAI chat/responses to a local mock xAI, append-only ledger with idempotency, 80% alert and 100% 402 cap. Local mock only until Gate 0b. Open question answer: **yes**, `CloudCreditProvider` uses `credential.api` from `OMB_CLOUD_AI_URL` on a Cloud home (`server/index.ts` ~1568).
+- Impact: No Fly spend. Not on the daily gate.
+- Rollback: Delete `server/fizot/proxy`, the spike-b workflow and tests.
+- Files / Patch IDs: PATCH-26. Notion PR 35. https://app.notion.com/p/40cdd43e0a9d816e9707f7c39c937f34
+- Related task: FZ-16 https://app.notion.com/p/408dd43e0a9d81d3aee3ea78f0864dc2
 
 ## CL-33 Shrink the daily CI gate until Phase 5 / G6
 
