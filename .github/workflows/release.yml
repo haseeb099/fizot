@@ -455,13 +455,13 @@ jobs:
           sudo chmod 4755 release/linux-unpacked/chrome-sandbox
           test "$(stat -c '%U:%G %a' release/linux-unpacked/chrome-sandbox)" = "root:root 4755"
       - name: "Gate: installed browser works with Ubuntu sandbox restrictions"
-        run: node scripts/smoke-browser-bundle.mjs --resources /opt/OpenMausBot/resources
+        run: node scripts/smoke-browser-bundle.mjs --resources /opt/Fizot/resources
       - name: "Gate: packaged Linux server discovers its browser"
         env:
-          OMB_SMOKE_DIST: /opt/OpenMausBot/resources/server
-        run: node scripts/smoke-packaged-server.mjs --browser-bundle /opt/OpenMausBot/resources/browser-engine
+          OMB_SMOKE_DIST: /opt/Fizot/resources/server
+        run: node scripts/smoke-packaged-server.mjs --browser-bundle /opt/Fizot/resources/browser-engine
       - name: "Gate: packaged server and phone helper load as ES modules"
-        run: node scripts/check-module-scopes.mjs /opt/OpenMausBot/resources
+        run: node scripts/check-module-scopes.mjs /opt/Fizot/resources
       - name: Smoke the packages
         env:
           OMB_KEEP_SMOKE_DIR: "1"
