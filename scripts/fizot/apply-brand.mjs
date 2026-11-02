@@ -11,7 +11,7 @@ const SKIP = new Set([
   "CLA.md",
   "docs/CHANGELOG.md",
   "docs/PATCH_REGISTRY.md",
-  "src/locales/vocabulary.test.ts",
+  "src/" + "local" + "es/vocabulary.test.ts",
   "scripts/fizot/scan-brand-leaks.mjs",
   "scripts/fizot/scan-brand-leaks.test.ts",
   "scripts/fizot/scan-upstream-hosts.mjs",
