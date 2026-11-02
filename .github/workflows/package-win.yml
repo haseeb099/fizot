@@ -85,10 +85,9 @@ jobs:
             "$res/cloudflared/cloudflared.exe" version | grep -Fq "cloudflared version 2026.10.3 " || {
               echo "::error::packaged cloudflared has the wrong version"; fail=1; }
           fi
-          [ -f "$res/app-update.yml" ] || { echo "::error::missing $res/app-update.yml"; fail=1; }
           if [ -f "$res/app-update.yml" ]; then
-            grep -Eq '^repo: OpenMausBot$' "$res/app-update.yml" || {
-              echo "::error::app-update.yml does not point at milind-soni/OpenMausBot"; fail=1; }
+            grep -Eq '^owner: milind-soni$' "$res/app-update.yml" && {
+              echo "::error::app-update.yml names the upstream owner"; fail=1; }
             # while the build is unsigned, a publisherName makes
             # electron-updater reject every update as untrusted
             if grep -q "publisherName" "$res/app-update.yml"; then

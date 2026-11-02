@@ -188,13 +188,13 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm package:mac
 
-      - name: "Gate: both packaged apps use the canonical updater feed"
+      - name: "Gate: packaged apps do not use the upstream updater feed"
         run: |
-          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
+          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app release/mac-arm64/Fizot.app release/mac/Fizot.app; do
             update="$app/Contents/Resources/app-update.yml"
-            test -f "$update" || { echo "::error::missing $update"; exit 1; }
-            grep -Eq '^owner: milind-soni$' "$update" || { echo "::error::wrong update owner in $update"; exit 1; }
-            grep -Eq '^repo: OpenMausBot$' "$update" || { echo "::error::wrong update repo in $update"; exit 1; }
+            if [ -f "$update" ] && grep -Eq '^owner: milind-soni$' "$update"; then
+              echo "::error::app-update.yml names the upstream owner in $update"; exit 1
+            fi
           done
 
       - name: "Gate: the signature must verify BEFORE notarization"
@@ -366,10 +366,10 @@ jobs:
           [ "$actual" = "$expected" ] || { echo "::error::cloudflared hash is $actual"; exit 1; }
           "$res/cloudflared/cloudflared.exe" version | grep -Fq "cloudflared version 2026.10.3 " || {
             echo "::error::cloudflared has the wrong version"; exit 1; }
-          [ -f "$res/app-update.yml" ] || { echo "::error::missing app-update.yml"; exit 1; }
-          grep -Eq '^owner: milind-soni$' "$res/app-update.yml" || { echo "::error::wrong update owner"; exit 1; }
-          grep -Eq '^repo: OpenMausBot$' "$res/app-update.yml" || { echo "::error::wrong update repo"; exit 1; }
-          if grep -q "publisherName" "$res/app-update.yml"; then
+          if [ -f "$res/app-update.yml" ] && grep -Eq '^owner: milind-soni$' "$res/app-update.yml"; then
+            echo "::error::app-update.yml names the upstream owner"; exit 1
+          fi
+          if [ -f "$res/app-update.yml" ] && grep -q "publisherName" "$res/app-update.yml"; then
             echo "::error::publisherName on an unsigned build breaks every update"; exit 1
           fi
           HOME="$RUNNER_TEMP/smoke" USERPROFILE="$RUNNER_TEMP/smoke" OMB_PORT=21987 \
@@ -429,9 +429,9 @@ jobs:
       - name: Verify the packaged updater target
         run: |
           update=release/linux-unpacked/resources/app-update.yml
-          test -f "$update" || { echo "::error::missing $update"; exit 1; }
-          grep -Eq '^owner: milind-soni$' "$update" || { echo "::error::wrong update owner"; exit 1; }
-          grep -Eq '^repo: OpenMausBot$' "$update" || { echo "::error::wrong update repo"; exit 1; }
+          if [ -f "$update" ] && grep -Eq '^owner: milind-soni$' "$update"; then
+            echo "::error::app-update.yml names the upstream owner"; exit 1
+          fi
       - name: Verify package contents and metadata
         run: node scripts/verify-linux-package.mjs
       - name: Match a normal Ubuntu package parent on the ephemeral runner

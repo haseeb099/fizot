@@ -6,17 +6,9 @@ protocols:
   - name: Fizot package install
     schemes: [openmausbot]
 
-# In-app auto-update reads latest-mac.yml + the .zip (macOS) or latest.yml +
-# the NSIS .exe (Windows) from the PUBLIC releases in this source repo.
-# Public → no token on users' machines. Baked into
-# app-update.yml; both metadata files are emitted here even with
-# --publish never, and must be uploaded to the GitHub release alongside the
-# artifacts — a release missing latest.yml leaves every Windows install
-# stranded on its installed version.
-publish:
-  - provider: github
-    owner: milind-soni
-    repo: OpenMausBot
+# Desktop auto-update is off. A publish target would bake an upstream
+# repository into app-update.yml, and this fork has no update feed yet.
+publish: null
 
 directories:
   buildResources: build
