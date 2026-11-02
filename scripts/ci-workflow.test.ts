@@ -303,6 +303,13 @@ describe("CI concurrency", () => {
     expect(Object.keys(workflow.jobs)).not.toContain("spike-a");
   });
 
+  it("keeps Spike B proxy capture off the daily gate", () => {
+    const spike = parse(readFileSync(new URL("../.github/workflows/spike-b.yml", import.meta.url), "utf8"));
+    expect(spike.on).toHaveProperty("workflow_dispatch");
+    expect(spike.on.pull_request?.paths?.length).toBeGreaterThan(0);
+    expect(Object.keys(workflow.jobs)).not.toContain("spike-b");
+  });
+
   it("keeps the redundant Windows workflow available only for manual debugging", () => {
     const smoke = parse(readFileSync(new URL("../.github/workflows/shared-terminal-smoke.yml", import.meta.url), "utf8"));
     expect(smoke.on).toEqual({ workflow_dispatch: null });
