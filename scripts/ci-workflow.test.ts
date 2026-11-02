@@ -296,9 +296,10 @@ describe("CI concurrency", () => {
     expect(vendor.on).toEqual({ workflow_dispatch: null });
   });
 
-  it("keeps Spike A network capture manual and off the daily gate", () => {
+  it("keeps Spike A network capture off the daily gate", () => {
     const spike = parse(readFileSync(new URL("../.github/workflows/spike-a.yml", import.meta.url), "utf8"));
-    expect(spike.on).toEqual({ workflow_dispatch: null });
+    expect(spike.on).toHaveProperty("workflow_dispatch");
+    expect(spike.on.pull_request?.paths?.length).toBeGreaterThan(0);
     expect(Object.keys(workflow.jobs)).not.toContain("spike-a");
   });
 

@@ -1,9 +1,17 @@
 name: Spike A network capture
 
-# Manual only. Needs Linux for the logging proxy and optional strace attach.
-# Not part of the daily CI gate.
+# Needs Linux for the logging proxy and optional strace attach. Not part of the
+# daily CI gate. workflow_dispatch is the steady trigger once this file is on
+# main; pull_request (path-filtered) is how the first evidence run starts from
+# a branch GitHub has not yet listed for manual dispatch.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/spike-a.yml"
+      - "scripts/fizot/spike-a.mjs"
+      - "scripts/fizot/spike-a-*.mjs"
+      - "tests/fizot/spike-a.test.ts"
 
 permissions:
   contents: read
