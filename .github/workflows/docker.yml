@@ -2,27 +2,11 @@ name: Docker image
 
 on:
   # release.yml dispatches this on the tag it just published: a tag created
-  # with the workflow token never fires push events on its own.
+  # with the workflow token never fires push events on its own. Pull requests
+  # and pushes to main run the short boot smoke in ci.yml instead.
   workflow_dispatch:
   push:
-    branches: [main]
     tags: ["v*"]
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - deploy/**
-      - server/**
-      - src/**
-      - scripts/bundle-server.mjs
-      - package.json
-      - pnpm-lock.yaml
-      - .github/workflows/docker.yml
-  pull_request:
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - deploy/**
-      - .github/workflows/docker.yml
 
 permissions:
   contents: read

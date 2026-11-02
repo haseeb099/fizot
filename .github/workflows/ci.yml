@@ -46,9 +46,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      # ci-scope reads whether the commit before a push got its own green run,
-      # and whether the pushed commit already passed the merge queue
-      actions: read
     outputs:
       jobs: ${{ steps.scope.outputs.jobs }}
       vitest_os: ${{ steps.scope.outputs.vitest_os }}
@@ -68,8 +65,6 @@ jobs:
           cache: pnpm
       - name: Select checks for this change
         id: scope
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: node scripts/ci-scope.mjs
       - run: pnpm install --frozen-lockfile
       - name: Guard enterprise imports
@@ -79,7 +74,7 @@ jobs:
       - name: Scan brand leaks
         run: node scripts/fizot/scan-brand-leaks.mjs
       - name: Verify CI selection and documentation references
-        run: pnpm exec vitest run scripts/fizot scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts
+        run: pnpm exec vitest run fizot/ scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
       - run: pnpm lint
@@ -239,7 +234,7 @@ jobs:
 
   windows-cua:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"windows-cua"')
+    if: contains(needs.static.outputs.jobs, '"windows-cua"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     name: Windows CUA host smoke
     runs-on: windows-latest
     timeout-minutes: 10
@@ -293,10 +288,33 @@ jobs:
         # Forks dist-server/index.js, built by the packaged server step.
         run: pnpm exec electron scripts/smoke-login-handoff.cjs
 
+  docker:
+    needs: static
+    if: contains(needs.static.outputs.jobs, '"docker"')
+    name: Docker build + boot smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t openmausbot:ci .
+      - name: Boot the container and prove the server and UI answer
+        run: |
+          set -euo pipefail
+          docker run -d --name omb openmausbot:ci
+          for i in $(seq 1 40); do
+            if docker exec omb curl -sf http://127.0.0.1:8799/api/health | grep -q openmausbot; then break; fi
+            sleep 2
+            if [ "$i" = "40" ]; then docker logs omb; echo "server never became healthy"; exit 1; fi
+          done
+          docker exec omb curl -sf http://127.0.0.1:8799/ | grep -qi "<html" || { docker logs omb; echo "UI not served"; exit 1; }
+
   gate:
     # One aggregation, not three queued runners doing the same check.
     name: CI
-    needs: [static, foss, packaged-server, ui-smoke]
+    needs: [static, foss, packaged-server, ui-smoke, docker]
     # Still report failed/skipped dependencies, but don't keep a superseded
     # workflow alive just to schedule its summary jobs.
     if: ${{ !cancelled() }}
@@ -323,7 +341,7 @@ jobs:
 
   cloudflared-linux-arm64:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"cloudflared-linux-arm64"')
+    if: contains(needs.static.outputs.jobs, '"cloudflared-linux-arm64"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     name: cloudflared installer (Linux ARM64)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
@@ -406,7 +424,7 @@ jobs:
     # the deploy gap that left #1914's broker fix (45cc2cf) sitting in
     # source without reaching Cloudflare.
     needs: [control-plane]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: deploy composio broker (Cloudflare Worker)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -535,7 +553,7 @@ jobs:
 
   package-linux:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"package-linux"')
+    if: contains(needs.static.outputs.jobs, '"package-linux"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     name: package + smoke (Ubuntu 24.04 x64)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -606,7 +624,7 @@ jobs:
 
   browser-driver:
     needs: static
-    if: contains(needs.static.outputs.jobs, '"browser-driver"')
+    if: contains(needs.static.outputs.jobs, '"browser-driver"') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     # Advisory, outside the CI gate until it has run green for a while: the
     # omb-cdp S4 conformance suites and the new browser's checklist and viewer
     # suites on the runner's own Google Chrome (PRs run Linux and Windows, the

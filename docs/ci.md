@@ -1,12 +1,13 @@
 # CI job selection
 
-Every PR still runs the workflow, its `static` job and the `CI` gate: locale
-validation, lint, the CI-selection tests and the verification-documentation
-checks always run. Selection never skips the entire workflow.
+A pull request and a push to main run the daily gate and nothing else:
+`static` (typecheck, lint, the host and brand scans, and the Fizot tests),
+the open-source edition, the packaged server smoke on `ubuntu-latest`, the
+renderer smoke, and the Docker build and boot smoke. The `CI` job is that
+gate. The path areas below are what `selectCiScope` still computes. Pull
+requests, pushes to main and merge groups do not use them.
 
-`scripts/ci-scope.mjs` sorts a pull request's changed files (a local
-merge-base diff, rename detection off, so a moved file selects its old path
-too) into areas, and runs only the jobs some area can affect:
+`scripts/ci-scope.mjs` can still sort changed files into areas:
 
 | Area | Paths | What runs |
 | --- | --- | --- |
@@ -39,44 +40,20 @@ areas run the union of their jobs. Why the mapping is what it is:
   scripts and pinned downloads, so only `scripts/` and dependency changes run
   them.
 
-## Lanes: pull requests, main and the full lane
+## Lanes: the daily gate and the full lane
 
-Only pull requests use the areas. Every other event runs one of two fixed
-sets (`laneOf` in `scripts/ci-scope.mjs`):
+`laneOf` in `scripts/ci-scope.mjs` picks the lane:
 
 | Event | Lane | What runs |
 | --- | --- | --- |
-| `pull_request` | its areas | the table above, with Linux and Windows shards |
-| `push` to main, `merge_group` | main | static (typecheck, lint, the build), the eight Linux shards with the Electron node tests, the macOS smokes job, behavior evals, the Linux packaged server smoke, the open-source edition, the control plane, the renderer smoke and Linux browser identity |
-| `schedule` (nightly, 21:17 UTC), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
+| `pull_request`, `push` to main, `merge_group` | daily | static, the open-source edition, the packaged server smoke on `ubuntu-latest`, the renderer smoke, and the Docker build and boot smoke |
+| `schedule` (nightly, 21:17 UTC), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every selectable job, including the upstream vitest shards, behavior evals, browser identity, the macOS smokes, the Linux package, the Windows packaged server and Windows CUA smokes, the browser driver, and the Linux ARM64 installer |
 
-The main lane keeps to runners that do not hold main up: Linux, and one macOS
-job. The Windows and macOS shards, and every smoke that needs a Windows or a
-second macOS runner, wait for the night or a release. A change that breaks
-only Windows or macOS shows up in its own PR (PRs still run the Windows shards
-wherever a change can affect them), in the nightly run, or in the release
-lane, which only an emergency `ship_without_ci` release skips.
+Desktop packaging stays off the daily gate until Phase 5 / G6. The control-plane job stays skipped because that worker tree is gone, so the broker deploy, which needs it, does not run on a push to main. `browser-vendor-windows.yml` stays `workflow_dispatch` only.
 
-- A push to main is scoped by its own commits (`before..after`): docs only
-  (root Markdown, Markdown under `docs/`, `.github/FUNDING.yml`), or a
-  `package.json` change that only bumps `"version"` (the release bump), skips
-  the runtime jobs. It does so only when the commit before the push has a green
-  CI run of its own. Main's waiting run is replaced by each push, so without
-  that check a replaced run's code would never be tested. Every other push runs
-  the main lane.
-- A push whose commit already passed the `CI` gate in a merge group runs only
-  the control-plane job (the broker deploy needs it). The merge queue lands
-  its group's own commit, so the merge group's run tested exactly what the push
-  brings; `ci-scope.mjs` reads that run's gate job, which can pass before the
-  run's last job has finished.
-- Merge groups always run the main lane, whatever they change. Empty or
-  unreadable push diffs, and a commit whose CI cannot be read, fall back to the
-  main lane; a pull request whose diff cannot be read falls back to every job
-  on every platform.
-
-The single `CI` gate keeps the existing required dependencies. `static`
-outputs the selected job ids; the gate wants each required job to have passed
-when it was selected and to have been skipped when it was not. Failures,
+The single `CI` gate needs static and the four daily jobs. `static` outputs the
+selected job ids; the gate wants each required job to have passed when it was
+selected and to have been skipped when it was not. Failures,
 cancellations, a missing or malformed selection and unexpected runs or skips
 fail the gate. Advisory jobs remain advisory. A new push to a PR cancels that
 PR's older run (see Main and releases for every other group).
@@ -87,8 +64,8 @@ run in the Windows Vitest/Electron jobs.
 ## Vitest shards
 
 The suite runs one file at a time, so a shard takes as long as its files added
-up, and the slowest shard sets how long a PR and a release wait. Linux and
-Windows run eight shards each, macOS four (the full lane only);
+up, and the slowest shard sets how long the nightly run and a release wait.
+Linux and Windows run eight shards each, macOS four (the full lane only);
 `scripts/ci-scope.mjs` builds the matrix.
 
 **Which files run where.** Linux runs every file. Most e2e files drive

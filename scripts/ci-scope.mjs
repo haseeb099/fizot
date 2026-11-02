@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,7 +9,7 @@ import { fileURLToPath } from "node:url";
 // event runs it), and the subsets in VITEST_SUBSETS.
 export const SELECTABLE_JOBS = [
   "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "cloudflared-linux-arm64",
-  "foss", "control-plane", "ui-smoke", "browser-identity", "package-linux", "browser-driver",
+  "foss", "control-plane", "ui-smoke", "browser-identity", "package-linux", "browser-driver", "docker",
 ];
 
 // The server imports Electron and renderer modules, and the macOS smokes run
@@ -20,7 +19,7 @@ const SERVER_CHECKS = [
   "build", "linux-tests", "host-tests", "behavior-evals", "packaged-server", "foss", "electron-smokes",
   "ui-smoke", "browser-identity", "browser-driver", "package-linux",
 ];
-const EVERY_CHECK = [...SERVER_CHECKS, "windows-cua", "cloudflared-linux-arm64", "control-plane"];
+const EVERY_CHECK = [...SERVER_CHECKS, "windows-cua", "cloudflared-linux-arm64", "control-plane", "docker"];
 
 /** What a pull request's change in each area can affect. */
 export const AREA_CHECKS = {
@@ -83,12 +82,10 @@ export function areaOf(file) {
 
 export const FULL_SCOPE = { areas: ["everything"], checks: [...EVERY_CHECK].sort() };
 
-/** A push to main and a merge group: the build, every test file on Linux, the macOS smokes and the Linux checks no
- * longer than a shard. The Windows and macOS shards and smokes, the Linux package, the browser driver and the ARM
- * installer run in the full lane only: nightly, manual runs and the release lane. */
+/** A pull request, a push to main and a merge group. The other jobs run only on the nightly schedule or a manual run. */
 export const MAIN_SCOPE = {
-  areas: ["main"],
-  checks: ["behavior-evals", "browser-identity", "build", "control-plane", "electron-smokes", "foss", "linux-tests", "packaged-server", "ui-smoke"],
+  areas: ["daily"],
+  checks: ["build", "docker", "foss", "packaged-server", "ui-smoke"],
 };
 
 /** A push whose commit already passed the CI gate in the merge queue: only the control-plane checks the broker deploy needs. */
@@ -133,13 +130,8 @@ export function selectPushScope(files, show) {
   return { runtime: true };
 }
 
-// macOS runners are the scarce ones (five at a time for the whole account),
-// and only a couple of test blocks are macOS-only, so a PR runs the suite on
-// Linux and Windows, and a push to main or a merge group on Linux. The full lane
-// adds macOS. A PR that can affect the macOS smokes still runs them.
+// The daily gate does not run the suite. The nightly and manual lane runs every platform.
 export const ALL_OS = ["macos-latest", "ubuntu-latest", "windows-latest"];
-const PR_OS = ["ubuntu-latest", "windows-latest"];
-const MAIN_OS = ["ubuntu-latest"];
 
 /** Events whose runs test every platform: the nightly run, manual runs and the release lane (a manual run). */
 export const FULL_LANE_EVENTS = ["schedule", "workflow_dispatch"];
@@ -192,87 +184,10 @@ export function ciOutputs({ checks }, oses) {
   };
 }
 
-const SHA = /^[a-f\d]{40}(?:[a-f\d]{24})?$/i;
-
-const git = (args) => execFileSync("git", args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-
-function changedFiles(range) {
-  // Disabling rename detection retains both old and new paths, including deletions.
-  const diff = git(["diff", "--name-only", "--no-renames", "-z", range, "--"]);
-  if (!diff || !diff.endsWith("\0")) throw new Error("Empty or invalid changed-path output");
-  return diff.slice(0, -1).split("\0");
-}
-
-async function github(path) {
-  const { GH_TOKEN, GITHUB_REPOSITORY, GITHUB_API_URL = "https://api.github.com" } = process.env;
-  if (!GH_TOKEN || !GITHUB_REPOSITORY) throw new Error("GH_TOKEN and GITHUB_REPOSITORY are needed to read CI runs");
-  const response = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}${path}`, {
-    headers: { authorization: `Bearer ${GH_TOKEN}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status} reading ${path.split("?")[0]}`);
-  return response.json();
-}
-
-const ciRuns = async (sha) => (await github(`/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=100`)).workflow_runs;
-
-/** Did the commit before this push get a green CI run of its own? Main keeps
- * one run going and one waiting, and a push replaces the waiting run: if the
- * previous commit's run was replaced, its changes were never tested, so this
- * push must run main's checks even when its own diff is docs or a version. */
-async function previousCommitGreen(sha) {
-  return (await ciRuns(sha)).some((run) => ["push", "merge_group", ...FULL_LANE_EVENTS].includes(run.event)
-    && run.status === "completed" && run.conclusion === "success");
-}
-
-/** Did this exact commit pass the CI gate in the merge queue? The queue lands a merge group's own commit, so its run
- * already tested what this push brings; the gate job is read because the push can come before the run has finished. */
-async function passedMergeQueue(sha) {
-  for (const run of (await ciRuns(sha)).filter((candidate) => candidate.event === "merge_group")) {
-    const { jobs } = await github(`/actions/runs/${run.id}/jobs?per_page=100`);
-    if (jobs.some((job) => job.name === "CI" && job.conclusion === "success")) return true;
-  }
-  return false;
-}
-
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const lane = laneOf(process.env.GITHUB_EVENT_NAME);
-  let scope = lane === "main" ? MAIN_SCOPE : FULL_SCOPE;
-  let vitestOs = lane === "main" ? MAIN_OS : ALL_OS;
-  if (lane === "pr") {
-    try {
-      const { pull_request: pr } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-      const base = pr?.base?.sha;
-      const head = pr?.head?.sha;
-      if (![base, head].every((sha) => typeof sha === "string" && SHA.test(sha))) {
-        throw new Error("Missing or invalid pull request commit SHAs");
-      }
-      scope = selectCiScope(changedFiles(`${base}...${head}`));
-      vitestOs = PR_OS;
-    } catch (error) {
-      console.warn(`CI scope: using all checks because the pull request diff is unavailable: ${error.message}`);
-    }
-  } else if (process.env.GITHUB_EVENT_NAME === "push") {
-    // A push to main is scoped by its own commits; the release gate counts only
-    // a run of every platform's shards as tested.
-    try {
-      const { before, after } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-      if (![before, after].every((sha) => typeof sha === "string" && SHA.test(sha)) || /^0+$/.test(before)) {
-        throw new Error("Missing or invalid push commit SHAs");
-      }
-      const revs = { before, after };
-      const selected = selectPushScope(changedFiles(`${before}..${after}`), (rev, path) => git(["show", `${revs[rev]}:${path}`]));
-      if (await passedMergeQueue(after)) {
-        scope = QUEUED_SCOPE;
-      } else if (!selected.runtime && !(await previousCommitGreen(before))) {
-        console.warn(`CI scope: using main's checks because ${before} has no green CI run of its own`);
-      } else if (!selected.runtime) {
-        scope = { areas: ["docs or version only"], checks: ["build"] };
-      }
-    } catch (error) {
-      console.warn(`CI scope: using main's checks because the push diff or its CI is unavailable: ${error.message}`);
-    }
-  }
+  const scope = lane === "full" ? FULL_SCOPE : MAIN_SCOPE;
+  const vitestOs = lane === "full" ? ALL_OS : ["ubuntu-latest"];
   const outputs = ciOutputs(scope, vitestOs);
   console.log(`CI scope: ${scope.areas.join(", ")} -> ${outputs.jobs.join(", ") || "static checks only"}`);
   appendFileSync(
