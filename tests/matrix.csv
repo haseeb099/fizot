@@ -7,8 +7,8 @@ TM-I,Test matrix,integration,CI fails if a gate in the plan has no row,none,G0,p
 TM-E,Test matrix,e2e,The release-candidate run reads the matrix and reports every row's status,none,G0,planned,T0.4
 SA-U,Spike A,unit,Brand map covers every string the build reads,none,G2,implemented,S2.8
 SA-I,Spike A,integration,Network capture of a full run shows zero calls to upstream hosts,none,G2,implemented,S2.8
-SA-E,Spike A,e2e,One chat in a browser during the capture,none,G2,implemented,S2.8
-SB-U,Spike B,unit,Key redaction and one-hour key expiry,none,G2,planned,S2.9
+SA-E,Spike A,e2e,One chat in a browser during the capture,none,G2,planned,S2.8
+SB-U,Spike B,unit,Key redaction and one-hour key expiry,none,G2,implemented,S2.9
 SB-I,Spike B,integration,"Canary secrets unreachable from the shell, with the proxy patch on a mock provider",TC26; TC51,G2,planned,S2.9
 SB-E,Spike B,e2e,A bot told to find the secrets fails in a real browser chat,none,G2,planned,S2.9
 CS-U,Cost sheet,unit,"The price formula reproduces the 25 GBP case: 20.83 GBP before VAT allows about 15.40 dollars of monthly cost",none,"G2, G3",planned,S2.10
@@ -20,7 +20,7 @@ AD-E,Fizot Admin,e2e,"J1, J2, J8, J10","J1; J2; J8; J10",G4,planned,S2.11
 SW-U,Sleep and wake,unit,Idle timer and wake time,none,G4,planned,P4.5
 SW-I,Sleep and wake,integration,Ready within 60 seconds; schedules wake the instance; each event delivered once,TC56,G4,planned,P4.5
 SW-E,Sleep and wake,e2e,A chat after idle sleep (add this step to J2),J2,G4,planned,P4.5
-PL-U,"Proxy, ledger and billing",unit,"Append-only ledger, 12-month expiry, idempotency key, metering, caps at 80% and 100%, VAT, one-hour virtual keys",none,G4,planned,P4.3
+PL-U,"Proxy, ledger and billing",unit,"Append-only ledger, 12-month expiry, idempotency key, metering, caps at 80% and 100%, VAT, one-hour virtual keys",none,G4,implemented,P4.3
 PL-I,"Proxy, ledger and billing",integration,"Stripe test mode with duplicate and out-of-order webhooks; proxy on a mock provider plus a small real xAI canary; ledger within 1% of proxy usage",none,G4,planned,P4.4
 PL-E,"Proxy, ledger and billing",e2e,"J4, J9","J4; J9",G4,planned,P4.4
 SE-U,Sandbox and egress,unit,Allow-list matcher; private-range and metadata blocks,none,"G2, G4",planned,P4.7
