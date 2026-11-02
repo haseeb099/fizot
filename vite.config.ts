@@ -13,6 +13,29 @@ const { version } = JSON.parse(
   readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
 ) as { version: string };
 
+const analyticsHost = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./brand/endpoints.json", import.meta.url)), "utf8"),
+).analyticsHost;
+const analyticsOff = typeof analyticsHost !== "string" || analyticsHost.trim() === "";
+
+// Vite 7 still emits a chunk for import("posthog-js") when init returns first.
+// With an empty analytics URL that chunk is the library default and is never loaded.
+function dropPosthogWhileAnalyticsOff() {
+  return {
+    name: "drop-posthog-while-analytics-off",
+    enforce: "pre" as const,
+    resolveId(id: string) {
+      if (id === "posthog-js" || id.replaceAll("\\", "/").includes("/posthog-js/")) {
+        return "\0analytics-off";
+      }
+    },
+    load(id: string) {
+      if (id !== "\0analytics-off") return;
+      return "export default {};";
+    },
+  };
+}
+
 const root = fileURLToPath(new URL(".", import.meta.url));
 const include = [
   "evals/**/*.test.ts",
@@ -27,8 +50,12 @@ const include = [
   "scripts/**/*.test.ts",
 ];
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
+export default defineConfig(({ command }) => ({
+  plugins: [
+    react(),
+    tailwindcss(),
+    command === "build" && analyticsOff ? dropPosthogWhileAnalyticsOff() : null,
+  ].filter((plugin) => plugin !== null),
   define: {
     __APP_VERSION__: JSON.stringify(version),
   },
@@ -77,4 +104,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

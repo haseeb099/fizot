@@ -68,11 +68,14 @@ function requirePackageType(resources, label, expected) {
   }
 }
 
+export function appUpdateNamesUpstreamOwner(text) {
+  return /^owner: milind-soni$/m.test(text);
+}
+
 function requireUpdaterTarget(resources, label) {
   const updateFile = path.join(resources, "app-update.yml");
   if (!statSync(updateFile, { throwIfNoEntry: false })?.isFile()) return;
-  const update = readFileSync(updateFile, "utf8");
-  if (/^owner: milind-soni$/m.test(update)) {
+  if (appUpdateNamesUpstreamOwner(readFileSync(updateFile, "utf8"))) {
     fail(`${label} app-update.yml names the upstream owner`);
   }
 }
@@ -393,6 +396,15 @@ function verifyCloudflaredResources(resources, label, { directoryMode = 0o755 } 
   return actualHash;
 }
 
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
+verifyLinuxPackage();
+}
+
+function verifyLinuxPackage() {
 const appImage = exactlyOne(".AppImage");
 const deb = exactlyOne(".deb");
 const unpacked = path.join(releaseDir, "linux-unpacked");
@@ -529,3 +541,4 @@ try {
 }
 
 console.log(`[verify-linux-package] OK\n- ${path.basename(appImage)}\n- ${path.basename(deb)}`);
+}

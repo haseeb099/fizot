@@ -17,6 +17,10 @@ directories:
 # electron-builder makes copied directories group-writable by default. The
 # Linux CUA trust boundary requires root-owned package ancestors to be 0755.
 afterPack: ./scripts/after-pack.mjs
+# app-builder-lib 26.15.3 writes resources/package-type only in FpmTarget's
+# publish-config branch, which would also write an update URL. This hook
+# stamps the deb marker after the AppImage has already been packed.
+afterAllArtifactBuild: ./scripts/deb-package-type.mjs
 
 # The app is three self-contained pieces, none needing node_modules at
 # runtime: the Electron main/preload (plain .mjs/.cjs), the built UI
