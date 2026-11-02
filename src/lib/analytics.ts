@@ -4,7 +4,7 @@ import type { CaptureResult, PostHog } from "posthog-js";
 import { DESKTOP_PORTS } from "../../electron/desktop-ports.mjs";
 import { appVersion } from "@/lib/app-links";
 import { readAdvancedMode } from "@/lib/interface-mode";
-import { fizotEndpoint } from "../../shared/fizot-endpoints.ts";
+import { fizotEndpoint } from "./fizot-endpoints.ts";
 
 const TOKEN = "phc_m2hP39w8y2gLPvHgDvSXAu6xcZ3agjf4ruL56rGcMZEe";
 

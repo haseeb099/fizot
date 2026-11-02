@@ -1,4 +1,4 @@
-import { fizotEndpoint } from "../../shared/fizot-endpoints.ts";
+import { fizotEndpoint } from "./fizot-endpoints.ts";
 
 export const APP_NAME = "Fizot";
 const repository = fizotEndpoint("repositoryUrl");
