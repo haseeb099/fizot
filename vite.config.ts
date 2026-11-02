@@ -23,7 +23,7 @@ const analyticsOff = typeof analyticsHost !== "string" || analyticsHost.trim() =
 function dropPosthogWhileAnalyticsOff() {
   return {
     name: "drop-posthog-while-analytics-off",
-    apply: "build",
+    apply: "build" as const,
     enforce: "pre" as const,
     resolveId(id: string) {
       if (id === "posthog-js" || id.replaceAll("\\", "/").includes("/posthog-js/")) {
