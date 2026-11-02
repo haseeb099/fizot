@@ -296,6 +296,12 @@ describe("CI concurrency", () => {
     expect(vendor.on).toEqual({ workflow_dispatch: null });
   });
 
+  it("keeps Spike A network capture manual and off the daily gate", () => {
+    const spike = parse(readFileSync(new URL("../.github/workflows/spike-a.yml", import.meta.url), "utf8"));
+    expect(spike.on).toEqual({ workflow_dispatch: null });
+    expect(Object.keys(workflow.jobs)).not.toContain("spike-a");
+  });
+
   it("keeps the redundant Windows workflow available only for manual debugging", () => {
     const smoke = parse(readFileSync(new URL("../.github/workflows/shared-terminal-smoke.yml", import.meta.url), "utf8"));
     expect(smoke.on).toEqual({ workflow_dispatch: null });

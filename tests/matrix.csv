@@ -5,9 +5,9 @@ FB-E,Fork and brand layer,e2e,"Rebranded build opens in a browser at desktop and
 TM-U,Test matrix,unit,"Parser rejects any row missing an id, layer, gate, journey or owner task",none,G0,planned,T0.4
 TM-I,Test matrix,integration,CI fails if a gate in the plan has no row,none,G0,planned,T0.4
 TM-E,Test matrix,e2e,The release-candidate run reads the matrix and reports every row's status,none,G0,planned,T0.4
-SA-U,Spike A,unit,Brand map covers every string the build reads,none,G2,planned,S2.8
-SA-I,Spike A,integration,Network capture of a full run shows zero calls to upstream hosts,none,G2,planned,S2.8
-SA-E,Spike A,e2e,One chat in a browser during the capture,none,G2,planned,S2.8
+SA-U,Spike A,unit,Brand map covers every string the build reads,none,G2,implemented,S2.8
+SA-I,Spike A,integration,Network capture of a full run shows zero calls to upstream hosts,none,G2,implemented,S2.8
+SA-E,Spike A,e2e,One chat in a browser during the capture,none,G2,implemented,S2.8
 SB-U,Spike B,unit,Key redaction and one-hour key expiry,none,G2,planned,S2.9
 SB-I,Spike B,integration,"Canary secrets unreachable from the shell, with the proxy patch on a mock provider",TC26; TC51,G2,planned,S2.9
 SB-E,Spike B,e2e,A bot told to find the secrets fails in a real browser chat,none,G2,planned,S2.9
