@@ -111,6 +111,13 @@ async function driveBrowserChat(serverUrl) {
   }
   const cli = path.join(ROOT, "scripts", "control-omb.ts");
   return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
     const child = spawn(process.execPath, ["--experimental-strip-types", cli, "ui", "launch", "--entry", "threads"], {
       cwd: ROOT,
       env: { ...process.env, OPENMAUSBOT_URL: serverUrl, OMB_UI_E2E: "1" },
@@ -120,30 +127,30 @@ async function driveBrowserChat(serverUrl) {
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve({ ok: false, reason: `ui launch timed out\n${stderr}` });
-    }, 300_000);
+      finish({ ok: false, reason: `ui launch timed out\n${stderr}` });
+    }, 120_000);
     child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
     child.stdout?.on("data", async (chunk) => {
+      if (settled) return;
       stdout += String(chunk);
-      const start = stdout.startsWith("{") ? 0 : stdout.indexOf("\n{") + 1;
-      if (start < 0 && !stdout.startsWith("{")) return;
+      const start = stdout.indexOf("{");
+      if (start < 0) return;
       try {
         const handle = JSON.parse(stdout.slice(start));
         if (!handle?.ui && !handle?.session) return;
-        clearTimeout(timer);
         const ui = JSON.stringify(handle);
         await runControlOmb(["ui", "type", "--ui", ui, "--name", "Message Pepper", "--text", "Spike A browser chat"], { env: process.env });
         await runControlOmb(["ui", "press", "--ui", ui, "--keys", "Enter"], { env: process.env });
         await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "60"], { env: process.env });
         child.kill("SIGINT");
-        resolve({ ok: true, handle });
+        finish({ ok: true, handle });
       } catch (error) {
         child.kill("SIGKILL");
-        resolve({ ok: false, reason: error instanceof Error ? error.message : String(error) });
+        finish({ ok: false, reason: error instanceof Error ? error.message : String(error) });
       }
     });
     child.on("exit", () => {
-      clearTimeout(timer);
+      finish({ ok: false, reason: `ui exited before a handle\n${stderr}\n${stdout}` });
     });
   });
 }
