@@ -4,7 +4,7 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33.
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 
@@ -353,6 +353,19 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Impact (cost / risk / timeline): No spend. An empty-allow brand scan was 4028 hits before this change and 179 after. Those 179 are the listed files. The scan reports no unlisted brand leak. Chat messages still draw the geometric body. The picker labels and the app icon do not show it. The built renderer is scanned in CI after `vite build`; this machine did not run that build.
 - Files / Patch IDs: PATCH-22. Notion PR 31. https://app.notion.com/p/40bdd43e0a9d81acbc1fcad35e3e280f
 - Rollback: Restore the previous strings and the folder allow-list. Remove the brand map and the post-build scan step.
+
+## CL-33 Shrink the daily CI gate until Phase 5 / G6
+
+- Date: 2026-11-02
+- Type: Code
+- Area: CI & tests
+- Why we changed it: Make CI small and fast once, then leave it alone until Phase 5 / G6.
+- Why it is necessary: Desktop packaging jobs are off the daily gate until Phase 5 / G6. Known failures: Linux DEB package-type marker null after removing the upstream publish block; browser-vendor-windows 404 on an upstream release asset.
+- How it works: `pull_request`, push to main and `merge_group` select only build, foss, packaged-server (ubuntu), ui-smoke and docker. `schedule` and `workflow_dispatch` keep the full set. Static vitest uses the `fizot/` filter so every new test under `server/fizot`, `tests/fizot` and `scripts/fizot` runs automatically. `docker.yml` no longer runs on pull requests.
+- Impact: Required checks shrink to the CI gate job. Packaging and optional smokes wait for nightly or a manual run.
+- Rollback: Restore the previous `MAIN_SCOPE` and job `if` conditions from `origin/main` before this change.
+- Files / Patch IDs: PATCH-24. Notion PR 33. https://app.notion.com/p/40cdd43e0a9d81248deeeff0b38b0dc6
+- Related tasks: FZ-43 https://app.notion.com/p/40cdd43e0a9d811cbe38c16463e4b6e3 ; FZ-44 https://app.notion.com/p/40cdd43e0a9d816e8964ebf749454217
 
 ## CL-32 Keep the Windows browser vendor build manual
 

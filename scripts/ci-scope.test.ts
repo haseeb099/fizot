@@ -1,7 +1,5 @@
-import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,9 +63,9 @@ function outputs(text: string) {
 const packaged = (oses: string[]) => oses.filter((os) => os !== "macos-latest");
 const everything = (oses: string[]) => ({ build: true, jobs: SELECTABLE_JOBS, vitest_os: oses, packaged_server_os: packaged(oses), vitest_matrix: vitestMatrix(oses) });
 const staticOnly = (oses: string[], build: boolean) => ({ build, jobs: [], vitest_os: oses, packaged_server_os: packaged(oses), vitest_matrix: vitestMatrix(oses) });
-/** What a push to main and a merge group run: Linux's shards, the macOS smokes and the short Linux checks. */
-const MAIN_JOBS = ["vitest", "behavior-evals", "packaged-server", "electron-smokes", "foss", "control-plane", "ui-smoke", "browser-identity"];
-const mainLane = () => ({ build: true, jobs: MAIN_JOBS, vitest_os: MAIN, packaged_server_os: MAIN, vitest_matrix: vitestMatrix(MAIN) });
+/** What a pull request, a push to main and a merge group run. */
+const MAIN_JOBS = ["packaged-server", "foss", "ui-smoke", "docker"];
+const mainLane = () => ciOutputs(MAIN_SCOPE, MAIN);
 
 describe("vitest matrix", () => {
   it("gives Linux and Windows eight shards each and macOS four, and only Linux every e2e file", () => {
@@ -198,13 +196,17 @@ describe("CI outputs", () => {
     expect(new Set(windows.map((entry: { os: string }) => entry.os))).toEqual(new Set(["macos-latest", "windows-latest"]));
   });
 
-  it("runs Linux's every shard, the macOS smokes and the short Linux checks for main, and nothing on Windows", () => {
+  it("runs the daily gate for main, and every job on the full lane", () => {
     const out = ciOutputs(MAIN_SCOPE, MAIN);
     expect(out).toEqual(mainLane());
-    expect(out.vitest_matrix.include).toHaveLength(8);
-    expect(out.jobs).not.toEqual(expect.arrayContaining(["windows-cua"]));
-    for (const job of ["windows-cua", "package-linux", "browser-driver", "cloudflared-linux-arm64"]) expect(out.jobs, job).not.toContain(job);
+    expect(out.jobs).toEqual(MAIN_JOBS);
+    expect(out.packaged_server_os).toEqual(["ubuntu-latest"]);
+    for (const job of ["vitest", "windows-cua", "package-linux", "browser-driver", "cloudflared-linux-arm64", "electron-smokes", "behavior-evals", "browser-identity", "control-plane"]) {
+      expect(out.jobs, job).not.toContain(job);
+    }
     expect(MAIN_SCOPE.checks.every((check) => FULL_SCOPE.checks.includes(check))).toBe(true);
+    expect(ciOutputs(FULL_SCOPE, ALL).jobs).toEqual(SELECTABLE_JOBS);
+    expect(ciOutputs(FULL_SCOPE, ALL).packaged_server_os).toEqual(["ubuntu-latest", "windows-latest"]);
   });
 
   it("runs only the broker's control-plane checks for a commit the merge queue already tested", () => {
@@ -324,15 +326,14 @@ describe("the repository's import graph", () => {
 });
 
 describe("CI scope CLI", () => {
-  it("runs only the docs tests, without the build, for a docs-only pull request", () => {
+  it("runs the daily gate for a docs-only pull request", () => {
     const { directory, git, base } = fixture("docs/guide.md");
     writeFileSync(join(directory, "docs/guide.md"), "updated guide\n");
     git("commit", "--quiet", "-am", "docs");
     const { output, stderr } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
     });
-    expect(output).toEqual(ciOutputs({ checks: ["docs-tests"] }, PR));
-    expect(output).toMatchObject({ build: false, jobs: ["vitest"] });
+    expect(output).toEqual(mainLane());
     expect(stderr).toBe("");
   });
 
@@ -348,12 +349,11 @@ describe("CI scope CLI", () => {
     const { output, stderr } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
     });
-    expect(output).toEqual(ciOutputs({ checks: ["docs-tests"] }, PR));
-    expect(output).toMatchObject({ build: false, jobs: ["vitest"] });
+    expect(output).toEqual(mainLane());
     expect(stderr).toBe("");
   });
 
-  it.each(["delete", "rename"])("retains the original source path on %s", (change) => {
+  it.each(["delete", "rename"])("keeps the daily gate when source is %s", (change) => {
     const source = "server/original.ts";
     const { directory, git, base } = fixture(source);
     if (change === "delete") git("rm", "--", source);
@@ -362,45 +362,31 @@ describe("CI scope CLI", () => {
     const { output, stderr } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
     });
-    expect(output).toEqual({ build: true, jobs: SERVER_JOBS, vitest_os: PR, packaged_server_os: PR, vitest_matrix: vitestMatrix(PR) });
+    expect(output).toEqual(mainLane());
+    expect(output.jobs).not.toContain("package-linux");
     expect(stderr).toBe("");
   });
 
-  it("runs a renderer pull request's tests on Linux, and a translation pull request's locale tests", () => {
-    for (const [source, jobs, oses] of [["src/App.tsx", ["vitest", "ui-smoke"], ["ubuntu-latest"]], ["src/locales/de.json", ["vitest"], []]] as const) {
-      const { directory, git, base } = fixture(source);
-      writeFileSync(join(directory, source), "changed\n");
-      git("commit", "--quiet", "-am", "change");
-      const { output, stderr } = run(directory, "pull_request", {
-        pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
-      });
-      expect(output).toEqual(ciOutputs(selectCiScope([source]), PR));
-      expect(output.jobs).toEqual(jobs);
-      expect(output.vitest_matrix.include.filter((entry: { files: string }) => !entry.files).map((entry: { os: string }) => entry.os))
-        .toEqual(oses.flatMap((os) => Array(8).fill(os)));
-      expect(stderr).toBe("");
-    }
-  });
-
-  it("reads filenames with spaces without turning source into docs", () => {
-    const source = "src/first second.md";
+  it.each(["src/App.tsx", "src/locales/de.json", "src/first second.md"])("runs the daily gate for %s", (source) => {
     const { directory, git, base } = fixture(source);
     writeFileSync(join(directory, source), "changed\n");
     git("commit", "--quiet", "-am", "change");
-    const { output } = run(directory, "pull_request", {
+    const { output, stderr } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
     });
-    expect(output).toEqual(ciOutputs({ checks: AREA_CHECKS.web }, PR));
+    expect(output).toEqual(mainLane());
+    expect(stderr).toBe("");
   });
 
-  it.each(["missing", "invalid", "unavailable", "empty"])("falls back loudly for a %s diff", (kind) => {
+  it.each(["missing", "invalid", "unavailable", "empty"])("keeps the daily gate for a %s diff", (kind) => {
     const { directory, base } = fixture();
     const payload = kind === "missing" ? {} : {
       pull_request: { base: { sha: base }, head: { sha: kind === "invalid" ? "--help" : kind === "unavailable" ? "f".repeat(40) : base } },
     };
     const { output, stderr } = run(directory, "pull_request", payload);
-    expect(output).toEqual(everything(ALL));
-    expect(stderr).toContain("using all checks");
+    expect(output).toEqual(mainLane());
+    expect(output.jobs).not.toContain("package-linux");
+    expect(stderr).toBe("");
   });
 
   it.each(["schedule", "workflow_dispatch"])("runs everything on every platform for %s", (event) => {
@@ -457,150 +443,9 @@ describe("version-only package.json", () => {
   });
 });
 
-type FakeRun = { id?: number; event: string; status: string; conclusion: string | null };
-
-/** A GitHub that answers the CI runs of one commit and the jobs of one run; the
- * script under test runs asynchronously so this server can answer it. */
-async function fakeRunsApi(runs: Record<string, FakeRun[]>, jobs: Record<number, Array<{ name: string; conclusion: string | null }>> = {}) {
-  const requests: string[] = [];
-  const server = createServer((request, response) => {
-    requests.push(`${request.method} ${request.url} ${request.headers.authorization}`);
-    const url = new URL(request.url!, "http://x");
-    const sha = url.searchParams.get("head_sha") ?? "";
-    const runId = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/jobs$/.exec(url.pathname)?.[1];
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(runId ? { jobs: jobs[Number(runId)] ?? [] } : { workflow_runs: runs[sha] ?? [] }));
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { url, requests, close: () => new Promise((resolve) => server.close(resolve)) };
-}
-
-async function runPush(directory: string, payload: unknown, env: Record<string, string | undefined>) {
-  const eventPath = join(directory, "event.json");
-  const outputPath = join(directory, "output.txt");
-  writeFileSync(eventPath, JSON.stringify(payload));
-  const childEnv: Record<string, string | undefined> = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, ...env };
-  for (const [key, value] of Object.entries(childEnv)) if (value === undefined) delete childEnv[key];
-  const stderr = await new Promise<string>((resolve, reject) => {
-    execFile(process.execPath, [script], { cwd: directory, env: childEnv as NodeJS.ProcessEnv, encoding: "utf8", timeout: 10_000 },
-      (error, _stdout, stderr) => (error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(stderr)));
-  });
-  return { output: outputs(readFileSync(outputPath, "utf8")), stderr };
-}
-
 describe("CI scope CLI on a push to main", () => {
-  function pushFixture(change: (directory: string) => void) {
-    const { directory, git } = fixture("server/index.ts");
-    writeFileSync(join(directory, "package.json"), pkg("0.1.100"));
-    git("add", "--", "package.json");
-    git("commit", "--quiet", "-m", "package");
-    const before = git("rev-parse", "HEAD");
-    change(directory);
-    git("add", "--all");
-    git("commit", "--quiet", "-m", "change");
-    return { directory, before, after: git("rev-parse", "HEAD") };
-  }
-  const bump = (directory: string) => writeFileSync(join(directory, "package.json"), pkg("0.1.101"));
-  const docs = (directory: string) => writeFileSync(join(directory, "docs/guide.md"), "guide\n");
-  const code = (directory: string) => writeFileSync(join(directory, "server/index.ts"), "changed\n");
-  const green = [{ event: "push", status: "completed", conclusion: "success" }];
-  const runsOf = (sha: string) => `GET /repos/o/r/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=100 Bearer t`;
-  const github = (api: { url: string }) => ({ GITHUB_API_URL: api.url, GH_TOKEN: "t", GITHUB_REPOSITORY: "o/r" });
-
-  it.each([["the version bump", bump], ["a docs-only merge", docs]])("skips the runtime jobs for %s after a green commit", async (_, change) => {
-    const { directory, before, after } = pushFixture(change);
-    const api = await fakeRunsApi({ [before]: [{ event: "pull_request", status: "completed", conclusion: "failure" }, ...green] });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(staticOnly(MAIN, true));
-      expect(stderr).toBe("");
-      expect(api.requests).toEqual([runsOf(after), runsOf(before)]);
-    } finally {
-      await api.close();
-    }
-  });
-
-  it.each([["a code change", code], ["the version bump", bump]])("runs only the control-plane checks for %s the merge queue already passed", async (_, change) => {
-    const { directory, before, after } = pushFixture(change);
-    // The queue lands its group's commit once the gate passes, before the run's last job has finished.
-    const api = await fakeRunsApi({ [after]: [{ id: 77, event: "merge_group", status: "in_progress", conclusion: null }] }, {
-      77: [{ name: "vitest (ubuntu-latest, shard 1/8)", conclusion: "success" }, { name: "CI", conclusion: "success" }],
-    });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(ciOutputs(QUEUED_SCOPE, MAIN));
-      expect(stderr).toBe("");
-    } finally {
-      await api.close();
-    }
-  });
-
-  it.each([
-    ["failed its gate", [{ name: "CI", conclusion: "failure" }]],
-    ["has not passed its gate yet", [{ name: "CI", conclusion: null }]],
-  ])("runs main's checks for a commit whose merge-group run %s", async (_, gateJobs) => {
-    const { directory, before, after } = pushFixture(code);
-    const api = await fakeRunsApi({ [after]: [{ id: 78, event: "merge_group", status: "completed", conclusion: "failure" }] }, { 78: gateJobs });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(mainLane());
-      expect(stderr).toBe("");
-      expect(api.requests).toEqual([runsOf(after), "GET /repos/o/r/actions/runs/78/jobs?per_page=100 Bearer t"]);
-    } finally {
-      await api.close();
-    }
-  });
-
-  it.each([
-    ["was replaced by this push", [{ event: "push", status: "completed", conclusion: "cancelled" }]],
-    ["failed", [{ event: "push", status: "completed", conclusion: "failure" }]],
-    ["never ran", []],
-    ["only passed as a pull request", [{ event: "pull_request", status: "completed", conclusion: "success" }]],
-  ])("runs main's checks for a version bump when the commit before it %s", async (_, runs) => {
-    const { directory, before, after } = pushFixture(bump);
-    const api = await fakeRunsApi({ [before]: runs });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(mainLane());
-      expect(stderr).toContain("has no green CI run of its own");
-    } finally {
-      await api.close();
-    }
-  });
-
-  it("runs main's checks when the pushed commit's CI cannot be read", async () => {
-    const { directory, before, after } = pushFixture(bump);
-    const { output, stderr } = await runPush(directory, { before, after }, { GH_TOKEN: undefined, GITHUB_REPOSITORY: undefined });
-    expect(output).toEqual(mainLane());
-    expect(stderr).toContain("using main's checks");
-  });
-
-  it.each([
-    ["a code change", code],
-    ["a version bump with a dependency", (directory: string) => writeFileSync(join(directory, "package.json"), pkg("0.1.101", { dependencies: { zod: "4" } }))],
-    ["a version bump with code", (directory: string) => { bump(directory); code(directory); }],
-  ])("runs main's checks for %s, asking GitHub only about the merge queue", async (_, change) => {
-    const { directory, before, after } = pushFixture(change);
-    const api = await fakeRunsApi({ [before]: green });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(mainLane());
-      expect(stderr).toBe("");
-      expect(api.requests).toEqual([runsOf(after)]);
-    } finally {
-      await api.close();
-    }
-  });
-
-  it.each([
-    ["a missing payload", {}],
-    ["a new branch", { before: "0".repeat(40), after: "f".repeat(40) }],
-    ["an unknown commit", { before: "f".repeat(40), after: "e".repeat(40) }],
-  ])("falls back loudly to main's checks for %s", async (_, payload) => {
-    const { directory } = fixture();
-    const { output, stderr } = await runPush(directory, payload, {});
-    expect(output).toEqual(mainLane());
-    expect(stderr).toContain("using main's checks");
+  it.each(["push", "merge_group"])("runs the daily gate for %s", (event) => {
+    const { directory } = fixture("docs/guide.md");
+    expect(run(directory, event, {}).output).toEqual(mainLane());
   });
 });

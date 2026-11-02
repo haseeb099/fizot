@@ -5,8 +5,11 @@ import { parse } from "yaml";
 import { SELECTABLE_JOBS, vitestMatrix } from "./ci-scope.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const requiredRuntimeJobs = ["foss", "packaged-server", "ui-smoke"];
-const nightlyJobs = ["vitest", "behavior-evals", "browser-identity", "electron-smokes"];
+const requiredRuntimeJobs = ["foss", "packaged-server", "ui-smoke", "docker"];
+const nightlyJobs = [
+  "vitest", "behavior-evals", "browser-identity", "electron-smokes",
+  "package-linux", "windows-cua", "browser-driver", "cloudflared-linux-arm64",
+];
 
 function runGate(needs: Record<string, unknown>) {
   // Execute the actual gate, not a duplicate of its success/failure logic.
@@ -156,12 +159,10 @@ describe("CI concurrency", () => {
     expect(sparse.sort()).toEqual(["scripts/release-ci.mjs", ...imports].sort());
   });
 
-  it("lets push scoping read the previous commit's CI, and nothing more", () => {
-    // ci-scope.mjs runs a push's docs- or version-only diff without the runtime
-    // jobs only when the commit before it has its own green run.
-    expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read" });
+  it("lets the scope step read the checkout and nothing more", () => {
+    expect(workflow.jobs.static.permissions).toEqual({ contents: "read" });
     const scope = workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope");
-    expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}" });
+    expect(scope.env).toBeUndefined();
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { permissions?: unknown }][]) {
       if (name !== "static") expect(job.permissions, name).toBeUndefined();
     }
@@ -196,7 +197,7 @@ describe("CI concurrency", () => {
     }
   });
 
-  it("accepts every required job skipped on a docs-only PR, and nothing else", () => {
+  it("accepts every required job skipped when static selected none, and nothing else", () => {
     expect(runGate(gateNeeds([])).status).toBe(0);
     for (const result of ["success", "failure", "cancelled"]) {
       expect(runGate({ ...gateNeeds([]), "packaged-server": { result } }).status).toBe(1);
@@ -232,7 +233,7 @@ describe("CI concurrency", () => {
       ["steps.scope.outputs.build == 'true'", "pnpm exec vite build"],
     ]);
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
-      step.run === "pnpm exec vitest run scripts/fizot scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts",
+      step.run === "pnpm exec vitest run fizot/ scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts",
     )).toBe(true);
     const staticSteps = workflow.jobs.static.steps as { if?: string; run?: string }[];
     const buildAt = staticSteps.findIndex((step) => step.run === "pnpm exec vite build");
@@ -255,11 +256,9 @@ describe("CI concurrency", () => {
         expect(workflow.jobs.gate.needs).not.toContain(name);
         continue;
       }
-      // The one deploy job: after the control-plane checks, on main pushes only. It is
-      // not part of the merge gate.
       if (name === "deploy-composio-broker") {
         expect(job.needs).toEqual(["control-plane"]);
-        expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main'");
+        expect(job.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'");
         expect(workflow.jobs.gate.needs).not.toContain(name);
         // Without the Cloudflare token the deploy is skipped with a warning, not failed:
         // every step after the token check waits on it.
