@@ -23,6 +23,7 @@ const analyticsOff = typeof analyticsHost !== "string" || analyticsHost.trim() =
 function dropPosthogWhileAnalyticsOff() {
   return {
     name: "drop-posthog-while-analytics-off",
+    apply: "build",
     enforce: "pre" as const,
     resolveId(id: string) {
       if (id === "posthog-js" || id.replaceAll("\\", "/").includes("/posthog-js/")) {
@@ -50,11 +51,11 @@ const include = [
   "scripts/**/*.test.ts",
 ];
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    command === "build" && analyticsOff ? dropPosthogWhileAnalyticsOff() : null,
+    analyticsOff ? dropPosthogWhileAnalyticsOff() : null,
   ].filter((plugin) => plugin !== null),
   define: {
     __APP_VERSION__: JSON.stringify(version),
@@ -104,4 +105,4 @@ export default defineConfig(({ command }) => ({
       },
     },
   },
-}));
+});
