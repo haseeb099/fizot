@@ -10,6 +10,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchVerificationServer, runControlOmb } from "../control-omb.ts";
+import { ensureUiBrowser } from "../testing/control-omb-ui.ts";
 import { startLoggingProxy } from "./spike-a-proxy.mjs";
 import {
   allowedRuntimeHosts,
@@ -194,6 +195,13 @@ export async function runSpikeA(options = {}) {
 
   if (options.build !== false) buildRebrandedDist();
 
+  const requireBrowser = options.browser !== false && (process.env.SPIKE_A_BROWSER === "1" || process.env.OMB_UI_E2E === "1");
+  // Download agent-browser + Chrome before the logging proxy starts so harness
+  // CDN hosts are not attributed to the rebranded app.
+  if (requireBrowser) {
+    await ensureUiBrowser({ ...process.env, OMB_UI_E2E: "1" }, (line) => console.error(`spike-a prewarm: ${line}`));
+  }
+
   const proxy = await startLoggingProxy(proxyLog);
   const bugSink = await startBugSink();
   let server;
@@ -215,7 +223,6 @@ export async function runSpikeA(options = {}) {
       ...(options.strace && process.platform === "linux" ? { OMB_VERIFY_STRACE_LOG: straceLog } : {}),
     };
 
-    const requireBrowser = options.browser !== false && (process.env.SPIKE_A_BROWSER === "1" || process.env.OMB_UI_E2E === "1");
     if (requireBrowser) {
       browser = await driveBrowserCapture(parentEnv);
       serverUrl = browser.serverUrl ?? "";

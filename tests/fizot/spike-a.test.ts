@@ -45,6 +45,7 @@ describe("Spike A host capture (SA-I)", () => {
     const fetchHosts = hostsFromFetchLog("http://127.0.0.1:9/api/bug-reports\nhttps://posthog.com/e\n");
     const summary = summarizeHosts(new Set([...proxyHosts, ...fetchHosts]), allow);
     expect(deniedHosts(summary).sort()).toEqual(["api.x.ai", "posthog.com"]);
+    expect(summary.find((row) => row.host === "update.googleapis.com")?.verdict).toBe("harness");
   });
 
   it("records CONNECT hosts through the logging proxy", async () => {
