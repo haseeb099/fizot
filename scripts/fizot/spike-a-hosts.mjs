@@ -54,10 +54,24 @@ export function hostsFromStrace(text) {
   return [...hosts].sort();
 }
 
+/** Chrome for Testing / agent-browser bootstrap hosts — not the rebranded app. */
+export function isHarnessHost(host) {
+  const h = host.toLowerCase();
+  if (LOOPBACK.has(h)) return false;
+  return (
+    h === "github.com"
+    || h.endsWith(".githubusercontent.com")
+    || h.endsWith(".google.com")
+    || h.endsWith(".googleapis.com")
+    || h.endsWith(".gvt1.com")
+    || h.endsWith(".googleusercontent.com")
+  );
+}
+
 export function summarizeHosts(hosts, allow) {
   return [...hosts].sort().map((host) => ({
     host,
-    verdict: allow.has(host) || LOOPBACK.has(host) ? "allow" : "deny",
+    verdict: allow.has(host) || LOOPBACK.has(host) ? "allow" : isHarnessHost(host) ? "harness" : "deny",
   }));
 }
 

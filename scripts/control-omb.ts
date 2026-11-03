@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 // The openmausbot headless verbs for verifying an isolated fixture. A verb that
 // changes something never runs on a server it merely found.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -167,6 +167,13 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
   for (const [key, value] of Object.entries(parentEnv)) {
     // FAKE_CLAUDE_DUMP stays the launcher's: assertions read fixtureDumpPath.
     if ((key.startsWith("FAKE_CLAUDE_") || key.startsWith("FAKE_CODEX_TEXT_") || key.startsWith("FAKE_CODEX_COMMAND") || key === "FAKE_ACP_HANG_ON" || key === "FIZOT_FETCH_LOG") && key !== "FAKE_CLAUDE_DUMP" && value) childEnv[key] = value;
+    // Spike B plants CANARY_* only in the fixture env; never a real secret.
+    if (key.startsWith("CANARY_") && value) childEnv[key] = value;
+  }
+  // Opt-in bot-box on the fixture (Linux + bwrap). Needs host /usr/bin for bwrap and sh.
+  if (parentEnv.OMB_BOT_BOX === "1" || parentEnv.OMB_BOT_BOX === "bwrap") {
+    childEnv.OMB_BOT_BOX = parentEnv.OMB_BOT_BOX;
+    childEnv.PATH = [childEnv.PATH, "/usr/bin", "/bin"].filter(Boolean).join(delimiter);
   }
   // Enables POST /api/testing/org-library; the route does not exist without it.
   if (parentEnv.OMB_TEST_ORG_LIBRARY_KEY) childEnv.OMB_TEST_ORG_LIBRARY_KEY = parentEnv.OMB_TEST_ORG_LIBRARY_KEY;
@@ -205,6 +212,9 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
     childEnv.https_proxy = proxyUrl;
     childEnv.http_proxy = proxyUrl;
     childEnv.NODE_USE_ENV_PROXY = "1";
+    // Keep fixture + Vite preview on loopback out of the CONNECT proxy.
+    childEnv.NO_PROXY = parentEnv.NO_PROXY?.trim() || "127.0.0.1,localhost,::1";
+    childEnv.no_proxy = childEnv.NO_PROXY;
   }
   const tregUrl = parentEnv.OMB_TREG_URL?.trim() ?? "";
   if (/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(tregUrl)) childEnv.OMB_TREG_URL = tregUrl;
@@ -348,11 +358,24 @@ export async function launchVerificationServer(
   });
   if (boatFixtureApi) childEnv.OMB_BOAT_API = boatFixtureApi;
   if (staticDir) childEnv.OMB_STATIC_DIR = staticDir;
-  const child = spawn(process.execPath, verificationServerArgs(childEnv), {
-    cwd: ROOT,
-    env: childEnv,
-    stdio: ["ignore", log, log],
-  });
+  // Spike A: launch under strace so connect/sendto are captured without ptrace attach.
+  const straceLog = parentEnv.OMB_VERIFY_STRACE_LOG?.trim() ?? "";
+  const serverArgs = verificationServerArgs(childEnv);
+  const straceBin = straceLog && process.platform === "linux" && parentEnv.OMB_VERIFY_STRACE !== "0"
+    ? (spawnSync("which", ["strace"], { encoding: "utf8" }).stdout?.trim() || "")
+    : "";
+  if (straceLog && !straceBin) writeFileSync(straceLog, "strace unavailable on PATH\n", "utf8");
+  const child = straceBin
+    ? spawn(straceBin, ["-f", "-e", "trace=connect,sendto", "-o", straceLog, "--", process.execPath, ...serverArgs], {
+      cwd: ROOT,
+      env: childEnv,
+      stdio: ["ignore", log, log],
+    })
+    : spawn(process.execPath, serverArgs, {
+      cwd: ROOT,
+      env: childEnv,
+      stdio: ["ignore", log, log],
+    });
   closeSync(log);
 
   // A CI runner's temporary folder goes with the runner, so a failed start carries the end of the server's log.

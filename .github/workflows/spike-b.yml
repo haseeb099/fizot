@@ -11,6 +11,7 @@ on:
       - "scripts/fizot/spike-b.mjs"
       - "tests/fizot/spike-b*.test.ts"
       - "tests/fizot/cloud-ai-url.test.ts"
+      - "scripts/control-omb.ts"
 
 permissions:
   contents: read
@@ -32,25 +33,20 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Let Chrome / bubblewrap use unprivileged user namespaces
+        # Same AppArmor knob as the renderer-smoke Chrome sandbox step; bwrap
+        # also needs unprivileged user namespaces on Ubuntu 24.04+ runners.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build server dist for box-check
         run: pnpm build:server
-      - name: Unit and canary tests
+      - name: Unit, canary, and measured Cloud-home honour tests
         run: pnpm exec vitest run server/fizot/proxy tests/fizot/spike-b-canary.test.ts tests/fizot/cloud-ai-url.test.ts
       - name: Run Spike B harness
         run: node --experimental-strip-types scripts/fizot/spike-b.mjs
       - name: box-check on this tree
-        run: node dist-server/bot-box/box-check.js | tee artifacts/spike-b/box-check-live.txt
-        continue-on-error: true
-      - name: box-check on upstream-mirror for comparison
         run: |
           mkdir -p artifacts/spike-b
-          git fetch --depth 1 origin upstream-mirror
-          git worktree add /tmp/fizot-upstream origin/upstream-mirror
-          cd /tmp/fizot-upstream
-          pnpm install --frozen-lockfile
-          pnpm build:server
-          node dist-server/bot-box/box-check.js | tee "$GITHUB_WORKSPACE/artifacts/spike-b/box-check-upstream.txt" || true
-        continue-on-error: true
+          node dist-server/bot-box/box-check.js | tee artifacts/spike-b/box-check-live.txt
       - name: Upload Spike B artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

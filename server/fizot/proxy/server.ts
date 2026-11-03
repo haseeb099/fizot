@@ -68,7 +68,10 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
         if (!record) return sendJson(res, 401, { error: { message: "invalid token" } });
         return sendJson(res, 200, {
           object: "list",
-          data: [{ object: "model", id: "mock-grok", display_name: "Mock Grok" }],
+          data: [
+            { object: "model", id: "claude-sonnet-5", display_name: "Claude Sonnet 5" },
+            { object: "model", id: "mock-grok", display_name: "Mock Grok" },
+          ],
         });
       }
       if (req.method === "POST" && (url.pathname === "/v1/chat/completions" || url.pathname === "/v1/responses")) {
