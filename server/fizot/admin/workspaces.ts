@@ -1,0 +1,184 @@
+import { randomBytes, randomUUID } from "node:crypto";
+import { teamRoleScopes, type TeamRole } from "../../cloud-team.ts";
+import { FLY_HOME_VOLUME_GB, type FlyClient } from "./fly.ts";
+import type { NonceStore } from "./nonce-store.ts";
+import { planFlags, type PlanId } from "./plans.ts";
+import { mintBootstrapSecret, signAdminRequest } from "./signer.ts";
+import type { WorkspaceRecord, WorkspaceStore } from "./store.ts";
+
+export type AdminConfig = {
+  adminUrl: string;
+  flyOrg: string;
+  flyRegion: string;
+  machineImage: string;
+  fly: FlyClient;
+  store: WorkspaceStore;
+  nonces: NonceStore;
+  /** Signed machine HTTP for health/power/pairing. Tests inject a fake. */
+  machineFetch?: typeof fetch;
+  now?: () => number;
+};
+
+export type CreateWorkspaceInput = {
+  plan: PlanId;
+  ownerEmail?: string;
+  teamId?: string;
+  teamName?: string;
+};
+
+export function createAdminServices(config: AdminConfig) {
+  const { nonces } = config;
+  const machineFetch = config.machineFetch ?? fetch;
+  const now = config.now ?? Date.now;
+
+  async function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceRecord> {
+    const flags = planFlags(input.plan);
+    if (!flags) throw Object.assign(new Error("unknown_plan"), { status: 400 });
+    if (flags.role === "team" && (!input.teamId || !input.teamName)) {
+      throw Object.assign(new Error("team_required"), { status: 400 });
+    }
+    if (flags.role === "home" && !input.ownerEmail) {
+      throw Object.assign(new Error("owner_required"), { status: 400 });
+    }
+
+    const id = randomUUID();
+    const machineId = `cm-${id.replace(/-/g, "").slice(0, 16)}`;
+    const appName = `fizot-${machineId}`.toLowerCase();
+    const network = `fizot-net-${machineId}`;
+    const publicUrl = `https://${appName}.fly.dev`;
+    const bootstrapSecret = mintBootstrapSecret();
+
+    await config.fly.createApp({ appName, org: config.flyOrg, network });
+    const volume = await config.fly.createVolume({
+      appName,
+      name: "omb_home",
+      region: config.flyRegion,
+      sizeGb: flags.volumeGb || FLY_HOME_VOLUME_GB,
+    });
+    await config.fly.setSecrets({
+      appName,
+      secrets: {
+        OMB_CLOUD_ADMIN_URL: config.adminUrl,
+        OMB_CLOUD_BOOTSTRAP_SECRET: bootstrapSecret,
+      },
+    });
+    const env: Record<string, string> = {
+      OMB_CLOUD_ROLE: flags.role,
+      OMB_CLOUD_MACHINE_ID: machineId,
+      OMB_PUBLIC_URL: publicUrl,
+    };
+    if (flags.role === "team" && input.teamId && input.teamName) {
+      env.OMB_CLOUD_TEAM_ID = input.teamId;
+      env.OMB_CLOUD_TEAM_NAME = input.teamName;
+    }
+    const machine = await config.fly.createMachine({
+      appName,
+      region: config.flyRegion,
+      name: "home",
+      image: config.machineImage,
+      volumeId: volume.id,
+      env,
+      guest: {
+        cpu_kind: "shared",
+        cpus: flags.cpus,
+        memory_mb: flags.memoryMb,
+      },
+    });
+
+    const record: WorkspaceRecord = {
+      id,
+      plan: input.plan,
+      appName,
+      network,
+      machineId,
+      flyMachineId: machine.id,
+      flyVolumeId: volume.id,
+      publicUrl,
+      role: flags.role,
+      bootstrapSecret,
+      createdAt: new Date(now()).toISOString(),
+      ...(input.ownerEmail ? { ownerEmail: input.ownerEmail.trim().toLowerCase() } : {}),
+      ...(input.teamId ? { teamId: input.teamId } : {}),
+      ...(input.teamName ? { teamName: input.teamName } : {}),
+    };
+    return config.store.create(record);
+  }
+
+  async function signedMachineGet(workspace: WorkspaceRecord, pathAndQuery: string): Promise<Response> {
+    const headers = await signAdminRequest({
+      secret: workspace.bootstrapSecret,
+      method: "GET",
+      target: pathAndQuery,
+      body: "",
+      nonces,
+      now,
+    });
+    return machineFetch(`${workspace.publicUrl}${pathAndQuery}`, { method: "GET", headers });
+  }
+
+  async function signedMachinePost(workspace: WorkspaceRecord, path: string, bodyObj: unknown): Promise<Response> {
+    const body = Buffer.from(JSON.stringify(bodyObj));
+    const headers = await signAdminRequest({
+      secret: workspace.bootstrapSecret,
+      method: "POST",
+      target: path,
+      body,
+      nonces,
+      now,
+    });
+    return machineFetch(`${workspace.publicUrl}${path}`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body,
+    });
+  }
+
+  async function workspaceHealth(id: string) {
+    const workspace = await config.store.get(id);
+    if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    const response = await signedMachineGet(workspace, "/api/cloud/health?after=0");
+    const body = await response.json().catch(() => ({}));
+    return { status: response.status, body, workspaceId: workspace.id };
+  }
+
+  async function workspacePower(id: string) {
+    const workspace = await config.store.get(id);
+    if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    const response = await signedMachineGet(workspace, "/api/cloud/power");
+    const body = await response.json().catch(() => ({}));
+    return { status: response.status, body, workspaceId: workspace.id };
+  }
+
+  async function workspacePairing(id: string, input: {
+    label?: string;
+    ttlSeconds?: number;
+    member?: { email: string; role: TeamRole };
+  }) {
+    const workspace = await config.store.get(id);
+    if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    const body: Record<string, unknown> = {
+      label: input.label ?? "Fizot app (Cloud)",
+      ttlSeconds: input.ttlSeconds ?? 300,
+    };
+    if (workspace.role === "team") {
+      if (!input.member) throw Object.assign(new Error("member_required"), { status: 400 });
+      body.member = input.member;
+      if (workspace.teamId) body.team = { id: workspace.teamId };
+      const scopes = teamRoleScopes(input.member.role);
+      body._scopes = scopes;
+    }
+    const response = await signedMachinePost(workspace, "/api/cloud/pairing", body);
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const credential = typeof payload.credential === "string" ? payload.credential : `omb_pair_${randomBytes(12).toString("base64url")}`;
+    const pairingLink = `${workspace.publicUrl}/pair#signin=${credential}`;
+    return {
+      status: response.status,
+      body: { ...payload, pairingLink, ...(workspace.role === "team" && input.member ? { scopes: teamRoleScopes(input.member.role) } : {}) },
+      workspaceId: workspace.id,
+    };
+  }
+
+  return { createWorkspace, workspaceHealth, workspacePower, workspacePairing, store: config.store };
+}
+
+export type AdminServices = ReturnType<typeof createAdminServices>;

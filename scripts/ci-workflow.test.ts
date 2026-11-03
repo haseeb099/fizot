@@ -320,4 +320,10 @@ describe("CI concurrency", () => {
     expect(commands).toContain("node --test electron/shared-computer-access.node-test.mjs");
     expect(commands).toContain("pnpm exec vitest run server/shared-computers.e2e.test.ts");
   });
+
+  it("keeps Admin Postgres AD-I off the daily gate", () => {
+    const adminPg = parse(readFileSync(new URL("../.github/workflows/admin-postgres.yml", import.meta.url), "utf8"));
+    expect(adminPg.on).toEqual({ workflow_dispatch: null });
+    expect(Object.keys(workflow.jobs)).not.toContain("admin-postgres");
+  });
 });
