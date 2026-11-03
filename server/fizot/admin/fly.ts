@@ -149,8 +149,10 @@ export function createFakeFlyClient(): FlyClient & {
       calls.push(`destroyApp:${appName}`);
       apps.delete(appName);
       secrets.delete(appName);
-      for (const key of [...volumes.keys()]) if (key.startsWith(`${appName}/`)) volumes.delete(key);
-      for (const key of [...machines.keys()]) {
+      for (const key of Array.from(volumes.keys())) {
+        if (key.startsWith(`${appName}/`)) volumes.delete(key);
+      }
+      for (const key of Array.from(machines.keys())) {
         if (!key.startsWith(`${appName}/`)) continue;
         const m = machines.get(key);
         if (m) machines.set(key, { ...m, state: "destroyed" });
