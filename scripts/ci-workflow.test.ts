@@ -235,6 +235,9 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
       step.run === "pnpm exec vitest run fizot/ scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/testing/matrix-plan.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/analytics-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/docker-image.test.ts server/hosted-access.test.ts server/hosted-models-api.test.ts server/model-providers-docs.test.ts src/locales/vocabulary.test.ts",
     )).toBe(true);
+    expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
+      step.run === "node scripts/fizot/audit-gate.mjs",
+    )).toBe(true);
     const staticSteps = workflow.jobs.static.steps as { if?: string; run?: string }[];
     const buildAt = staticSteps.findIndex((step) => step.run === "pnpm exec vite build");
     const hostScans = staticSteps.flatMap((step, index) =>

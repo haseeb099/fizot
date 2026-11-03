@@ -4,7 +4,20 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37.
+
+## CL-37 Patch undici and add a production audit gate
+
+- Date: 2026-11-03
+- Type: Security
+- Area: CI & tests; Compliance
+- Why we changed it: `pnpm audit --prod` reported four high advisories in undici 8.11.2 on the root workspace.
+- Why it is necessary: Gate G2 must not ship known high/critical production vulnerabilities without a dated, reasoned exception.
+- How it works: Bump undici to 8.12.3 (dependency and `pnpm.overrides`). The static job runs `scripts/fizot/audit-gate.mjs`, which fails on high/critical unless listed in `security/audit-exceptions.json` with reason and expiry. Katex remains one low advisory and is outside the gate level.
+- Impact: No behaviour change expected from the undici patch. One new required CI step.
+- Rollback: Revert this commit; restore undici 8.11.2 and remove the audit step.
+- Files / Patch IDs: PATCH-28. Notion PR 37. https://app.notion.com/p/40ddd43e0a9d81a48f00e5304d80bfb0
+- Related tasks: FZ-13 (S2.6). Patch: https://app.notion.com/p/40ddd43e0a9d815dbca3cb9bd8b38ebc
 
 ## CL-36 Spike A/B real proof: browser capture, boxed canaries, measured honour
 
