@@ -92,6 +92,11 @@ describe.skipIf(!linuxBox)("Spike B canary secrets in a real box (SB-I, TC26, TC
       body: JSON.stringify({ instanceId: "canary-1", ttlSeconds: 600 }),
     }).then((r) => r.json()) as { token: string };
 
+    // Mimic the host server process holding secrets the box must not inherit.
+    const serverEnv = {
+      CANARY_SERVER_ENV: "spike-b-server-secret",
+      OMB_CLOUD_AI_TOKEN: minted.token,
+    };
     const output = runInBox(
       detection.tools!,
       layout,
@@ -99,14 +104,22 @@ describe.skipIf(!linuxBox)("Spike B canary secrets in a real box (SB-I, TC26, TC
         env: {
           PATH: "/usr/bin:/bin",
           HOME: layout.home,
-          // Server env canary is NOT passed into the box — only on the host server process.
-          OMB_CLOUD_AI_TOKEN: minted.token,
+          // Brokered path: only a non-secret marker reaches the box, never the mint or canaries.
+          OMB_CLOUD_AI_URL: proxy.url,
         },
       },
       FIND_SCRIPT,
     );
 
-    for (const secret of ["spike-b-server-secret", "spike-b-data-secret", "spike-b-file-secret", minted.token, "CANARY_SERVER_ENV", "CANARY_DATA_DIR", "CANARY_FILE_VALUE"]) {
+    for (const secret of [
+      serverEnv.CANARY_SERVER_ENV,
+      "spike-b-data-secret",
+      "spike-b-file-secret",
+      minted.token,
+      "CANARY_SERVER_ENV",
+      "CANARY_DATA_DIR",
+      "CANARY_FILE_VALUE",
+    ]) {
       expect(output, `leaked ${secret}`).not.toContain(secret);
     }
     expect(output).toMatch(/METADATA_REFUSED|Network is unreachable|Connection refused|timed out|failed|No route/i);

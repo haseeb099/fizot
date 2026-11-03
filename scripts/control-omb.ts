@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 // The openmausbot headless verbs for verifying an isolated fixture. A verb that
 // changes something never runs on a server it merely found.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -358,8 +358,12 @@ export async function launchVerificationServer(
   // Spike A: launch under strace so connect/sendto are captured without ptrace attach.
   const straceLog = parentEnv.OMB_VERIFY_STRACE_LOG?.trim() ?? "";
   const serverArgs = verificationServerArgs(childEnv);
-  const child = straceLog && process.platform === "linux"
-    ? spawn("strace", ["-f", "-e", "trace=connect,sendto", "-o", straceLog, "--", process.execPath, ...serverArgs], {
+  const straceBin = straceLog && process.platform === "linux" && parentEnv.OMB_VERIFY_STRACE !== "0"
+    ? (spawnSync("which", ["strace"], { encoding: "utf8" }).stdout?.trim() || "")
+    : "";
+  if (straceLog && !straceBin) writeFileSync(straceLog, "strace unavailable on PATH\n", "utf8");
+  const child = straceBin
+    ? spawn(straceBin, ["-f", "-e", "trace=connect,sendto", "-o", straceLog, "--", process.execPath, ...serverArgs], {
       cwd: ROOT,
       env: childEnv,
       stdio: ["ignore", log, log],

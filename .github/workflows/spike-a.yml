@@ -36,6 +36,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install strace for connect/sendto capture
+        run: sudo apt-get update -y && sudo apt-get install -y strace
       - name: Let Chrome build its sandbox on this runner
         # Ubuntu 24.04's AppArmor profile blocks unprivileged user namespaces,
         # so the downloaded Chrome for Testing dies with "No usable sandbox".
