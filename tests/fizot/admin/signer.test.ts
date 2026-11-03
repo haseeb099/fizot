@@ -38,11 +38,9 @@ it("rejects clock skew over 300 s", async () => {
   });
   const stale = await verifyAdminRequest({
     secret: SECRET,
-    ...{
-      timestamp: headers["x-omb-cloud-timestamp"],
-      nonce: headers["x-omb-cloud-nonce"],
-      signature: headers["x-omb-cloud-signature"],
-    },
+    timestamp: headers["x-omb-cloud-timestamp"],
+    nonce: headers["x-omb-cloud-nonce"],
+    signature: headers["x-omb-cloud-signature"],
     method: "GET",
     target: "/api/cloud/health?after=0",
     body,
