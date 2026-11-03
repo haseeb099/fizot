@@ -1,0 +1,93 @@
+# S2.11 real Fly staging round trip + S2.10 cost probe hooks.
+# Manual only. Not on the daily gate. Requires repo secret FLY_API_TOKEN.
+name: Fizot Fly staging roundtrip
+
+on:
+  workflow_dispatch:
+    inputs:
+      fly_org:
+        description: Fly org slug for staging
+        required: true
+        type: string
+      fly_region:
+        description: Fly region
+        required: false
+        default: lhr
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  fly-staging-roundtrip:
+    name: Fly staging create / health / pairing / destroy
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      NODE_OPTIONS: --max-old-space-size=7000
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_ORG: ${{ inputs.fly_org }}
+      FLY_REGION: ${{ inputs.fly_region }}
+      FLY_IMAGE_APP: fizot-home-image
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require FLY_API_TOKEN secret
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "Repo secret FLY_API_TOKEN is not set. Add a Fly tokens create org deploy token, then re-run."
+            exit 2
+          fi
+          echo "FLY_API_TOKEN is present (value not printed)."
+
+      - name: Print projected daily cost (Gate G0b)
+        run: |
+          node --experimental-strip-types -e "
+            import { formatCostProjection, projectDailyCost } from './server/fizot/admin/cost-guard.ts';
+            console.log(formatCostProjection(projectDailyCost({})));
+          "
+
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Ensure image app and push cloud-home
+        run: |
+          set -euo pipefail
+          flyctl auth docker
+          if ! flyctl apps list -o "$FLY_ORG" | awk '{print $1}' | grep -qx "$FLY_IMAGE_APP"; then
+            flyctl apps create "$FLY_IMAGE_APP" --org "$FLY_ORG" --network "fizot-image-net"
+          fi
+          docker build --target cloud-home \
+            --build-arg CLOUD_HOME_ENGINES= \
+            --build-arg GROK_VERSION= \
+            -t "registry.fly.io/${FLY_IMAGE_APP}:staging" .
+          docker push "registry.fly.io/${FLY_IMAGE_APP}:staging"
+          echo "FIZOT_MACHINE_IMAGE=registry.fly.io/${FLY_IMAGE_APP}:staging" >> "$GITHUB_ENV"
+
+      - name: Staging round trip (create, health, pairing, power, negatives, destroy)
+        run: node --experimental-strip-types scripts/fizot/fly-staging-roundtrip.mjs
+
+      - name: Force cleanup leftover staging apps from this run
+        if: always()
+        run: node --experimental-strip-types scripts/fizot/fly-staging-cleanup.mjs
+        env:
+          FLY_STAGING_MAX_AGE_MS: "0"
+
+      - name: Upload Fly staging + S2.10 artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fly-staging-roundtrip
+          path: |
+            artifacts/fly-staging/
+            artifacts/s2-10/
+          if-no-files-found: warn

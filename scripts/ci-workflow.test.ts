@@ -326,4 +326,21 @@ describe("CI concurrency", () => {
     expect(adminPg.on).toEqual({ workflow_dispatch: null });
     expect(Object.keys(workflow.jobs)).not.toContain("admin-postgres");
   });
+
+  it("keeps Fly staging roundtrip and cleanup off the daily gate", () => {
+    const roundtrip = parse(readFileSync(new URL("../.github/workflows/fly-staging-roundtrip.yml", import.meta.url), "utf8"));
+    expect(roundtrip.on).toEqual({
+      workflow_dispatch: {
+        inputs: {
+          fly_org: { description: expect.any(String), required: true, type: "string" },
+          fly_region: { description: expect.any(String), required: false, default: "lhr", type: "string" },
+        },
+      },
+    });
+    expect(Object.keys(workflow.jobs)).not.toContain("fly-staging-roundtrip");
+    const cleanup = parse(readFileSync(new URL("../.github/workflows/fly-staging-cleanup.yml", import.meta.url), "utf8"));
+    expect(cleanup.on).toHaveProperty("workflow_dispatch");
+    expect(cleanup.on).toHaveProperty("schedule");
+    expect(Object.keys(workflow.jobs)).not.toContain("cleanup");
+  });
 });

@@ -20,6 +20,7 @@ daily gate's `fizot/` vitest filter picks them up.
 | `GET` | `/admin/workspaces/:id/health` | Signed `GET /api/cloud/health?after=0` to the machine. |
 | `GET` | `/admin/workspaces/:id/power` | Signed `GET /api/cloud/power` to the machine. |
 | `POST` | `/admin/workspaces/:id/pairing` | Signed `POST /api/cloud/pairing`; returns `pairingLink`. Team plan requires a `member` claim (`owner`/`admin` → admin+client scopes; `member` → client). |
+| `DELETE` | `/admin/workspaces/:id` | Destroy the Fly app (force) and drop the store row. |
 
 Signer: HMAC-SHA256 over `v1\n<timestamp>\n<nonce>\n<METHOD>\n<path+query>\n<bodyHash>` (base64url), ±300 s skew, nonces refused for 10 minutes.
 
@@ -28,22 +29,39 @@ Signer: HMAC-SHA256 over `v1\n<timestamp>\n<nonce>\n<METHOD>\n<path+query>\n<bod
 | Variable | Role |
 | --- | --- |
 | `FIZOT_ADMIN_URL` | Value written as `OMB_CLOUD_ADMIN_URL` on the machine. |
-| `FLY_ORG` / `FLY_REGION` | Staging org and region (unused while Fly is faked). |
-| `FIZOT_MACHINE_IMAGE` | Machine image reference. |
+| `FLY_ORG` / `FLY_REGION` | Staging org and region. |
+| `FLY_API_TOKEN` | Fly Machines API token. Required for the real client; never logged or committed. |
+| `FIZOT_MACHINE_IMAGE` | Machine image reference (`registry.fly.io/...`). |
 | `ADMIN_DATABASE_URL` | When set, workspaces use Postgres instead of the in-memory store. |
 
 Never set `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE`, or `OMB_ADMIN_MEMBERSHIP` on a Fizot machine.
 
-## What is faked in the daily gate
+## Cost guard (Gate G0b, 100 GBP/month)
 
-- Fly Machines API: `createFakeFlyClient()` — no network, no spend.
-- Workspace store: in-memory map.
-- Machine HTTP: tests inject `machineFetch` / a loopback listener.
-- Nonce store: in-memory map with 10-minute TTL.
+- Refuse creating more than 2 live staging machines (`fizot-cm-*`).
+- Every machine is created with `auto_destroy: true`.
+- Projected daily cost (shared-cpu-1x + 10 GB volume, published Fly rates) is printed before each create / staging run.
+- `.github/workflows/fly-staging-cleanup.yml` destroys `fizot-cm-*` apps older than 24 hours (schedule + `workflow_dispatch`).
+- `scripts/fizot/fly-cost-probe.mjs` records machine seconds / volume into `artifacts/s2-10/` and refuses more than one hour of machine observation.
 
-## What still needs a real Fly staging org
+## What ran for real vs what is still faked
 
-The signed round trip to a live machine (create app → health → pairing → delete
-within 24 hours) is blocked until Gate 0b sets a spend cap. AD-I's Postgres
-tenant-routing case runs only from
-`.github/workflows/admin-postgres.yml` (`workflow_dispatch` + Postgres service).
+| Surface | Daily gate | Manual Fly staging (`fly-staging-roundtrip.yml`) |
+| --- | --- | --- |
+| Fly Machines API | Fake (`createFakeFlyClient`) | Real (`createFlyMachinesClient`, token from `FLY_API_TOKEN`) |
+| Workspace store | In-memory | In-memory for the round-trip script |
+| Machine HTTP (health / power / pairing) | Injected `machineFetch` / loopback | Real machine at `https://<app>.fly.dev` |
+| Signer / nonce | Real HMAC; in-memory nonce store | Real HMAC against the live machine; wrong signature + replayed nonce must return 401 |
+| Cost probe (S2.10) | Not run | `fly-cost-probe.mjs` → `artifacts/s2-10/*.json` (egress bytes not on Machines list API → `null`) |
+| Postgres tenant routing (AD-I) | Not run | Separate `admin-postgres.yml` only |
+
+Matrix rows **AD-I** and **CS-I** stay `planned` until a green `fly-staging-roundtrip` workflow run is on record. The daily CI gate is unchanged: Fly staging stays `workflow_dispatch` only.
+
+## Manual staging workflow
+
+`.github/workflows/fly-staging-roundtrip.yml` (`workflow_dispatch`):
+
+1. Requires repo secret `FLY_API_TOKEN` and input `fly_org`.
+2. Builds Dockerfile `--target cloud-home` (no Grok / engine CLIs) and pushes to `registry.fly.io/fizot-home-image:staging`.
+3. Runs `scripts/fizot/fly-staging-roundtrip.mjs`: create → wait health → pairing → power → cost probe → negative wrong signature → negative replayed nonce → destroy → assert app gone.
+4. Always runs the 24h cleanup script (max age 0 for leftovers from the run).

@@ -55,7 +55,7 @@ export function createAdminServices(config: AdminConfig) {
       region: config.flyRegion,
       sizeGb: flags.volumeGb || FLY_HOME_VOLUME_GB,
     });
-    await config.fly.setSecrets({
+    const secrets = await config.fly.setSecrets({
       appName,
       secrets: {
         OMB_CLOUD_ADMIN_URL: config.adminUrl,
@@ -83,6 +83,8 @@ export function createAdminServices(config: AdminConfig) {
         cpus: flags.cpus,
         memory_mb: flags.memoryMb,
       },
+      autoDestroy: true,
+      minSecretsVersion: secrets.version || undefined,
     });
 
     const record: WorkspaceRecord = {
@@ -178,7 +180,23 @@ export function createAdminServices(config: AdminConfig) {
     };
   }
 
-  return { createWorkspace, workspaceHealth, workspacePower, workspacePairing, store: config.store };
+  async function destroyWorkspace(id: string): Promise<{ destroyed: true; appName: string }> {
+    const workspace = await config.store.get(id);
+    if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    await config.fly.destroyApp(workspace.appName);
+    await config.store.delete(workspace.id);
+    return { destroyed: true, appName: workspace.appName };
+  }
+
+  return {
+    createWorkspace,
+    workspaceHealth,
+    workspacePower,
+    workspacePairing,
+    destroyWorkspace,
+    store: config.store,
+    fly: config.fly,
+  };
 }
 
 export type AdminServices = ReturnType<typeof createAdminServices>;

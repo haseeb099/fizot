@@ -55,6 +55,14 @@ export function createAdminHandler(services: AdminServices): (req: IncomingMessa
         return;
       }
 
+      const destroyMatch = /^\/admin\/workspaces\/([^/]+)$/.exec(url.pathname);
+      if (destroyMatch && method === "DELETE") {
+        const id = decodeURIComponent(destroyMatch[1]!);
+        const result = await services.destroyWorkspace(id);
+        send(res, 200, { ok: true, ...result });
+        return;
+      }
+
       const match = /^\/admin\/workspaces\/([^/]+)\/(health|power|pairing)$/.exec(url.pathname);
       if (match) {
         const id = decodeURIComponent(match[1]!);

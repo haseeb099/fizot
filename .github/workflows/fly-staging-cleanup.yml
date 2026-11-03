@@ -1,0 +1,61 @@
+# 24-hour cleanup for Fizot staging Fly apps (Gate G0b). Manual or daily.
+# Not on the daily gate. Requires repo secret FLY_API_TOKEN.
+name: Fizot Fly staging cleanup (24h)
+
+on:
+  workflow_dispatch:
+    inputs:
+      fly_org:
+        description: Fly org slug for staging
+        required: true
+        type: string
+  schedule:
+    # Once a day — destroy fizot-cm-* apps older than 24 hours.
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Destroy staging apps older than 24h
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_ORG: ${{ inputs.fly_org || vars.FLY_ORG || 'fizot-staging' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require FLY_API_TOKEN
+        id: token
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "Repo secret FLY_API_TOKEN is not set; skipping cleanup."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+        if: steps.token.outputs.skip != 'true'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.token.outputs.skip != 'true'
+        with:
+          node-version: 24
+          cache: pnpm
+      - if: steps.token.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Print projected daily cost
+        if: steps.token.outputs.skip != 'true'
+        run: |
+          node --experimental-strip-types -e "
+            import { formatCostProjection, projectDailyCost } from './server/fizot/admin/cost-guard.ts';
+            console.log(formatCostProjection(projectDailyCost({})));
+          "
+      - name: Destroy apps older than 24 hours
+        if: steps.token.outputs.skip != 'true'
+        run: node --experimental-strip-types scripts/fizot/fly-staging-cleanup.mjs
+      - name: Skipped
+        if: steps.token.outputs.skip == 'true'
+        run: echo "No FLY_API_TOKEN; nothing to clean."

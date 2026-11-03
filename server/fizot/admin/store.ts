@@ -23,6 +23,7 @@ export interface WorkspaceStore {
   getByAppName(appName: string): Promise<WorkspaceRecord | null>;
   listByOwner(ownerEmail: string): Promise<WorkspaceRecord[]>;
   listByTenant(tenantKey: string): Promise<WorkspaceRecord[]>;
+  delete(id: string): Promise<void>;
 }
 
 export function createMemoryWorkspaceStore(): WorkspaceStore & { rows: Map<string, WorkspaceRecord> } {
@@ -52,6 +53,9 @@ export function createMemoryWorkspaceStore(): WorkspaceStore & { rows: Map<strin
         || row.ownerEmail?.toLowerCase() === needle
         || row.id.toLowerCase() === needle,
       );
+    },
+    async delete(id) {
+      rows.delete(id);
     },
   };
 }
@@ -134,6 +138,9 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
         [tenantKey],
       );
       return result.rows.map(toRow);
+    },
+    async delete(id) {
+      await pool.query(`DELETE FROM fizot_admin_workspaces WHERE id = $1`, [id]);
     },
     async close() {
       await pool.end();
