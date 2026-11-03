@@ -4,7 +4,20 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36.
+
+## CL-36 Spike A/B real proof: browser capture, boxed canaries, measured honour
+
+- Date: 2026-11-03
+- Type: Code
+- Area: CI & tests; Sandbox & egress; Proxy & billing
+- Why we changed it: PRs #5/#6 left placeholders (fetch settings, strace attach, fake shell, hard-coded honour). S2.8/S2.9 require real proof.
+- Why it is necessary: Gate G2 and K5 need evidence the capture and canary work, including negative controls.
+- How it works: Spike A wraps the fixture under `strace -f -e connect,sendto`, drives the real renderer (Chrome sandbox sysctl), and fails a negative CONNECT to `example.invalid`. Spike B runs real bwrap canaries, measures `OMB_CLOUD_AI_URL` via the Fizot proxy ledger on a Cloud-home fixture, drops the broken upstream-mirror box-check comparison, and lists TC26–TC68 pass/not-run with owners.
+- Impact: No Fly spend. Spike workflows stay off the daily gate.
+- Rollback: Revert this commit; restore prior spike scripts and workflows.
+- Files / Patch IDs: PATCH-27. Notion PR 36. https://app.notion.com/p/40ddd43e0a9d818c92cadb94b9c13d5b
+- Related tasks: FZ-15, FZ-16. Patch: https://app.notion.com/p/40ddd43e0a9d812f8a1ec391830055af
 
 ## CL-9 Pin the private fork at OpenMausBot v0.1.134
 

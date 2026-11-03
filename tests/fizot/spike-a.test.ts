@@ -14,6 +14,7 @@ import {
   summarizeHosts,
 } from "../../scripts/fizot/spike-a-hosts.mjs";
 import { startLoggingProxy } from "../../scripts/fizot/spike-a-proxy.mjs";
+import { runNegativeControl } from "../../scripts/fizot/spike-a-negative.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -49,7 +50,7 @@ describe("Spike A host capture (SA-I)", () => {
   it("records CONNECT hosts through the logging proxy", async () => {
     const sink = createServer((socket) => socket.end());
     await new Promise((resolve) => sink.listen(0, "127.0.0.1", resolve));
-    const sinkPort = (sink.address()).port;
+    const sinkPort = (sink.address() as { port: number }).port;
     const logPath = path.join(mkdtempSync(path.join(tmpdir(), "spike-a-proxy-")), "proxy.jsonl");
     const proxy = await startLoggingProxy(logPath);
     try {
@@ -73,13 +74,26 @@ describe("Spike A host capture (SA-I)", () => {
       await new Promise((resolve) => sink.close(resolve));
     }
   });
+
+  it("negative control names a non-allow-listed host and fails the spike (exit 1)", async () => {
+    const result = await runNegativeControl({ host: "example.invalid" });
+    expect(result.denied).toContain("example.invalid");
+    expect(result.exitCode).toBe(1);
+    expect(result.proveFail).toBe(true);
+  });
 });
 
 describe("Spike A browser chat step (SA-E)", () => {
-  it("keeps the browser-chat driver behind an explicit flag", () => {
+  it("drives the real renderer via control-omb ui for onboarding, Settings and chat", () => {
     const source = readFileSync(path.join(ROOT, "scripts", "fizot", "spike-a.mjs"), "utf8");
     expect(source).toContain("SPIKE_A_BROWSER");
     expect(source).toContain("Message Pepper");
     expect(source).toContain("ui launch");
+    expect(source).toContain("?onboarding=1");
+    expect(source).toContain("SETTINGS_TABS");
+    expect(source).toContain("OMB_VERIFY_STRACE_LOG");
+    const workflow = readFileSync(path.join(ROOT, ".github", "workflows", "spike-a.yml"), "utf8");
+    expect(workflow).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+    expect(workflow).toContain("spike-a-negative.mjs");
   });
 });

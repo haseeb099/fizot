@@ -1,9 +1,8 @@
 name: Spike A network capture
 
-# Needs Linux for the logging proxy and optional strace attach. Not part of the
-# daily CI gate. workflow_dispatch is the steady trigger once this file is on
-# main; pull_request (path-filtered) is how the first evidence run starts from
-# a branch GitHub has not yet listed for manual dispatch.
+# Needs Linux for the logging proxy, strace wrap, and Chrome sandbox. Not part
+# of the daily CI gate. workflow_dispatch once on main; path-filtered
+# pull_request starts the first evidence run from this branch.
 on:
   workflow_dispatch:
   pull_request:
@@ -11,7 +10,9 @@ on:
       - ".github/workflows/spike-a.yml"
       - "scripts/fizot/spike-a.mjs"
       - "scripts/fizot/spike-a-*.mjs"
+      - "scripts/fizot/spike-a-negative.mjs"
       - "tests/fizot/spike-a.test.ts"
+      - "scripts/control-omb.ts"
 
 permissions:
   contents: read
@@ -35,8 +36,24 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Let Chrome build its sandbox on this runner
+        # Ubuntu 24.04's AppArmor profile blocks unprivileged user namespaces,
+        # so the downloaded Chrome for Testing dies with "No usable sandbox".
+        # This is Chrome's own documented fix for 23.10+; a developer machine
+        # needs nothing, and the sandbox itself stays on.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run Spike A capture
         run: node --experimental-strip-types scripts/fizot/spike-a.mjs --strace
+      - name: Negative control (must exit 1 naming example.invalid)
+        id: negative
+        continue-on-error: true
+        run: node --experimental-strip-types scripts/fizot/spike-a-negative.mjs
+      - name: Assert negative control failed the spike
+        run: |
+          test "${{ steps.negative.outcome }}" = "failure"
+          test -f artifacts/spike-a/negative-summary.json
+          grep -q 'example.invalid' artifacts/spike-a/negative-summary.json
+          echo "negative control named example.invalid and exited non-zero"
       - name: Upload Spike A artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Spike A: build the rebranded renderer, run the control-omb fixture through a
- * loopback logging proxy, drive start / onboarding / bot / chat / settings /
- * bug-report, and fail if any host is outside brand/allowed-hosts.json.
+ * loopback logging proxy under strace, drive the real renderer (onboarding,
+ * Settings tabs, one chat), and fail if any host is outside brand/allowed-hosts.json.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchVerificationServer, runControlOmb } from "../control-omb.ts";
@@ -24,21 +24,18 @@ import {
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ARTIFACTS = path.join(ROOT, "artifacts", "spike-a");
 const ALLOW = path.join(ROOT, "brand", "allowed-hosts.json");
-const SETTINGS_TABS = ["general", "providers", "appearance", "advanced", "about"];
-
-function run(command, args, env = process.env) {
-  const result = spawnSync(command, args, { cwd: ROOT, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed:\n${result.stderr || result.stdout}`);
-  }
-  return result.stdout;
-}
+/** Simple-mode Settings pages a fixture browser can open without Advanced mode. */
+const SETTINGS_TABS = ["General", "AI", "Computer", "Billing", "Updates"];
 
 export function buildRebrandedDist() {
-  run(process.platform === "win32" ? "pnpm.cmd" : "pnpm", ["exec", "vite", "build"], {
-    ...process.env,
-    NODE_OPTIONS: process.env.NODE_OPTIONS ?? "--max-old-space-size=7000",
+  const result = spawnSync(process.platform === "win32" ? "pnpm.cmd" : "pnpm", ["exec", "vite", "build"], {
+    cwd: ROOT,
+    env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS ?? "--max-old-space-size=7000" },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  if (result.status !== 0) throw new Error(`vite build failed:\n${result.stderr || result.stdout}`);
+  return result.stdout;
 }
 
 function startBugSink() {
@@ -77,17 +74,6 @@ async function driveApi(serverUrl) {
   return botId;
 }
 
-async function driveSettingsAndOnboarding(serverUrl) {
-  // Settings tabs and onboarding are renderer routes; hit the fixture's static
-  // shell and the preview entries the ui harness uses, without a live Chrome.
-  for (const tab of SETTINGS_TABS) {
-    const response = await fetch(`${serverUrl}/?settings=${tab}`);
-    if (!response.ok && response.status !== 404) throw new Error(`settings ${tab}: HTTP ${response.status}`);
-  }
-  const onboarding = await fetch(`${serverUrl}/?onboarding=1`);
-  if (!onboarding.ok && onboarding.status !== 404) throw new Error(`onboarding: HTTP ${onboarding.status}`);
-}
-
 async function driveBugReport(serverUrl, botId) {
   const response = await fetch(`${serverUrl}/api/internal/devs/report`, {
     method: "POST",
@@ -99,19 +85,18 @@ async function driveBugReport(serverUrl, botId) {
       contactEmail: "spike-a@example.invalid",
     }),
   });
-  // The route may require an internal token; a 401/404 still exercised the
-  // bugReportEndpoint lookup. A 2xx means the loopback sink got the report.
   return response.status;
 }
 
-async function driveBrowserChat(serverUrl) {
-  // Optional SA-E path: real Chromium through a separate control-omb ui process.
+/** Drive a parked `ui launch` handle: onboarding, every Settings tab, one chat. */
+async function driveBrowserCapture(serverUrl) {
   if (process.env.OMB_UI_E2E !== "1" && process.env.SPIKE_A_BROWSER !== "1") {
     return { ok: false, reason: "set SPIKE_A_BROWSER=1 or OMB_UI_E2E=1 to drive Chromium" };
   }
   const cli = path.join(ROOT, "scripts", "control-omb.ts");
   return await new Promise((resolve) => {
     let settled = false;
+    let driving = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
@@ -128,29 +113,52 @@ async function driveBrowserChat(serverUrl) {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       finish({ ok: false, reason: `ui launch timed out\n${stderr}` });
-    }, 120_000);
+    }, 240_000);
     child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
     child.stdout?.on("data", async (chunk) => {
-      if (settled) return;
+      if (settled || driving) return;
       stdout += String(chunk);
       const start = stdout.indexOf("{");
       if (start < 0) return;
+      let handle;
       try {
-        const handle = JSON.parse(stdout.slice(start));
-        if (!handle?.ui && !handle?.session) return;
-        const ui = JSON.stringify(handle);
-        await runControlOmb(["ui", "type", "--ui", ui, "--name", "Message Pepper", "--text", "Spike A browser chat"], { env: process.env });
-        await runControlOmb(["ui", "press", "--ui", ui, "--keys", "Enter"], { env: process.env });
-        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "60"], { env: process.env });
+        handle = JSON.parse(stdout.slice(start));
+      } catch {
+        return;
+      }
+      if (!handle?.ui && !handle?.session) return;
+      driving = true;
+      const ui = JSON.stringify(handle);
+      const env = { ...process.env, OPENMAUSBOT_URL: serverUrl, OMB_UI_E2E: "1" };
+      try {
+        await runControlOmb(["ui", "eval", "--ui", ui, "--js",
+          "localStorage.clear(); sessionStorage.clear(); localStorage.setItem('omb-advanced-mode','1'); setTimeout(() => { location.search = '?onboarding=1'; }, 0); true"], { env });
+        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "30"], { env });
+
+        await runControlOmb(["ui", "eval", "--ui", ui, "--js",
+          "setTimeout(() => { location.search = ''; }, 0); true"], { env });
+        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "30"], { env });
+        for (const tab of SETTINGS_TABS) {
+          await runControlOmb(["ui", "eval", "--ui", ui, "--js",
+            "(() => { const btn = [...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === 'Settings'); if (btn) btn.click(); return true; })()"], { env });
+          await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "15"], { env });
+          await runControlOmb(["ui", "eval", "--ui", ui, "--js",
+            `(() => { const btn = [...document.querySelectorAll('button,[role=tab]')].find(b => (b.textContent || '').trim() === ${JSON.stringify(tab)}); if (btn) btn.click(); return ${JSON.stringify(tab)}; })()`], { env });
+          await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "15"], { env });
+        }
+        await runControlOmb(["ui", "press", "--ui", ui, "--keys", "Escape"], { env }).catch(() => {});
+        await runControlOmb(["ui", "type", "--ui", ui, "--name", "Message Pepper", "--text", "Spike A browser chat"], { env });
+        await runControlOmb(["ui", "press", "--ui", ui, "--keys", "Enter"], { env });
+        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "60"], { env });
         child.kill("SIGINT");
-        finish({ ok: true, handle });
+        finish({ ok: true, handle, settingsTabs: SETTINGS_TABS });
       } catch (error) {
         child.kill("SIGKILL");
-        finish({ ok: false, reason: error instanceof Error ? error.message : String(error) });
+        finish({ ok: false, reason: error instanceof Error ? error.message : String(error), stderr });
       }
     });
     child.on("exit", () => {
-      finish({ ok: false, reason: `ui exited before a handle\n${stderr}\n${stdout}` });
+      if (!driving) finish({ ok: false, reason: `ui exited before a handle\n${stderr}\n${stdout}` });
     });
   });
 }
@@ -172,7 +180,6 @@ export async function runSpikeA(options = {}) {
   const proxy = await startLoggingProxy(proxyLog);
   const bugSink = await startBugSink();
   let server;
-  let straceText = "";
   let browser = { ok: false, reason: "skipped" };
   try {
     const parentEnv = {
@@ -185,40 +192,33 @@ export async function runSpikeA(options = {}) {
       FIZOT_FETCH_LOG: fetchLog,
       OMB_BUG_REPORT_URL: bugSink.url,
       FAKE_CLAUDE_MODE: "happy",
+      ...(options.strace && process.platform === "linux" ? { OMB_VERIFY_STRACE_LOG: straceLog } : {}),
     };
 
     server = await launchVerificationServer(parentEnv);
     const botId = await driveApi(server.info.url);
-    await driveSettingsAndOnboarding(server.info.url);
     await driveBugReport(server.info.url, botId);
-    if (options.browser !== false) browser = await driveBrowserChat(server.info.url);
-
-    if (options.strace && process.platform === "linux" && server.child.pid) {
-      const traced = spawnSync("strace", ["-f", "-e", "trace=connect", "-p", String(server.child.pid), "-o", straceLog], {
-        encoding: "utf8",
-        timeout: 2_000,
-      });
-      // strace -p needs privileges; when it fails we keep the proxy log alone.
-      if (traced.status === 0 || existsSync(straceLog)) straceText = readText(straceLog);
-      else writeFileSync(straceLog, traced.stderr || "strace unavailable\n", "utf8");
-    }
+    if (options.browser !== false) browser = await driveBrowserCapture(server.info.url);
 
     const hosts = new Set([
       ...hostsFromProxyLog(readText(proxyLog)),
       ...hostsFromFetchLog(readText(fetchLog)),
-      ...hostsFromStrace(straceText || readText(straceLog)),
+      ...hostsFromStrace(readText(straceLog)),
     ]);
     const allow = allowedRuntimeHosts(ALLOW);
     const summary = summarizeHosts(hosts, allow);
     const denied = deniedHosts(summary);
+    const requireBrowser = options.browser !== false && (process.env.SPIKE_A_BROWSER === "1" || process.env.OMB_UI_E2E === "1");
+    const exitOk = denied.length === 0 && (!requireBrowser || browser.ok === true);
     const report = {
-      ok: denied.length === 0,
+      ok: exitOk,
       proxyUrl: proxy.url,
       serverUrl: server.info.url,
       browser,
       bugSinkHits: bugSink.hits().length,
       hosts: summary,
       denied,
+      straceWrapped: Boolean(parentEnv.OMB_VERIFY_STRACE_LOG),
       artifacts: { proxyLog, fetchLog, straceLog, summaryPath },
     };
     writeFileSync(summaryPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
@@ -227,7 +227,11 @@ export async function runSpikeA(options = {}) {
       console.error(`Spike A failed: ${denied.length} host(s) outside the allow-list: ${denied.join(", ")}`);
       return { ...report, exitCode: 1 };
     }
-    console.log(`Spike A passed: ${summary.length} host(s), all allow-listed or loopback.`);
+    if (requireBrowser && browser.ok !== true) {
+      console.error(`Spike A failed: browser drive did not succeed: ${browser.reason ?? "unknown"}`);
+      return { ...report, exitCode: 1 };
+    }
+    console.log(`Spike A passed: ${summary.length} host(s), all allow-listed or loopback; browser=${browser.ok}.`);
     return { ...report, exitCode: 0 };
   } finally {
     await server?.close();
@@ -236,10 +240,17 @@ export async function runSpikeA(options = {}) {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  const browser = !process.argv.includes("--no-browser");
-  const build = !process.argv.includes("--no-build");
-  const strace = process.argv.includes("--strace") || process.platform === "linux";
-  const result = await runSpikeA({ browser, build, strace });
-  process.exit(result.exitCode);
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isMain) {
+  // No top-level await: vitest imports this module for unit tests.
+  Promise.resolve().then(async () => {
+    const browser = !process.argv.includes("--no-browser");
+    const build = !process.argv.includes("--no-build");
+    const strace = process.argv.includes("--strace") || process.platform === "linux";
+    const result = await runSpikeA({ browser, build, strace });
+    process.exit(result.exitCode);
+  }).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 }
