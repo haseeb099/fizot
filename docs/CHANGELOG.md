@@ -4,7 +4,20 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38.
+
+## CL-38 Fizot Admin skeleton from the Apache cloud-home contract
+
+- Date: 2026-11-03
+- Type: Code
+- Area: Admin & provisioning; CI & tests
+- Why we changed it: Upstream Admin is not in the fork; S2.11 needs a clean-room skeleton that can provision, sign pairing, and read health/power.
+- Why it is necessary: Proves the Apache contract before committing ~480 hours to the full Admin.
+- How it works: `server/fizot/admin/` implements signer (HMAC from docs/cloud-pro.md), Fly + store interfaces with fakes, workspace create/health/power/pairing routes, plan flags, and redaction. Docs SHAs: cloud-pro `41229d0bd393629130dc7f30fe7cd926cbe7dc03`, team-cloud `5e1e740e7fcb537928a753fa290970571a131abe`. AD-I Postgres is `workflow_dispatch` only.
+- Impact: No Fly spend. Daily gate runs AD-U only.
+- Rollback: Delete `server/fizot/admin/`, `tests/fizot/admin/`, `docs/fizot/admin.md`, and `admin-postgres.yml`.
+- Files / Patch IDs: PATCH-29. Notion PR 38. https://app.notion.com/p/40ddd43e0a9d811b9bbcebda982144cb
+- Related tasks: FZ-18 (S2.11). Patch: https://app.notion.com/p/40ddd43e0a9d8147a6acd155a75bee82
 
 ## CL-36 Spike A/B real proof: browser capture, boxed canaries, measured honour
 

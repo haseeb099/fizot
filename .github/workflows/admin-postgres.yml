@@ -1,0 +1,42 @@
+# AD-I tenant routing against a real Postgres. Not on the daily gate.
+name: Fizot Admin Postgres (AD-I)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  admin-postgres:
+    name: Admin tenant routing (Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fizot
+          POSTGRES_PASSWORD: fizot
+          POSTGRES_DB: fizot_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fizot -d fizot_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_OPTIONS: --max-old-space-size=7000
+      ADMIN_DATABASE_URL: postgres://fizot:fizot@127.0.0.1:5432/fizot_admin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: AD-I tenant routing
+        run: pnpm exec vitest run tests/fizot/admin/tenant-routing.postgres.test.ts
