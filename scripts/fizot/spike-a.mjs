@@ -135,7 +135,7 @@ async function driveBrowserCapture(parentEnv) {
       }
       if (!handle?.ui) return;
       driving = true;
-      const ui = JSON.stringify(handle);
+      const ui = handle.ui;
       const env = {
         ...parentEnv,
         OMB_UI_E2E: "1",
