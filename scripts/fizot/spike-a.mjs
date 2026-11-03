@@ -24,8 +24,9 @@ import {
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ARTIFACTS = path.join(ROOT, "artifacts", "spike-a");
 const ALLOW = path.join(ROOT, "brand", "allowed-hosts.json");
-/** Simple-mode Settings pages a fixture browser can open without Advanced mode. */
+/** Simple-mode Settings pages a fixture browser can open. */
 const SETTINGS_TABS = ["General", "AI", "Computer", "Billing", "Updates"];
+const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,::1";
 
 export function buildRebrandedDist() {
   const result = spawnSync(process.platform === "win32" ? "pnpm.cmd" : "pnpm", ["exec", "vite", "build"], {
@@ -63,8 +64,7 @@ function startBugSink() {
   });
 }
 
-async function driveApi(serverUrl) {
-  const env = { ...process.env, OPENMAUSBOT_URL: serverUrl };
+async function driveApi(serverUrl, env) {
   await runControlOmb(["doctor", "--url", serverUrl], { env });
   const created = await runControlOmb(["new-bot", "--name", "SpikeA", "--url", serverUrl], { env });
   const botId = created?.bot?.id ?? created?.id;
@@ -88,11 +88,11 @@ async function driveBugReport(serverUrl, botId) {
   return response.status;
 }
 
-/** Drive a parked `ui launch` handle: onboarding, every Settings tab, one chat. */
-async function driveBrowserCapture(serverUrl) {
-  if (process.env.OMB_UI_E2E !== "1" && process.env.SPIKE_A_BROWSER !== "1") {
-    return { ok: false, reason: "set SPIKE_A_BROWSER=1 or OMB_UI_E2E=1 to drive Chromium" };
-  }
+/**
+ * Launch one control-omb ui fixture (server + Chrome) under the capture env,
+ * drive onboarding, Settings tabs and one chat, then stop the ui process.
+ */
+async function driveBrowserCapture(parentEnv) {
   const cli = path.join(ROOT, "scripts", "control-omb.ts");
   return await new Promise((resolve) => {
     let settled = false;
@@ -105,7 +105,13 @@ async function driveBrowserCapture(serverUrl) {
     };
     const child = spawn(process.execPath, ["--experimental-strip-types", cli, "ui", "launch", "--entry", "threads"], {
       cwd: ROOT,
-      env: { ...process.env, OPENMAUSBOT_URL: serverUrl, OMB_UI_E2E: "1" },
+      env: {
+        ...parentEnv,
+        OMB_UI_E2E: "1",
+        // Vite preview and fixture API stay on loopback; never send them through the CONNECT proxy.
+        NO_PROXY: LOOPBACK_NO_PROXY,
+        no_proxy: LOOPBACK_NO_PROXY,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -113,7 +119,7 @@ async function driveBrowserCapture(serverUrl) {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       finish({ ok: false, reason: `ui launch timed out\n${stderr}` });
-    }, 240_000);
+    }, 300_000);
     child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
     child.stdout?.on("data", async (chunk) => {
       if (settled || driving) return;
@@ -126,35 +132,46 @@ async function driveBrowserCapture(serverUrl) {
       } catch {
         return;
       }
-      if (!handle?.ui && !handle?.session) return;
+      if (!handle?.ui) return;
       driving = true;
       const ui = JSON.stringify(handle);
-      const env = { ...process.env, OPENMAUSBOT_URL: serverUrl, OMB_UI_E2E: "1" };
+      const env = {
+        ...parentEnv,
+        OMB_UI_E2E: "1",
+        OPENMAUSBOT_URL: handle.url,
+        NO_PROXY: LOOPBACK_NO_PROXY,
+        no_proxy: LOOPBACK_NO_PROXY,
+      };
       try {
+        const botId = handle.botId ?? await driveApi(handle.url, env);
+        await driveBugReport(handle.url, botId);
+
         await runControlOmb(["ui", "eval", "--ui", ui, "--js",
           "localStorage.clear(); sessionStorage.clear(); localStorage.setItem('omb-advanced-mode','1'); setTimeout(() => { location.search = '?onboarding=1'; }, 0); true"], { env });
-        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "30"], { env });
+        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "45"], { env });
 
         await runControlOmb(["ui", "eval", "--ui", ui, "--js",
           "setTimeout(() => { location.search = ''; }, 0); true"], { env });
-        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "30"], { env });
+        await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "45"], { env });
+
         for (const tab of SETTINGS_TABS) {
           await runControlOmb(["ui", "eval", "--ui", ui, "--js",
             "(() => { const btn = [...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === 'Settings'); if (btn) btn.click(); return true; })()"], { env });
-          await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "15"], { env });
+          await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "20"], { env });
           await runControlOmb(["ui", "eval", "--ui", ui, "--js",
             `(() => { const btn = [...document.querySelectorAll('button,[role=tab]')].find(b => (b.textContent || '').trim() === ${JSON.stringify(tab)}); if (btn) btn.click(); return ${JSON.stringify(tab)}; })()`], { env });
-          await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "15"], { env });
+          await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "20"], { env });
         }
+
         await runControlOmb(["ui", "press", "--ui", ui, "--keys", "Escape"], { env }).catch(() => {});
         await runControlOmb(["ui", "type", "--ui", ui, "--name", "Message Pepper", "--text", "Spike A browser chat"], { env });
         await runControlOmb(["ui", "press", "--ui", ui, "--keys", "Enter"], { env });
         await runControlOmb(["ui", "wait-settle", "--ui", ui, "--timeout", "60"], { env });
         child.kill("SIGINT");
-        finish({ ok: true, handle, settingsTabs: SETTINGS_TABS });
+        finish({ ok: true, handle, settingsTabs: SETTINGS_TABS, serverUrl: handle.url, botId });
       } catch (error) {
         child.kill("SIGKILL");
-        finish({ ok: false, reason: error instanceof Error ? error.message : String(error), stderr });
+        finish({ ok: false, reason: error instanceof Error ? error.message : String(error), stderr, serverUrl: handle.url });
       }
     });
     child.on("exit", () => {
@@ -181,6 +198,7 @@ export async function runSpikeA(options = {}) {
   const bugSink = await startBugSink();
   let server;
   let browser = { ok: false, reason: "skipped" };
+  let serverUrl = "";
   try {
     const parentEnv = {
       ...process.env,
@@ -189,16 +207,25 @@ export async function runSpikeA(options = {}) {
       https_proxy: proxy.url,
       http_proxy: proxy.url,
       NODE_USE_ENV_PROXY: "1",
+      NO_PROXY: LOOPBACK_NO_PROXY,
+      no_proxy: LOOPBACK_NO_PROXY,
       FIZOT_FETCH_LOG: fetchLog,
       OMB_BUG_REPORT_URL: bugSink.url,
       FAKE_CLAUDE_MODE: "happy",
       ...(options.strace && process.platform === "linux" ? { OMB_VERIFY_STRACE_LOG: straceLog } : {}),
     };
 
-    server = await launchVerificationServer(parentEnv);
-    const botId = await driveApi(server.info.url);
-    await driveBugReport(server.info.url, botId);
-    if (options.browser !== false) browser = await driveBrowserCapture(server.info.url);
+    const requireBrowser = options.browser !== false && (process.env.SPIKE_A_BROWSER === "1" || process.env.OMB_UI_E2E === "1");
+    if (requireBrowser) {
+      browser = await driveBrowserCapture(parentEnv);
+      serverUrl = browser.serverUrl ?? "";
+    } else {
+      server = await launchVerificationServer(parentEnv);
+      serverUrl = server.info.url;
+      const botId = await driveApi(serverUrl, { ...process.env, OPENMAUSBOT_URL: serverUrl });
+      await driveBugReport(serverUrl, botId);
+      if (options.browser !== false) browser = await driveBrowserCapture(parentEnv);
+    }
 
     const hosts = new Set([
       ...hostsFromProxyLog(readText(proxyLog)),
@@ -208,12 +235,11 @@ export async function runSpikeA(options = {}) {
     const allow = allowedRuntimeHosts(ALLOW);
     const summary = summarizeHosts(hosts, allow);
     const denied = deniedHosts(summary);
-    const requireBrowser = options.browser !== false && (process.env.SPIKE_A_BROWSER === "1" || process.env.OMB_UI_E2E === "1");
     const exitOk = denied.length === 0 && (!requireBrowser || browser.ok === true);
     const report = {
       ok: exitOk,
       proxyUrl: proxy.url,
-      serverUrl: server.info.url,
+      serverUrl,
       browser,
       bugSinkHits: bugSink.hits().length,
       hosts: summary,
@@ -242,7 +268,6 @@ export async function runSpikeA(options = {}) {
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
-  // No top-level await: vitest imports this module for unit tests.
   Promise.resolve().then(async () => {
     const browser = !process.argv.includes("--no-browser");
     const build = !process.argv.includes("--no-build");

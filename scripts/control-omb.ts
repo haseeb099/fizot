@@ -212,6 +212,9 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
     childEnv.https_proxy = proxyUrl;
     childEnv.http_proxy = proxyUrl;
     childEnv.NODE_USE_ENV_PROXY = "1";
+    // Keep fixture + Vite preview on loopback out of the CONNECT proxy.
+    childEnv.NO_PROXY = parentEnv.NO_PROXY?.trim() || "127.0.0.1,localhost,::1";
+    childEnv.no_proxy = childEnv.NO_PROXY;
   }
   const tregUrl = parentEnv.OMB_TREG_URL?.trim() ?? "";
   if (/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(tregUrl)) childEnv.OMB_TREG_URL = tregUrl;
