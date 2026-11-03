@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { createFakeFlyClient, type FlyClient } from "./fly.ts";
+import { createFakeFlyClient, createFlyMachinesClient, type FlyClient } from "./fly.ts";
 import { createMemoryNonceStore, type NonceStore } from "./nonce-store.ts";
 import { createAdminHandler } from "./routes.ts";
 import { createMemoryWorkspaceStore, createPostgresWorkspaceStore, type WorkspaceStore } from "./store.ts";
@@ -9,6 +9,7 @@ export type { FlyClient, NonceStore, WorkspaceStore, AdminConfig };
 
 export {
   createFakeFlyClient,
+  createFlyMachinesClient,
   createMemoryNonceStore,
   createMemoryWorkspaceStore,
   createPostgresWorkspaceStore,
@@ -19,6 +20,13 @@ export {
   planFlags,
   redactForLog,
   safeLogLine,
+  projectDailyCost,
+  formatCostProjection,
+  assertMachineBudget,
+  CostGuardError,
+  MAX_STAGING_MACHINES,
+  MAX_PROBE_MACHINE_SECONDS,
+  FLY_STAGING_APP_PREFIX,
 } from "./public.ts";
 
 export type CreateAdminServerOptions = {
@@ -43,12 +51,18 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     ?? (process.env.ADMIN_DATABASE_URL
       ? await createPostgresWorkspaceStore(process.env.ADMIN_DATABASE_URL)
       : createMemoryWorkspaceStore());
+  const flyOrg = options.flyOrg ?? process.env.FLY_ORG ?? "fizot-staging";
+  const token = process.env.FLY_API_TOKEN?.trim();
+  const fly = options.fly
+    ?? (token
+      ? createFlyMachinesClient({ token, org: flyOrg })
+      : createFakeFlyClient());
   const services = createAdminServices({
     adminUrl: options.adminUrl ?? process.env.FIZOT_ADMIN_URL ?? "https://admin.example.invalid",
-    flyOrg: options.flyOrg ?? process.env.FLY_ORG ?? "fizot-staging",
+    flyOrg,
     flyRegion: options.flyRegion ?? process.env.FLY_REGION ?? "lhr",
     machineImage: options.machineImage ?? process.env.FIZOT_MACHINE_IMAGE ?? "registry.fly.io/fizot-home:latest",
-    fly: options.fly ?? createFakeFlyClient(),
+    fly,
     store,
     nonces: options.nonces ?? createMemoryNonceStore(),
     machineFetch: options.machineFetch,

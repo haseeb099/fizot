@@ -4,7 +4,20 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39.
+
+## CL-39 Fly staging round trip and S2.10 cost probe hooks
+
+- Date: 2026-11-03
+- Type: Code
+- Area: Admin & provisioning; CI & tests; Cost
+- Why we changed it: S2.11's Done-when needs a real Fly staging create/health/pairing/destroy path; S2.10 needs measured usage JSON for the cost sheet.
+- Why it is necessary: Gate G0b (100 GBP/month) requires a cost guard and proof before committing to Admin spend; AD-I/CS-I stay planned until a green manual run.
+- How it works: `createFlyMachinesClient` implements the Fly Machines API behind the existing interface (own network, 10 GB volume, shared-cpu-1x 2 GB, secrets, destroy). Cost guard refuses >2 live `fizot-cm-*` machines, always sets `auto_destroy`, prints projected daily cost, and schedules a 24h cleanup workflow. `fly-staging-roundtrip.yml` (`workflow_dispatch` + `FLY_API_TOKEN`) builds the cloud-home image, runs create → health → pairing → power → wrong-signature/replay negatives → destroy, and writes `artifacts/s2-10/` via `fly-cost-probe.mjs` (≤1 h machine time). Docs SHAs unchanged: cloud-pro `41229d0bd393629130dc7f30fe7cd926cbe7dc03`, team-cloud `5e1e740e7fcb537928a753fa290970571a131abe`. Daily gate unchanged.
+- Impact: No Fly spend on the daily gate. Manual run spend is capped by the cost guard.
+- Rollback: Delete the new Fly client paths, staging workflows, and probe scripts; restore Admin to fake-only.
+- Files / Patch IDs: PATCH-30. Notion PR 39. https://app.notion.com/p/40ddd43e0a9d8167aeaac5dad275b0c4
+- Related tasks: FZ-18 (S2.11), FZ-17 (S2.10). Patch: https://app.notion.com/p/40ddd43e0a9d8115b49de0f08118cede
 
 ## CL-38 Fizot Admin skeleton from the Apache cloud-home contract
 
