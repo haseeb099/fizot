@@ -41,6 +41,7 @@ describe("Spike A host capture (SA-I)", () => {
       JSON.stringify({ kind: "connect", host: "127.0.0.1" }),
       JSON.stringify({ kind: "connect", host: "fixture.openmausbot.com" }),
       JSON.stringify({ kind: "connect", host: "api.x.ai" }),
+      JSON.stringify({ kind: "connect", host: "update.googleapis.com" }),
     ].join("\n"));
     const fetchHosts = hostsFromFetchLog("http://127.0.0.1:9/api/bug-reports\nhttps://posthog.com/e\n");
     const summary = summarizeHosts(new Set([...proxyHosts, ...fetchHosts]), allow);
