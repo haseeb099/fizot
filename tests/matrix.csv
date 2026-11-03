@@ -41,6 +41,8 @@ AB-E,Abuse controls and free tier,e2e,"J1, J6","J1; J6",G5,planned,R5.4
 CI-U,Test and CI foundation,unit,"Runner and coverage config: 80% on our own code, every branch in billing, auth, isolation and approval",none,G0,planned,S2.7
 CI-I,Test and CI foundation,integration,"Unit on every commit, integration on every pull request, end-to-end on every release candidate and nightly",none,G0,planned,S2.7
 CI-E,Test and CI foundation,e2e,A smoke journey on every deploy,none,G0,planned,S2.7
+DA-U,Dependency audit,unit,"Allow-list parser requires reason and expiry; seeded high advisory fails without an exception and passes with one",none,G2,implemented,S2.6
+DA-I,Dependency audit,integration,Daily static job runs pnpm audit high/critical via scripts/fizot/audit-gate.mjs,none,G2,implemented,S2.6
 RD-I,Pilot readiness,integration,"Insurance certificate, ICO fee receipt and written solicitor licence sign-off are on file before any partner is hosted",none,G3,planned,S2.12
 GN-I,Go or no-go,integration,"Every row in tests/matrix.csv has a pass, and there is no open P0 or P1",none,G6,planned,H7.4
 GN-E,Go or no-go,e2e,J1 to J11 pass at desktop and phone width,"J1; J2; J3; J4; J5; J6; J7; J8; J9; J10; J11",G6,planned,H7.4

@@ -26,6 +26,7 @@ const JOURNEY_NONE = new Set([
   "CL-U", "CL-I",
   "AB-U", "AB-I",
   "CI-U", "CI-I", "CI-E",
+  "DA-U", "DA-I",
   "RD-I",
   "GN-I",
 ]);
@@ -95,7 +96,7 @@ export function journeyProblems(row: Record<string, string>): string[] {
 const matrix = matrixRows(readFileSync(join(ROOT, "tests", "matrix.csv"), "utf8"));
 
 it("rejects a row missing an id, layer, gate, journey or owner task (TM-U)", () => {
-  expect(matrix).toHaveLength(45);
+  expect(matrix).toHaveLength(47);
   expect(matrix.flatMap((row) => missingRequired(row).map((field) => `${row.id || "(blank)"}:${field}`))).toEqual([]);
   expect(matrix.flatMap((row) => journeyProblems(row).map((field) => `${row.id}:${field}`))).toEqual([]);
   const blank: Record<string, string> = {
