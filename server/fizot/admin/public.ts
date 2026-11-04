@@ -28,4 +28,13 @@ export {
 } from "./tenant.ts";
 export { FakeAuthProvider, UnconfiguredAuthProvider, SESSION_COOKIE_NAME } from "./auth.ts";
 export { authorizeWorkspaceAccess, AUTHORIZE_HELPER_ID } from "./authorize.ts";
-export { ROUTE_REGISTRY, matchRoute, publicRouteIds } from "./route-registry.ts";
+export {
+  ROUTE_REGISTRY,
+  ROUTE_AUTH_LEVELS,
+  matchRoute,
+  matchDispatchEntry,
+  publicRouteIds,
+  assertRouteHasAuth,
+  buildDispatchTable,
+} from "./route-registry.ts";
+export { ADMIN_DISPATCH_TABLE } from "./routes.ts";

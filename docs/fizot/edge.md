@@ -19,15 +19,22 @@ interface AuthProvider {
 }
 ```
 
-- `FakeAuthProvider` — email is the identity (tests / staging fake-sign-in).
-- `UnconfiguredAuthProvider` — refuses until a vendor is wired.
-- Sessions are Fizot-issued: cookie `fizot_admin_session`, HttpOnly, Secure
-  (production), SameSite=Lax; token hashed server-side; rotation on sign-in;
+- `FakeAuthProvider` — email is the identity (tests / explicit staging only).
+- `UnconfiguredAuthProvider` — default outside `NODE_ENV=test`; refuses until a
+  vendor is wired. `createAdminServer` fails closed on this provider.
+- Sessions are Fizot-issued: cookie `fizot_admin_session`, HttpOnly, **Secure by
+  default**, SameSite=Lax; token hashed server-side; rotation on sign-in;
   revocation via `revoked_at`.
 
-Public allow-list (no session): `GET /edge/health`, `POST /edge/auth/fake-sign-in`
-(FakeAuthProvider only). Everything else needs a session; workspace-scoped
-routes also need membership via `authorizeWorkspaceAccess`.
+Public allow-list (no session): `GET /edge/health`, and `POST /edge/auth/fake-sign-in`
+only when `FakeAuthProvider` is in use (`NODE_ENV=test` or `auth` passed
+explicitly). In every other mode fake-sign-in returns **404**. Production
+(`NODE_ENV` or `FIZOT_ENV` = `production`) refuses to start without
+`ADMIN_DATABASE_URL` (no silent memory store).
+
+Everything else needs a session; workspace-scoped routes also need membership
+via `authorizeWorkspaceAccess`. The HTTP server dispatches **only** through
+`ROUTE_REGISTRY` (auth level + handler per entry).
 
 ## Edge routing
 

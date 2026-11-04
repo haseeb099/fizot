@@ -9,7 +9,12 @@ import {
   type AuthProvider,
 } from "./auth.ts";
 import { authorizeWorkspaceAccess, type AuthorizeOk } from "./authorize.ts";
-import { matchRoute } from "./route-registry.ts";
+import {
+  buildDispatchTable,
+  matchDispatchEntry,
+  ROUTE_REGISTRY,
+  type DispatchEntry,
+} from "./route-registry.ts";
 import { safeLogLine } from "./redact.ts";
 import type { PlanId } from "./plans.ts";
 import type { SessionContext, TenantStore } from "./tenant.ts";
@@ -42,193 +47,63 @@ function statusOf(error: unknown): number {
   return 500;
 }
 
+export type RouteContext = {
+  req: IncomingMessage;
+  res: ServerResponse;
+  url: URL;
+  params: Record<string, string>;
+  session: SessionContext | null;
+  authz: AuthorizeOk | null;
+  services: AdminServices;
+  tenant: TenantStore;
+  auth: AuthProvider;
+  cookieSecure: boolean;
+  allowFakeSignIn: boolean;
+};
+
 export type AdminHandlerDeps = {
   services: AdminServices;
   tenant: TenantStore;
   auth: AuthProvider;
   /** When false, skip Secure on Set-Cookie (loopback tests). Default true. */
   cookieSecure?: boolean;
-  /** Allow POST /edge/auth/fake-sign-in. Default: FakeAuthProvider only. */
+  /** Allow POST /edge/auth/fake-sign-in. */
   allowFakeSignIn?: boolean;
 };
 
-export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const { services, tenant, auth } = deps;
-  const cookieSecure = deps.cookieSecure !== false;
-  const allowFakeSignIn = deps.allowFakeSignIn ?? auth instanceof FakeAuthProvider;
-
-  return async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://admin.local");
-      const method = (req.method ?? "GET").toUpperCase();
-      const matched = matchRoute(method, url.pathname);
-      if (!matched) {
-        send(res, 404, { error: "not_found" });
-        return;
-      }
-      const { def, params } = matched;
-      const session = await resolveRequestSession(tenant, req);
-
-      if (def.auth === "session" || def.auth === "membership") {
-        if (!session) {
-          send(res, 401, { error: "unauthorized" });
-          return;
-        }
-      }
-
-      if (def.auth === "membership") {
-        const workspaceId = params.workspaceId;
-        if (!workspaceId) {
-          send(res, 404, { error: "not_found" });
-          return;
-        }
-        const authz = await authorizeWorkspaceAccess({
-          tenant,
-          session,
-          workspaceId,
-          minRole: def.minRole ?? "member",
-        });
-        if (!authz.ok) {
-          send(res, authz.status, { error: authz.error });
-          return;
-        }
-        await handleMembershipRoute(def.id, req, res, { services, tenant, authz, url });
-        return;
-      }
-
-      await handleSessionOrPublic(def.id, req, res, {
-        services,
-        tenant,
-        auth,
-        session,
-        allowFakeSignIn,
-        cookieSecure,
-      });
-    } catch (error) {
-      console.error(safeLogLine("admin-error", { message: error instanceof Error ? error.message : String(error) }));
-      send(res, statusOf(error), { error: error instanceof Error ? error.message : "error" });
-    }
-  };
-}
-
-async function handleMembershipRoute(
-  id: string,
-  req: IncomingMessage,
-  res: ServerResponse,
-  ctx: { services: AdminServices; tenant: TenantStore; authz: AuthorizeOk; url: URL },
-): Promise<void> {
-  const workspaceId = ctx.authz.workspace.id;
-  switch (id) {
-    case "admin.destroyWorkspace": {
-      await ctx.services.destroyWorkspace(workspaceId);
-      send(res, 200, { ok: true, destroyed: true, appName: ctx.authz.workspace.appName });
-      return;
-    }
-    case "admin.health": {
-      const result = await ctx.services.workspaceHealth(workspaceId);
-      send(res, result.status, result.body);
-      return;
-    }
-    case "admin.power": {
-      const idleRaw = ctx.url.searchParams.get("idleMinutes");
-      const idleMinutes = idleRaw && /^\d+$/.test(idleRaw) ? Number(idleRaw) : undefined;
-      const result = await ctx.services.workspacePower(workspaceId, idleMinutes);
-      send(res, result.status, result.body);
-      return;
-    }
-    case "admin.sleep": {
-      const body = await readJson(req) as { idleMinutes?: number; waitMs?: number };
-      const result = await ctx.services.workspaceSleep(workspaceId, body);
-      send(res, result.status, result.body);
-      return;
-    }
-    case "admin.wake": {
-      const body = await readJson(req) as { healthWaitMs?: number };
-      const result = await ctx.services.workspaceWake(workspaceId, body);
-      send(res, result.status, result.body);
-      return;
-    }
-    case "admin.pairing": {
-      const body = await readJson(req) as {
-        label?: string;
-        ttlSeconds?: number;
-        member?: { email: string; role: TeamRole };
-      };
-      const result = await ctx.services.workspacePairing(workspaceId, body);
-      send(res, result.status === 200 ? 200 : result.status, result.body);
-      return;
-    }
-    case "edge.openWorkspace": {
-      const result = await openWorkspaceSession({
-        tenant: ctx.tenant,
-        session: ctx.authz.session,
-        workspaceId,
-        services: ctx.services,
-      });
-      if (!result.ok) {
-        send(res, result.status, { error: result.error });
-        return;
-      }
-      send(res, 200, result);
-      return;
-    }
-    default:
-      send(res, 404, { error: "not_found" });
-  }
-}
-
-async function handleSessionOrPublic(
-  id: string,
-  req: IncomingMessage,
-  res: ServerResponse,
-  ctx: {
-    services: AdminServices;
-    tenant: TenantStore;
-    auth: AuthProvider;
-    session: SessionContext | null;
-    allowFakeSignIn: boolean;
-    cookieSecure: boolean;
-  },
-): Promise<void> {
-  switch (id) {
-    case "edge.health": {
-      send(res, 200, { ok: true, service: "fizot-edge" });
-      return;
-    }
-    case "edge.fakeSignIn": {
+function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
+  return {
+    async "edge.health"(ctx) {
+      send(ctx.res, 200, { ok: true, service: "fizot-edge" });
+    },
+    async "edge.fakeSignIn"(ctx) {
       if (!ctx.allowFakeSignIn) {
-        send(res, 404, { error: "not_found" });
+        send(ctx.res, 404, { error: "not_found" });
         return;
       }
-      const body = await readJson(req) as { email?: string };
-      const prior = readSessionToken(req);
+      const body = await readJson(ctx.req) as { email?: string };
+      const prior = readSessionToken(ctx.req);
       const signed = await signInWithProvider({
         tenant: ctx.tenant,
         auth: ctx.auth,
         email: body.email ?? "",
         priorToken: prior,
       });
-      send(res, 200, { ok: true, accountId: signed.account.id, email: signed.account.email }, {
+      send(ctx.res, 200, { ok: true, accountId: signed.account.id, email: signed.account.email }, {
         "set-cookie": formatSessionCookie(signed.token, { secure: ctx.cookieSecure, maxAgeSec: 7 * 24 * 3600 }),
       });
-      return;
-    }
-    case "edge.signOut": {
+    },
+    async "edge.signOut"(ctx) {
       if (ctx.session) await ctx.tenant.revokeSession(ctx.session.session.id);
-      send(res, 200, { ok: true }, {
+      send(ctx.res, 200, { ok: true }, {
         "set-cookie": formatClearSessionCookie({ secure: ctx.cookieSecure }),
       });
-      return;
-    }
-    case "edge.me": {
-      if (!ctx.session) {
-        send(res, 401, { error: "unauthorized" });
-        return;
-      }
-      const rows = await ctx.tenant.listWorkspacesForAccount(ctx.session.account.id);
-      send(res, 200, {
+    },
+    async "edge.me"(ctx) {
+      const rows = await ctx.tenant.listWorkspacesForAccount(ctx.session!.account.id);
+      send(ctx.res, 200, {
         ok: true,
-        account: { id: ctx.session.account.id, email: ctx.session.account.email },
+        account: { id: ctx.session!.account.id, email: ctx.session!.account.email },
         workspaces: rows.map((r) => ({
           id: r.workspace.id,
           plan: r.workspace.plan,
@@ -236,26 +111,35 @@ async function handleSessionOrPublic(
           publicUrl: r.workspace.publicUrl,
         })),
       });
-      return;
-    }
-    case "admin.createWorkspace": {
-      if (!ctx.session) {
-        send(res, 401, { error: "unauthorized" });
+    },
+    async "edge.openWorkspace"(ctx) {
+      const workspaceId = ctx.authz!.workspace.id;
+      const result = await openWorkspaceSession({
+        tenant: ctx.tenant,
+        session: ctx.authz!.session,
+        workspaceId,
+        services: ctx.services,
+      });
+      if (!result.ok) {
+        send(ctx.res, result.status, { error: result.error });
         return;
       }
-      const body = await readJson(req) as {
+      send(ctx.res, 200, result);
+    },
+    async "admin.createWorkspace"(ctx) {
+      const body = await readJson(ctx.req) as {
         plan?: string;
         ownerEmail?: string;
         teamId?: string;
         teamName?: string;
       };
       if (body.plan !== "home" && body.plan !== "team") {
-        send(res, 400, { error: "unknown_plan" });
+        send(ctx.res, 400, { error: "unknown_plan" });
         return;
       }
-      const ownerEmail = body.ownerEmail?.trim().toLowerCase() || ctx.session.account.email;
-      if (ownerEmail !== ctx.session.account.email) {
-        send(res, 403, { error: "forbidden_owner" });
+      const ownerEmail = body.ownerEmail?.trim().toLowerCase() || ctx.session!.account.email;
+      if (ownerEmail !== ctx.session!.account.email) {
+        send(ctx.res, 403, { error: "forbidden_owner" });
         return;
       }
       const record = await ctx.services.createWorkspace({
@@ -264,19 +148,14 @@ async function handleSessionOrPublic(
         teamId: body.teamId,
         teamName: body.teamName,
       });
-      await ctx.tenant.upsertMembership(ctx.session.account.id, record.id, "owner");
+      await ctx.tenant.upsertMembership(ctx.session!.account.id, record.id, "owner");
       const { bootstrapSecret: _secret, ...publicRecord } = record;
       void _secret;
-      send(res, 201, { ok: true, workspace: publicRecord });
-      return;
-    }
-    case "admin.listWorkspaces": {
-      if (!ctx.session) {
-        send(res, 401, { error: "unauthorized" });
-        return;
-      }
-      const rows = await ctx.tenant.listWorkspacesForAccount(ctx.session.account.id);
-      send(res, 200, {
+      send(ctx.res, 201, { ok: true, workspace: publicRecord });
+    },
+    async "admin.listWorkspaces"(ctx) {
+      const rows = await ctx.tenant.listWorkspacesForAccount(ctx.session!.account.id);
+      send(ctx.res, 200, {
         ok: true,
         workspaces: rows.map((r) => ({
           id: r.workspace.id,
@@ -286,9 +165,115 @@ async function handleSessionOrPublic(
           appName: r.workspace.appName,
         })),
       });
-      return;
+    },
+    async "admin.destroyWorkspace"(ctx) {
+      const workspaceId = ctx.authz!.workspace.id;
+      await ctx.services.destroyWorkspace(workspaceId);
+      send(ctx.res, 200, { ok: true, destroyed: true, appName: ctx.authz!.workspace.appName });
+    },
+    async "admin.health"(ctx) {
+      const result = await ctx.services.workspaceHealth(ctx.authz!.workspace.id);
+      send(ctx.res, result.status, result.body);
+    },
+    async "admin.power"(ctx) {
+      const idleRaw = ctx.url.searchParams.get("idleMinutes");
+      const idleMinutes = idleRaw && /^\d+$/.test(idleRaw) ? Number(idleRaw) : undefined;
+      const result = await ctx.services.workspacePower(ctx.authz!.workspace.id, idleMinutes);
+      send(ctx.res, result.status, result.body);
+    },
+    async "admin.sleep"(ctx) {
+      const body = await readJson(ctx.req) as { idleMinutes?: number; waitMs?: number };
+      const result = await ctx.services.workspaceSleep(ctx.authz!.workspace.id, body);
+      send(ctx.res, result.status, result.body);
+    },
+    async "admin.wake"(ctx) {
+      const body = await readJson(ctx.req) as { healthWaitMs?: number };
+      const result = await ctx.services.workspaceWake(ctx.authz!.workspace.id, body);
+      send(ctx.res, result.status, result.body);
+    },
+    async "admin.pairing"(ctx) {
+      const body = await readJson(ctx.req) as {
+        label?: string;
+        ttlSeconds?: number;
+        member?: { email: string; role: TeamRole };
+      };
+      const result = await ctx.services.workspacePairing(ctx.authz!.workspace.id, body);
+      send(ctx.res, result.status === 200 ? 200 : result.status, result.body);
+    },
+  };
+}
+
+/** Single dispatcher table: ROUTE_REGISTRY × handlers. Built once per process. */
+export const ADMIN_DISPATCH_TABLE: DispatchEntry[] = buildDispatchTable(
+  ROUTE_REGISTRY,
+  buildHandlers() as Record<string, (ctx: unknown) => Promise<void>>,
+);
+
+/**
+ * ONE HTTP dispatcher: match ROUTE_REGISTRY only, enforce auth from the entry,
+ * then call that entry's handler. No route can be served without a registry row.
+ */
+export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const { services, tenant, auth } = deps;
+  const cookieSecure = deps.cookieSecure !== false;
+  const allowFakeSignIn = deps.allowFakeSignIn ?? auth instanceof FakeAuthProvider;
+
+  return async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://admin.local");
+      const method = (req.method ?? "GET").toUpperCase();
+      const matched = matchDispatchEntry(ADMIN_DISPATCH_TABLE, method, url.pathname);
+      if (!matched) {
+        send(res, 404, { error: "not_found" });
+        return;
+      }
+      const { entry, params } = matched;
+      const session = await resolveRequestSession(tenant, req);
+
+      if (entry.auth === "session" || entry.auth === "membership") {
+        if (!session) {
+          send(res, 401, { error: "unauthorized" });
+          return;
+        }
+      }
+
+      let authz: AuthorizeOk | null = null;
+      if (entry.auth === "membership") {
+        const workspaceId = params.workspaceId;
+        if (!workspaceId) {
+          send(res, 404, { error: "not_found" });
+          return;
+        }
+        const result = await authorizeWorkspaceAccess({
+          tenant,
+          session,
+          workspaceId,
+          minRole: entry.minRole ?? "member",
+        });
+        if (!result.ok) {
+          send(res, result.status, { error: result.error });
+          return;
+        }
+        authz = result;
+      }
+
+      const ctx: RouteContext = {
+        req,
+        res,
+        url,
+        params,
+        session,
+        authz,
+        services,
+        tenant,
+        auth,
+        cookieSecure,
+        allowFakeSignIn,
+      };
+      await (entry.handler as (c: RouteContext) => Promise<void>)(ctx);
+    } catch (error) {
+      console.error(safeLogLine("admin-error", { message: error instanceof Error ? error.message : String(error) }));
+      send(res, statusOf(error), { error: error instanceof Error ? error.message : "error" });
     }
-    default:
-      send(res, 404, { error: "not_found" });
-  }
+  };
 }

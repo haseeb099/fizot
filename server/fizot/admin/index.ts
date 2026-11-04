@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { FakeAuthProvider, type AuthProvider } from "./auth.ts";
+import { FakeAuthProvider, UnconfiguredAuthProvider, type AuthProvider } from "./auth.ts";
 import { createFakeFlyClient, createFlyMachinesClient, type FlyClient } from "./fly.ts";
 import { createMemoryNonceStore, type NonceStore } from "./nonce-store.ts";
 import { createAdminHandler } from "./routes.ts";
@@ -58,6 +58,26 @@ export type CreateAdminServerOptions = {
   allowFakeSignIn?: boolean;
 };
 
+export function isProductionAdminEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV === "production" || env.FIZOT_ENV === "production";
+}
+
+export function resolveAdminAuth(options: {
+  auth?: AuthProvider;
+  nodeEnv?: string;
+}): { auth: AuthProvider; allowFakeSignIn: boolean } {
+  const nodeEnv = options.nodeEnv ?? process.env.NODE_ENV;
+  const isTest = nodeEnv === "test";
+  if (options.auth) {
+    const allowFakeSignIn = options.auth instanceof FakeAuthProvider;
+    return { auth: options.auth, allowFakeSignIn };
+  }
+  if (isTest) {
+    return { auth: new FakeAuthProvider(), allowFakeSignIn: true };
+  }
+  return { auth: new UnconfiguredAuthProvider(), allowFakeSignIn: false };
+}
+
 export async function createAdminServer(options: CreateAdminServerOptions = {}): Promise<{
   server: Server;
   url: string;
@@ -66,15 +86,25 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   auth: AuthProvider;
   close(): Promise<void>;
 }> {
+  const databaseUrl = process.env.ADMIN_DATABASE_URL?.trim();
+  if (!options.store && !databaseUrl && isProductionAdminEnv()) {
+    throw new Error("ADMIN_DATABASE_URL is required when NODE_ENV or FIZOT_ENV is production");
+  }
+
   const store = options.store
-    ?? (process.env.ADMIN_DATABASE_URL
-      ? await createPostgresWorkspaceStore(process.env.ADMIN_DATABASE_URL)
+    ?? (databaseUrl
+      ? await createPostgresWorkspaceStore(databaseUrl)
       : createMemoryWorkspaceStore());
   const tenant = options.tenant
-    ?? (process.env.ADMIN_DATABASE_URL
-      ? await createPostgresTenantStore(process.env.ADMIN_DATABASE_URL, store)
+    ?? (databaseUrl
+      ? await createPostgresTenantStore(databaseUrl, store)
       : createMemoryTenantStore(store));
-  const auth = options.auth ?? new FakeAuthProvider();
+
+  const resolved = resolveAdminAuth({ auth: options.auth });
+  const auth = resolved.auth;
+  const allowFakeSignIn = options.allowFakeSignIn ?? resolved.allowFakeSignIn;
+  const cookieSecure = options.cookieSecure ?? true;
+
   const flyOrg = options.flyOrg ?? process.env.FLY_ORG ?? "fizot-staging";
   const token = process.env.FLY_API_TOKEN?.trim();
   const fly = options.fly
@@ -95,8 +125,8 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     services,
     tenant,
     auth,
-    cookieSecure: options.cookieSecure ?? false,
-    allowFakeSignIn: options.allowFakeSignIn,
+    cookieSecure,
+    allowFakeSignIn,
   });
   const server = createServer((req, res) => {
     void handler(req, res);

@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import {
   createAdminServer,
   createFlyMachinesClient,
+  FakeAuthProvider,
   adminRequestSignature,
   mintNonce,
   formatCostProjection,
@@ -66,6 +67,7 @@ const admin = await createAdminServer({
   flyRegion: region,
   machineImage: image,
   fly,
+  auth: new FakeAuthProvider(),
   cookieSecure: false,
 });
 
