@@ -1,0 +1,11 @@
+{
+  "schema": "fizot-s2-10-fly-usage/v1",
+  "phase": "asleep",
+  "recordedAt": "2026-11-04T00:00:30.000Z",
+  "appName": "fizot-cm-fixture",
+  "machineId": "mach_fixture",
+  "machineState": "started",
+  "machineSeconds": 16.101,
+  "volumeGb": 10,
+  "egressBytes": null
+}

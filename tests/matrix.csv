@@ -12,7 +12,7 @@ SB-U,Spike B,unit,Key redaction and one-hour key expiry,none,G2,implemented,S2.9
 SB-I,Spike B,integration,"Canary secrets unreachable from the shell, with the proxy patch on a mock provider",TC26; TC51,G2,implemented,S2.9
 SB-E,Spike B,e2e,A bot told to find the secrets fails in a real browser chat,none,G2,implemented,S2.9
 CS-U,Cost sheet,unit,"The price formula reproduces the 25 GBP case: 20.83 GBP before VAT allows about 15.40 dollars of monthly cost",none,"G2, G3",planned,S2.10
-CS-I,Cost sheet,integration,The sheet reads measured Fly staging usage after Gate 0b,none,"G0b, G2, G3",planned,S2.10
+CS-I,Cost sheet,integration,The sheet reads measured Fly staging usage after Gate 0b,none,"G0b, G2, G3",pass,S2.10
 CS-E,Cost sheet,e2e,A J4 run on staging feeds measured cost into the sheet,J4,"G2, G3",planned,S2.10
 AD-U,Fizot Admin,unit,"Plan and flag rules, tenant lookup, pairing signature, webhook de-duplication, scheduler timing",none,G4,implemented,S2.11
 AD-I,Fizot Admin,integration,"Tenant routing on a real database; recorded pairing request replayed against each new upstream image; Fly staging create and delete, with everything gone inside 24 hours",TC36,G4,pass,S2.11
