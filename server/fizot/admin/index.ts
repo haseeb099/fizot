@@ -17,6 +17,8 @@ export {
   adminRequestSignature,
   signAdminRequest,
   verifyAdminRequest,
+  mintNonce,
+  mintBootstrapSecret,
   planFlags,
   redactForLog,
   safeLogLine,
