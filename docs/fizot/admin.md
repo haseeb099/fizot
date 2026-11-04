@@ -16,7 +16,7 @@ daily gate's `fizot/` vitest filter picks them up.
 
 | Method | Path | Behaviour |
 | --- | --- | --- |
-| `POST` | `/admin/workspaces` | Create one Fly app (own network), 10 GB volume, one machine with `OMB_CLOUD_ROLE`, `OMB_CLOUD_MACHINE_ID`, `OMB_PUBLIC_URL`; set secrets `OMB_CLOUD_ADMIN_URL` and `OMB_CLOUD_BOOTSTRAP_SECRET`. |
+| `POST` | `/admin/workspaces` | Create one Fly app (own network), allocate shared IPv4 + IPv6, 10 GB volume, one machine with `OMB_CLOUD_ROLE`, `OMB_CLOUD_MACHINE_ID`, `OMB_PUBLIC_URL`; set secrets `OMB_CLOUD_ADMIN_URL` and `OMB_CLOUD_BOOTSTRAP_SECRET`. |
 | `GET` | `/admin/workspaces/:id/health` | Signed `GET /api/cloud/health?after=0` to the machine. |
 | `GET` | `/admin/workspaces/:id/power` | Signed `GET /api/cloud/power` to the machine. |
 | `POST` | `/admin/workspaces/:id/pairing` | Signed `POST /api/cloud/pairing`; returns `pairingLink`. Team plan requires a `member` claim (`owner`/`admin` → admin+client scopes; `member` → client). |
@@ -48,7 +48,7 @@ Never set `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE`, or `OMB_ADMIN_MEMBERSHIP` on a
 
 | Surface | Daily gate | Manual Fly staging (`fly-staging-roundtrip.yml`) |
 | --- | --- | --- |
-| Fly Machines API | Fake (`createFakeFlyClient`) | Real (`createFlyMachinesClient`, token from `FLY_API_TOKEN`) |
+| Fly Machines API | Fake (`createFakeFlyClient`) | Real (`createFlyMachinesClient`, token from `FLY_API_TOKEN`); allocates shared IPv4 + IPv6 via `ip_assignments` (GraphQL fallback) |
 | Workspace store | In-memory | In-memory for the round-trip script |
 | Machine HTTP (health / power / pairing) | Injected `machineFetch` / loopback | Real machine at `https://<app>.fly.dev` |
 | Signer / nonce | Real HMAC; in-memory nonce store | Real HMAC against the live machine; wrong signature + replayed nonce must return 401 |

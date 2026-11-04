@@ -17,11 +17,16 @@ import {
   projectDailyCost,
   FLY_STAGING_APP_PREFIX,
   MAX_PROBE_MACHINE_SECONDS,
+  describeFetchError,
 } from "../../server/fizot/admin/index.ts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ARTIFACTS = path.join(ROOT, "artifacts", "fly-staging");
 mkdirSync(ARTIFACTS, { recursive: true });
+
+const HEALTH_DEADLINE_MS = 8 * 60_000;
+const EARLY_FAIL_MS = 3 * 60_000;
+const MACHINE_LOG_EVERY_MS = 60_000;
 
 function log(step, detail = {}) {
   const line = { step, at: new Date().toISOString(), ...detail };
@@ -65,7 +70,34 @@ const admin = await createAdminServer({
 
 let workspaceId = "";
 let appName = "";
+let flyMachineId = "";
 const report = { steps: [], ok: false, negatives: {}, flyCost: null };
+
+async function logMachineState(reason) {
+  if (!appName) return null;
+  try {
+    const machines = await fly.listMachines(appName);
+    const machine = flyMachineId
+      ? (await fly.getMachine(appName, flyMachineId).catch(() => machines[0] ?? null))
+      : (machines[0] ?? null);
+    const detail = {
+      reason,
+      state: machine?.state ?? "missing",
+      machineId: machine?.id ?? null,
+      checks: machine?.checks ?? null,
+      events: machine?.events ?? [],
+      machineCount: machines.length,
+    };
+    report.steps.push(log("machine_state", detail));
+    return machine;
+  } catch (error) {
+    report.steps.push(log("machine_state_error", {
+      reason,
+      message: error instanceof Error ? error.message : String(error),
+    }));
+    return null;
+  }
+}
 
 try {
   log("create_workspace_begin");
@@ -78,18 +110,46 @@ try {
   if (!created.ok) throw new Error(`create failed: ${created.status} ${JSON.stringify(createdBody)}`);
   workspaceId = createdBody.workspace.id;
   appName = createdBody.workspace.appName;
-  report.steps.push(log("create", { status: created.status, workspaceId, appName }));
+  flyMachineId = createdBody.workspace.flyMachineId ?? "";
+  report.steps.push(log("create", { status: created.status, workspaceId, appName, flyMachineId }));
 
   const stored = await admin.services.store.get(workspaceId);
   if (!stored) throw new Error("workspace missing from store after create");
+  flyMachineId = stored.flyMachineId || flyMachineId;
   const publicUrl = stored.publicUrl;
   const secret = stored.bootstrapSecret;
 
-  const healthDeadline = Date.now() + 8 * 60_000;
+  await logMachineState("after_create");
+
+  const healthStarted = Date.now();
+  const healthDeadline = healthStarted + HEALTH_DEADLINE_MS;
   let healthOk = false;
+  let lastMachineLogAt = 0;
   while (Date.now() < healthDeadline) {
-    const health = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/health`);
-    const body = await health.json().catch(() => ({}));
+    const elapsed = Date.now() - healthStarted;
+    if (elapsed >= EARLY_FAIL_MS) {
+      const machine = await logMachineState("early_fail_check");
+      if (!machine || machine.state !== "started") {
+        throw new Error(
+          `machine not started after ${Math.round(elapsed / 1000)}s (state=${machine?.state ?? "missing"}); failing early`,
+        );
+      }
+    }
+    if (Date.now() - lastMachineLogAt >= MACHINE_LOG_EVERY_MS) {
+      await logMachineState("health_wait");
+      lastMachineLogAt = Date.now();
+    }
+
+    let health;
+    let body = {};
+    try {
+      health = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/health`);
+      body = await health.json().catch(() => ({}));
+    } catch (error) {
+      log("health_wait", { status: 0, error: describeFetchError(error) });
+      await sleep(10_000);
+      continue;
+    }
     if (health.status === 200 && (body.ok === true || body.v === 1)) {
       report.steps.push(log("health", { status: health.status, bodyKeys: Object.keys(body) }));
       healthOk = true;
@@ -117,7 +177,6 @@ try {
   if (power.status !== 200) throw new Error(`power failed: ${power.status}`);
   report.steps.push(log("power", { status: power.status, state: powerBody.state ?? powerBody }));
 
-  // Awake cost sample (short; hard-capped by the probe itself).
   const probeAwake = spawnSync(
     process.execPath,
     ["--experimental-strip-types", path.join(ROOT, "scripts/fizot/fly-cost-probe.mjs"),
@@ -132,18 +191,22 @@ try {
   console.log(probeAwake.stdout);
   report.steps.push(log("cost_probe_awake", { exit: probeAwake.status }));
 
-  // Negative: wrong signature against the real machine.
   {
     const target = "/api/cloud/health?after=0";
     const timestamp = String(Math.floor(Date.now() / 1000));
     const nonce = mintNonce();
-    const bad = await fetch(`${publicUrl}${target}`, {
-      headers: {
-        "x-omb-cloud-timestamp": timestamp,
-        "x-omb-cloud-nonce": nonce,
-        "x-omb-cloud-signature": "v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-      },
-    });
+    let bad;
+    try {
+      bad = await fetch(`${publicUrl}${target}`, {
+        headers: {
+          "x-omb-cloud-timestamp": timestamp,
+          "x-omb-cloud-nonce": nonce,
+          "x-omb-cloud-signature": "v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        },
+      });
+    } catch (error) {
+      throw new Error(`wrong-signature negative fetch failed: ${describeFetchError(error)}`);
+    }
     const badBody = await bad.json().catch(() => ({}));
     if (bad.status !== 401 || badBody.error !== "invalid_signature") {
       throw new Error(`wrong-signature negative expected 401 invalid_signature, got ${bad.status} ${JSON.stringify(badBody)}`);
@@ -152,7 +215,6 @@ try {
     report.steps.push(log("negative_wrong_signature", report.negatives.wrongSignature));
   }
 
-  // Negative: replayed nonce against the real machine.
   {
     const target = "/api/cloud/health?after=0";
     const timestamp = String(Math.floor(Date.now() / 1000));
@@ -163,7 +225,12 @@ try {
       "x-omb-cloud-nonce": nonce,
       "x-omb-cloud-signature": `v1=${signature}`,
     };
-    const first = await fetch(`${publicUrl}${target}`, { headers });
+    let first;
+    try {
+      first = await fetch(`${publicUrl}${target}`, { headers });
+    } catch (error) {
+      throw new Error(`replay setup fetch failed: ${describeFetchError(error)}`);
+    }
     if (first.status !== 200) {
       const body = await first.text();
       throw new Error(`replay setup request failed: ${first.status} ${body.slice(0, 200)}`);
@@ -177,7 +244,6 @@ try {
     report.steps.push(log("negative_replayed_nonce", report.negatives.replayedNonce));
   }
 
-  // Best-effort sleep then asleep probe (machine may refuse sleep on staging image).
   try {
     const sleepPath = "/api/cloud/power/sleep";
     const sleepBody = Buffer.from(JSON.stringify({}));
@@ -206,7 +272,7 @@ try {
     console.log(probeAsleep.stdout);
     report.steps.push(log("cost_probe_asleep", { exit: probeAsleep.status }));
   } catch (error) {
-    report.steps.push(log("sleep_skipped", { reason: error instanceof Error ? error.message : String(error) }));
+    report.steps.push(log("sleep_skipped", { reason: describeFetchError(error) }));
   }
 
   log("destroy_begin", { appName });
@@ -214,6 +280,7 @@ try {
   const destroyedBody = await destroyed.json().catch(() => ({}));
   if (!destroyed.ok) throw new Error(`destroy failed: ${destroyed.status} ${JSON.stringify(destroyedBody)}`);
   report.steps.push(log("destroy", { status: destroyed.status, appName }));
+  workspaceId = "";
 
   await sleep(3_000);
   const leftover = await fly.getApp(appName);
@@ -228,7 +295,7 @@ try {
     projectedDaily: projectDailyCost({}),
   };
 } finally {
-  if (workspaceId && appName) {
+  if (appName) {
     try {
       const still = await fly.getApp(appName);
       if (still) {
@@ -238,6 +305,14 @@ try {
     } catch (error) {
       log("cleanup_error", { message: error instanceof Error ? error.message : String(error) });
     }
+  }
+  try {
+    const remaining = (await fly.listApps(org))
+      .filter((a) => a.name.startsWith(FLY_STAGING_APP_PREFIX))
+      .map((a) => a.name);
+    log("staging_apps_remaining", { remaining, count: remaining.length });
+  } catch (error) {
+    log("staging_apps_remaining_error", { message: error instanceof Error ? error.message : String(error) });
   }
   await admin.close();
 }

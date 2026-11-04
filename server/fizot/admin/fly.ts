@@ -39,17 +39,35 @@ export type FlySetSecretsInput = {
 
 export type FlyApp = { id: string; name: string; network: string };
 export type FlyVolume = { id: string; name: string; sizeGb: number };
-export type FlyMachine = { id: string; name: string; state: string; privateIp?: string; createdAt?: string };
+export type FlyMachineEvent = {
+  type?: string;
+  status?: string;
+  source?: string;
+  timestamp?: number;
+};
+export type FlyMachine = {
+  id: string;
+  name: string;
+  state: string;
+  privateIp?: string;
+  createdAt?: string;
+  checks?: unknown;
+  events?: FlyMachineEvent[];
+};
 export type FlySecretsResult = { version: number };
+export type FlyAllocatedIps = { v4?: string; v6?: string; via: "machines" | "graphql" | "fake" };
 
 export interface FlyClient {
   createApp(input: FlyCreateAppInput): Promise<FlyApp>;
+  /** Shared IPv4 + IPv6 so https://<app>.fly.dev is reachable. */
+  allocateIps(appName: string): Promise<FlyAllocatedIps>;
   createVolume(input: FlyCreateVolumeInput): Promise<FlyVolume>;
   setSecrets(input: FlySetSecretsInput): Promise<FlySecretsResult>;
   createMachine(input: FlyCreateMachineInput): Promise<FlyMachine>;
   destroyApp(appName: string): Promise<void>;
   listApps(org: string): Promise<Array<{ name: string; id: string }>>;
   listMachines(appName: string): Promise<FlyMachine[]>;
+  getMachine(appName: string, machineId: string): Promise<FlyMachine>;
   listVolumes(appName: string): Promise<FlyVolume[]>;
   getApp(appName: string): Promise<{ name: string } | null>;
   countLiveStagingMachines(org: string, appPrefix?: string): Promise<number>;
@@ -59,6 +77,7 @@ export const FLY_HOME_GUEST: FlyMachineGuest = { cpu_kind: "shared", cpus: 1, me
 export const FLY_HOME_VOLUME_GB = 10;
 export const FLY_STAGING_APP_PREFIX = "fizot-cm-";
 const MACHINES_API = "https://api.machines.dev";
+const FLY_GRAPHQL = "https://api.fly.io/graphql";
 
 type ApiFn = (method: string, path: string, body?: unknown) => Promise<any>;
 
@@ -84,18 +103,77 @@ function makeApi(token: string, fetchImpl: typeof fetch): ApiFn {
   };
 }
 
+function mapMachine(row: any): FlyMachine {
+  const events = Array.isArray(row?.events)
+    ? row.events.slice(0, 8).map((e: any) => ({
+      type: e?.type ? String(e.type) : undefined,
+      status: e?.status ? String(e.status) : undefined,
+      source: e?.source ? String(e.source) : undefined,
+      timestamp: typeof e?.timestamp === "number" ? e.timestamp : undefined,
+    }))
+    : undefined;
+  return {
+    id: String(row.id),
+    name: String(row.name ?? ""),
+    state: String(row.state ?? ""),
+    privateIp: row.private_ip ? String(row.private_ip) : undefined,
+    createdAt: row.created_at ? String(row.created_at) : undefined,
+    checks: row.checks ?? undefined,
+    events,
+  };
+}
+
+async function allocateIpGraphql(
+  token: string,
+  fetchImpl: typeof fetch,
+  appName: string,
+  type: "shared_v4" | "v6",
+): Promise<string | undefined> {
+  const response = await fetchImpl(FLY_GRAPHQL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      query: `mutation($input: AllocateIPAddressInput!) {
+        allocateIpAddress(input: $input) {
+          ipAddress { address type }
+          app { sharedIpAddress }
+        }
+      }`,
+      variables: { input: { appId: appName, type } },
+    }),
+  });
+  const text = await response.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+  if (!response.ok) {
+    throw new Error(`Fly GraphQL allocateIpAddress → ${response.status}: ${text.slice(0, 200)}`);
+  }
+  if (Array.isArray(json?.errors) && json.errors.length) {
+    throw new Error(`Fly GraphQL allocateIpAddress errors: ${JSON.stringify(json.errors).slice(0, 200)}`);
+  }
+  const node = json?.data?.allocateIpAddress;
+  const address = node?.ipAddress?.address ?? (type === "shared_v4" ? node?.app?.sharedIpAddress : undefined);
+  return address ? String(address) : undefined;
+}
+
 /** In-memory Fly. Never calls the network. */
 export function createFakeFlyClient(): FlyClient & {
   apps: Map<string, FlyApp>;
   volumes: Map<string, FlyVolume>;
   machines: Map<string, FlyMachine>;
   secrets: Map<string, Record<string, string>>;
+  ips: Map<string, FlyAllocatedIps>;
   calls: string[];
 } {
   const apps = new Map<string, FlyApp>();
   const volumes = new Map<string, FlyVolume>();
   const machines = new Map<string, FlyMachine>();
   const secrets = new Map<string, Record<string, string>>();
+  const ips = new Map<string, FlyAllocatedIps>();
   const calls: string[] = [];
   let seq = 0;
   let secretVersion = 0;
@@ -104,6 +182,7 @@ export function createFakeFlyClient(): FlyClient & {
     volumes,
     machines,
     secrets,
+    ips,
     calls,
     async createApp(input) {
       calls.push(`createApp:${input.appName}`);
@@ -111,6 +190,17 @@ export function createFakeFlyClient(): FlyClient & {
       const app = { id: `app_${++seq}`, name: input.appName, network: input.network };
       apps.set(input.appName, app);
       return app;
+    },
+    async allocateIps(appName) {
+      calls.push(`allocateIps:${appName}`);
+      if (!apps.has(appName)) throw new Error(`fly app ${appName} missing`);
+      const allocated: FlyAllocatedIps = {
+        v4: `66.241.${seq}.1`,
+        v6: `2a09:8280:${seq}::1`,
+        via: "fake",
+      };
+      ips.set(appName, allocated);
+      return allocated;
     },
     async createVolume(input) {
       calls.push(`createVolume:${input.appName}:${input.name}`);
@@ -141,6 +231,8 @@ export function createFakeFlyClient(): FlyClient & {
         state: "started",
         privateIp: `fdaa:0:0::${seq}`,
         createdAt: new Date().toISOString(),
+        checks: { http: { status: "passing" } },
+        events: [{ type: "start", status: "started", source: "fake", timestamp: Date.now() }],
       };
       machines.set(`${input.appName}/${input.name}`, machine);
       return machine;
@@ -149,6 +241,7 @@ export function createFakeFlyClient(): FlyClient & {
       calls.push(`destroyApp:${appName}`);
       apps.delete(appName);
       secrets.delete(appName);
+      ips.delete(appName);
       for (const key of Array.from(volumes.keys())) {
         if (key.startsWith(`${appName}/`)) volumes.delete(key);
       }
@@ -165,6 +258,13 @@ export function createFakeFlyClient(): FlyClient & {
       return [...machines.entries()]
         .filter(([key, m]) => key.startsWith(`${appName}/`) && m.state !== "destroyed")
         .map(([, m]) => m);
+    },
+    async getMachine(appName, machineId) {
+      calls.push(`getMachine:${appName}:${machineId}`);
+      const found = [...machines.entries()].find(([key, m]) =>
+        key.startsWith(`${appName}/`) && m.id === machineId && m.state !== "destroyed");
+      if (!found) throw new Error(`fly machine ${machineId} missing`);
+      return found[1];
     },
     async listVolumes(appName) {
       return [...volumes.entries()]
@@ -204,6 +304,25 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
   const printCost = options.printCost !== false;
   const api = makeApi(token, fetchImpl);
 
+  async function allocateOne(appName: string, type: "shared_v4" | "v6"): Promise<{ address?: string; via: "machines" | "graphql" }> {
+    try {
+      const json = await api("POST", `/v1/apps/${encodeURIComponent(appName)}/ip_assignments`, { type });
+      const address = json?.ip
+        ?? (type === "shared_v4" ? json?.ip_pair?.v4 : json?.ip_pair?.v6)
+        ?? undefined;
+      return { address: address ? String(address) : undefined, via: "machines" };
+    } catch (machinesError) {
+      try {
+        const address = await allocateIpGraphql(token, fetchImpl, appName, type);
+        return { address, via: "graphql" };
+      } catch (graphqlError) {
+        throw new Error(
+          `allocate ${type} for ${appName} failed: machines=${machinesError instanceof Error ? machinesError.message : String(machinesError)}; graphql=${graphqlError instanceof Error ? graphqlError.message : String(graphqlError)}`,
+        );
+      }
+    }
+  }
+
   const client: FlyClient = {
     async createApp(input) {
       const json = await api("POST", "/v1/apps", {
@@ -216,6 +335,12 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
         name: input.appName,
         network: input.network,
       };
+    },
+    async allocateIps(appName) {
+      const v4 = await allocateOne(appName, "shared_v4");
+      const v6 = await allocateOne(appName, "v6");
+      const via = v4.via === "graphql" || v6.via === "graphql" ? "graphql" : "machines";
+      return { v4: v4.address, v6: v6.address, via };
     },
     async createVolume(input) {
       const json = await api("POST", `/v1/apps/${encodeURIComponent(input.appName)}/volumes`, {
@@ -275,13 +400,7 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
         },
         ...(input.minSecretsVersion ? { min_secrets_version: input.minSecretsVersion } : {}),
       });
-      return {
-        id: String(json.id),
-        name: String(json.name ?? input.name),
-        state: String(json.state ?? "created"),
-        privateIp: json.private_ip ? String(json.private_ip) : undefined,
-        createdAt: json.created_at ? String(json.created_at) : new Date().toISOString(),
-      };
+      return mapMachine(json);
     },
     async destroyApp(appName) {
       await api("DELETE", `/v1/apps/${encodeURIComponent(appName)}?force=true`);
@@ -294,13 +413,11 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
     async listMachines(appName) {
       const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines`);
       const rows = Array.isArray(json) ? json : [];
-      return rows.map((row: any) => ({
-        id: String(row.id),
-        name: String(row.name ?? ""),
-        state: String(row.state ?? ""),
-        privateIp: row.private_ip ? String(row.private_ip) : undefined,
-        createdAt: row.created_at ? String(row.created_at) : undefined,
-      }));
+      return rows.map(mapMachine);
+    },
+    async getMachine(appName, machineId) {
+      const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`);
+      return mapMachine(json);
     },
     async listVolumes(appName) {
       const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/volumes`);
