@@ -472,18 +472,35 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
       await api("POST", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/start`);
     },
     async waitMachine(appName, machineId, state, opts) {
-      const timeoutSec = opts?.timeoutSec ?? 120;
+      // Machines wait API: timeout is a Go duration in [1s, 1m0s].
+      const deadline = Date.now() + (opts?.timeoutSec ?? 120) * 1000;
       let instanceId = opts?.instanceId;
-      if (state === "stopped" && !instanceId) {
+      if ((state === "stopped" || state === "suspended") && !instanceId) {
         const current = await client.getMachine(appName, machineId);
         instanceId = current.instanceId;
       }
-      const params = new URLSearchParams({ state, timeout: String(timeoutSec) });
-      if (instanceId) params.set("instance_id", instanceId);
-      await api(
-        "GET",
-        `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?${params}`,
-      );
+      while (Date.now() < deadline) {
+        const remainingMs = deadline - Date.now();
+        const sliceSec = Math.max(1, Math.min(60, Math.ceil(remainingMs / 1000)));
+        const params = new URLSearchParams({ state, timeout: `${sliceSec}s` });
+        if (instanceId) params.set("instance_id", instanceId);
+        try {
+          await api(
+            "GET",
+            `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?${params}`,
+          );
+          return;
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (msg.includes("408") || /timeout/i.test(msg)) continue;
+          const current = await client.getMachine(appName, machineId).catch(() => null);
+          if (current?.state === state) return;
+          throw error;
+        }
+      }
+      const final = await client.getMachine(appName, machineId);
+      if (final.state === state) return;
+      throw new Error(`fly wait: timed out waiting for ${state}, got ${final.state}`);
     },
     async listVolumes(appName) {
       const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/volumes`);
