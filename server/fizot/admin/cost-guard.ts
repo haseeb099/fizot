@@ -1,12 +1,22 @@
 /**
  * Gate G0b spend cap: 100 GBP/month across Fly staging and model calls.
  * Refuse more than 2 live machines; always project daily cost before create.
+ *
+ * Machine rates: Fly pricing page via cost-sheet.ts (shared-cpu-1x 1 GB
+ * $6.70/mo + $6.00/GB additional RAM → $12.70/mo for the 2 GB home).
  */
+import {
+  FIZOT_HOME_MEMORY_GB,
+  FLY_PRICING_READ_DATE,
+  FLY_PRICING_URL,
+  FLY_VOLUME_USD_PER_GB_MONTH as COST_SHEET_VOLUME_USD_PER_GB_MONTH,
+  sharedCpu1xWithRamUsdPerMonth,
+  sharedCpu1xWithRamUsdPerSec,
+} from "../cost-sheet.ts";
 
-/** Fly published shared-cpu-1x rate (USD/sec), approx. Nov 2026. */
-export const FLY_SHARED_CPU_1X_USD_PER_SEC = 0.000000692;
-/** Fly published volume rate (USD/GB/month). */
-export const FLY_VOLUME_USD_PER_GB_MONTH = 0.15;
+export const FLY_VOLUME_USD_PER_GB_MONTH = COST_SHEET_VOLUME_USD_PER_GB_MONTH;
+/** Per-second rate for the Fizot home guest (shared-cpu-1x + 2 GB). */
+export const FLY_SHARED_CPU_1X_USD_PER_SEC = sharedCpu1xWithRamUsdPerSec(FIZOT_HOME_MEMORY_GB);
 export const MAX_STAGING_MACHINES = 2;
 /** Hard stop: never leave a staging machine billed more than one hour for probes. */
 export const MAX_PROBE_MACHINE_SECONDS = 3600;
@@ -25,18 +35,21 @@ export function projectDailyCost(input: {
   volumeGb?: number;
   usdPerGbp?: number;
 }): CostProjection {
+  const memoryGb = (input.memoryMb ?? FIZOT_HOME_MEMORY_GB * 1024) / 1024;
   const volumeGb = input.volumeGb ?? 10;
   const usdPerGbp = input.usdPerGbp ?? 1.3;
-  const machineUsdPerDay = FLY_SHARED_CPU_1X_USD_PER_SEC * 86_400;
-  const volumeUsdPerDay = (FLY_VOLUME_USD_PER_GB_MONTH * volumeGb) / 30;
+  const machineUsdPerMonth = sharedCpu1xWithRamUsdPerMonth(memoryGb);
+  const volumeUsdPerMonth = FLY_VOLUME_USD_PER_GB_MONTH * volumeGb;
+  const machineUsdPerDay = machineUsdPerMonth / 30;
+  const volumeUsdPerDay = volumeUsdPerMonth / 30;
   const totalUsdPerDay = machineUsdPerDay + volumeUsdPerDay;
   return {
     machineUsdPerDay: round4(machineUsdPerDay),
     volumeUsdPerDay: round4(volumeUsdPerDay),
     totalUsdPerDay: round4(totalUsdPerDay),
     totalGbpPerDay: round4(totalUsdPerDay / usdPerGbp),
-    monthlyUsdAtAlwaysOn: round4(totalUsdPerDay * 30),
-    note: "shared-cpu-1x + 10 GB volume from Fly published pricing; egress not included",
+    monthlyUsdAtAlwaysOn: round4(machineUsdPerMonth + volumeUsdPerMonth),
+    note: `shared-cpu-1x ${memoryGb} GB ($${machineUsdPerMonth}/mo) + ${volumeGb} GB volume from ${FLY_PRICING_URL} (read ${FLY_PRICING_READ_DATE}); egress not included`,
   };
 }
 

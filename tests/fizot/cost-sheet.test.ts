@@ -83,13 +83,19 @@ it("CS-I: builds the sheet from the real staging probe artifacts", () => {
   const awake = loadJson(ARTIFACTS, "awake-");
   const asleep = loadJson(ARTIFACTS, "asleep-");
   expect(awake.machineSeconds).toBeGreaterThan(0);
-  expect(asleep.machineSeconds).toBeGreaterThan(0);
   expect(awake.volumeGb).toBe(10);
   expect(awake.egressBytes).toBeNull();
+  // True stopped sample: wall ≥ 60 s, billable ~0. Older 409 samples stay started.
+  if (asleep.machineState === "stopped" || asleep.machineState === "suspended") {
+    expect(asleep.sampleWallSeconds ?? 0).toBeGreaterThanOrEqual(55);
+    expect(asleep.machineSeconds).toBeLessThan(5);
+  } else {
+    expect(asleep.machineSeconds).toBeGreaterThan(0);
+  }
   const sheet = buildCostSheet({
     awake,
     asleep,
-    sourceRun: "https://github.com/haseeb099/fizot/actions/runs/41792947703",
+    sourceRun: awake.recordedAt ?? "artifacts/s2-10",
   });
   expect(sheet.profiles).toHaveLength(3);
   expect(sheet.profiles.every((p) => p.totalUsd > 0)).toBe(true);

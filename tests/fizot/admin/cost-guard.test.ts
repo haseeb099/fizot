@@ -11,12 +11,15 @@ import { createFakeFlyClient } from "../../../server/fizot/admin/public.ts";
 import { createAdminServices } from "../../../server/fizot/admin/public.ts";
 import { createMemoryNonceStore, createMemoryWorkspaceStore } from "../../../server/fizot/admin/public.ts";
 
-it("projects daily cost from published Fly rates", () => {
-  const p = projectDailyCost({ volumeGb: 10 });
-  expect(p.machineUsdPerDay).toBeGreaterThan(0);
-  expect(p.volumeUsdPerDay).toBeGreaterThan(0);
+it("projects daily cost from published Fly rates for shared-cpu-1x 2GB", () => {
+  const p = projectDailyCost({ volumeGb: 10, memoryMb: 2048 });
+  // $12.70/mo machine + $1.50/mo volume (Fly pricing page, read via cost-sheet).
+  expect(p.machineUsdPerDay).toBe(0.4233);
+  expect(p.volumeUsdPerDay).toBe(0.05);
+  expect(p.monthlyUsdAtAlwaysOn).toBe(14.2);
   expect(p.totalGbpPerDay).toBeGreaterThan(0);
   expect(formatCostProjection(p)).toContain("projected daily cost");
+  expect(formatCostProjection(p)).toContain("12.7");
 });
 
 it("refuses a third live staging machine", () => {

@@ -19,6 +19,8 @@ daily gate's `fizot/` vitest filter picks them up.
 | `POST` | `/admin/workspaces` | Create one Fly app (own network), allocate shared IPv4 + IPv6, 10 GB volume, one machine with `OMB_CLOUD_ROLE`, `OMB_CLOUD_MACHINE_ID`, `OMB_PUBLIC_URL`; set secrets `OMB_CLOUD_ADMIN_URL` and `OMB_CLOUD_BOOTSTRAP_SECRET`. |
 | `GET` | `/admin/workspaces/:id/health` | Signed `GET /api/cloud/health?after=0` to the machine. |
 | `GET` | `/admin/workspaces/:id/power` | Signed `GET /api/cloud/power` to the machine. |
+| `POST` | `/admin/workspaces/:id/sleep` | Wait until power is idle, signed `POST /api/cloud/power/sleep`, then Fly Machines `stop` and wait for `stopped`. |
+| `POST` | `/admin/workspaces/:id/wake` | Fly Machines `start`, wait for `started`, then health 200. |
 | `POST` | `/admin/workspaces/:id/pairing` | Signed `POST /api/cloud/pairing`; returns `pairingLink`. Team plan requires a `member` claim (`owner`/`admin` → admin+client scopes; `member` → client). |
 | `DELETE` | `/admin/workspaces/:id` | Destroy the Fly app (force) and drop the store row. |
 
@@ -40,7 +42,7 @@ Never set `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE`, or `OMB_ADMIN_MEMBERSHIP` on a
 
 - Refuse creating more than 2 live staging machines (`fizot-cm-*`).
 - Every machine is created with `auto_destroy: true`.
-- Projected daily cost (shared-cpu-1x + 10 GB volume, published Fly rates) is printed before each create / staging run.
+- Projected daily cost (shared-cpu-1x **2 GB** = $12.70/mo + 10 GB volume, from https://fly.io/docs/about/pricing/ via `cost-sheet.ts`) is printed before each create / staging run.
 - `.github/workflows/fly-staging-cleanup.yml` destroys `fizot-cm-*` apps older than 24 hours (schedule + `workflow_dispatch`).
 - `scripts/fizot/fly-cost-probe.mjs` records machine seconds / volume into `artifacts/s2-10/` and refuses more than one hour of machine observation.
 
@@ -63,5 +65,5 @@ Matrix rows **AD-I** and **CS-I** stay `planned` until a green `fly-staging-roun
 
 1. Requires repo secret `FLY_API_TOKEN` and input `fly_org`.
 2. Builds Dockerfile `--target cloud-home` (no Grok / engine CLIs) and pushes to `registry.fly.io/fizot-home-image:staging`.
-3. Runs `scripts/fizot/fly-staging-roundtrip.mjs`: create → wait health → pairing → power → cost probe → negative wrong signature → negative replayed nonce → destroy → assert app gone.
+3. Runs `scripts/fizot/fly-staging-roundtrip.mjs`: create → wait health → pairing → power → awake probe → negatives → sleep (idle wait + Fly stop) → assert stopped → 60 s asleep probe → wake → health 200 → destroy → assert app gone.
 4. Always runs the 24h cleanup script (max age 0 for leftovers from the run).

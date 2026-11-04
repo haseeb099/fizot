@@ -46,6 +46,12 @@ out as an assumption.
 Per-second machine rate used in arithmetic: `$12.70 / (30 × 86400)` ≈
 `$0.00000490` / sec.
 
+`server/fizot/admin/cost-guard.ts` uses the same rates via `cost-sheet.ts`.
+An older cost-guard constant (`0.000000692` $/sec ≈ $1.79/mo, the 256 MB
+base without additional RAM) projected ~$3.29/mo always-on with volume; that
+was wrong for the 2 GB home. Correct always-on machine+volume floor is
+**$14.20/mo** before assumed egress ($14.30 with the 5 GB egress assumption).
+
 ## Assumed (not measured)
 
 | Assumption | Value | Why |

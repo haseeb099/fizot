@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * S2.10: record Fly usage while a staging machine is awake and after sleep.
- * Caps machine observation at MAX_PROBE_MACHINE_SECONDS (1 hour).
+ * S2.10: record Fly usage while a staging machine is awake or stopped.
+ * Caps observation at MAX_PROBE_MACHINE_SECONDS (1 hour).
  * Never logs FLY_API_TOKEN or bootstrap secrets.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -35,6 +35,7 @@ const phase = arg("phase", "awake");
 const appName = arg("app");
 const org = arg("org", process.env.FLY_ORG ?? "");
 const token = process.env.FLY_API_TOKEN?.trim() ?? "";
+const expectState = arg("expect-state", "");
 const maxSeconds = Math.min(
   Number(arg("max-seconds", String(MAX_PROBE_MACHINE_SECONDS))) || MAX_PROBE_MACHINE_SECONDS,
   MAX_PROBE_MACHINE_SECONDS,
@@ -64,34 +65,44 @@ const volumes = await fly.listVolumes(appName);
 const machine = machines[0] ?? null;
 const volumeGb = volumes.reduce((sum, v) => sum + (v.sizeGb || 0), 0) || FLY_HOME_VOLUME_GB;
 
-let observedSeconds = 0;
+let billableSeconds = 0;
 let lastState = machine?.state ?? "missing";
+let lastTick = startedAt;
 const deadline = startedAt + sampleSeconds * 1000;
 
 while (Date.now() < deadline) {
-  const elapsed = (Date.now() - startedAt) / 1000;
-  if (elapsed >= maxSeconds) {
+  const wall = (Date.now() - startedAt) / 1000;
+  if (wall >= maxSeconds) {
     console.error(`fly-cost-probe: hit MAX_PROBE_MACHINE_SECONDS=${maxSeconds}; stopping`);
     break;
   }
   try {
     const live = await fly.listMachines(appName);
     lastState = live[0]?.state ?? "missing";
-    if (["started", "created", "starting"].includes(lastState)) {
-      observedSeconds = Math.min(maxSeconds, elapsed);
-    }
   } catch {
     lastState = "error";
+  }
+  const now = Date.now();
+  const dt = (now - lastTick) / 1000;
+  lastTick = now;
+  if (["started", "created", "starting"].includes(lastState)) {
+    billableSeconds += dt;
   }
   await sleep(5_000);
 }
 
-observedSeconds = Math.min(maxSeconds, Math.max(observedSeconds, (Date.now() - startedAt) / 1000));
+const sampleWallSeconds = Math.min(maxSeconds, (Date.now() - startedAt) / 1000);
+billableSeconds = Math.min(maxSeconds, Math.round(billableSeconds * 1000) / 1000);
+
+if (expectState && lastState !== expectState) {
+  console.error(`fly-cost-probe: expected machineState=${expectState}, got ${lastState}`);
+  process.exit(1);
+}
 
 /** Egress is not on the Machines list API; cost sheet fills measured egress later. */
 const egressBytes = null;
-const machineUsd = observedSeconds * FLY_SHARED_CPU_1X_USD_PER_SEC;
-const volumeUsdForWindow = (FLY_VOLUME_USD_PER_GB_MONTH * volumeGb) / (30 * 86_400) * observedSeconds;
+const machineUsd = billableSeconds * FLY_SHARED_CPU_1X_USD_PER_SEC;
+const volumeUsdForWindow = (FLY_VOLUME_USD_PER_GB_MONTH * volumeGb) / (30 * 86_400) * sampleWallSeconds;
 
 const record = {
   schema: "fizot-s2-10-fly-usage/v1",
@@ -101,7 +112,10 @@ const record = {
   org,
   machineId: machine?.id ?? null,
   machineState: lastState,
-  machineSeconds: Math.round(observedSeconds * 1000) / 1000,
+  /** Seconds the guest was in a started/starting state during the sample. */
+  machineSeconds: billableSeconds,
+  /** Wall-clock length of this probe window. */
+  sampleWallSeconds: Math.round(sampleWallSeconds * 1000) / 1000,
   volumeGb,
   egressBytes,
   egressNote: "not exposed by Machines list API; leave null for the cost sheet",
@@ -125,7 +139,9 @@ console.log(`fly-cost-probe: wrote ${file}`);
 console.log(JSON.stringify({
   phase,
   appName,
+  machineState: record.machineState,
   machineSeconds: record.machineSeconds,
+  sampleWallSeconds: record.sampleWallSeconds,
   volumeGb: record.volumeGb,
   machineUsd: record.costUsd.machine,
   egressBytes: record.egressBytes,
