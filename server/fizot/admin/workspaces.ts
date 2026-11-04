@@ -209,7 +209,7 @@ export function createAdminServices(config: AdminConfig) {
       v: 1,
       idleMinutes,
     });
-    const sleepBody = await sleepRes.json().catch(() => ({}));
+    const sleepBody = await sleepRes.json().catch(() => ({})) as { ok?: boolean; busy?: unknown; nextDueAt?: number | null };
     if (sleepRes.status !== 200) {
       throw Object.assign(
         new Error(`power_sleep_refused:${sleepRes.status}:${JSON.stringify(sleepBody.busy ?? sleepBody)}`),
