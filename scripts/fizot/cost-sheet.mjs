@@ -17,7 +17,7 @@ const DIR = process.argv[2]
   ? path.resolve(process.argv[2])
   : path.join(ROOT, "artifacts", "s2-10");
 const SOURCE_RUN = process.env.S2_10_SOURCE_RUN
-  ?? "https://github.com/haseeb099/fizot/actions/runs/41792947703";
+  ?? "https://github.com/haseeb099/fizot/actions/runs/41880692381";
 
 function loadProbe(prefix) {
   const name = readdirSync(DIR).find((f) => f.startsWith(prefix) && f.endsWith(".json"));

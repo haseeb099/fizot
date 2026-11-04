@@ -1,7 +1,7 @@
 # Staging cost sheet (S2.10)
 
 Computed from the measured Fly probe artifacts of run
-[41792947703](https://github.com/haseeb099/fizot/actions/runs/41792947703)
+[41880692381](https://github.com/haseeb099/fizot/actions/runs/41880692381)
 (`artifacts/s2-10/awake-*.json`, `asleep-*.json`). Regenerate the table with:
 
 ```bash
@@ -12,18 +12,20 @@ node --experimental-strip-types scripts/fizot/cost-sheet.mjs
 
 | Field | Awake probe | Asleep probe |
 | --- | ---: | ---: |
-| Machine-seconds | **26.541** | **16.101** |
+| Machine-seconds (billable while started) | **21.816** | **0** |
+| Sample wall-seconds | **26.817** | **64.139** |
 | Volume GB | **10** | **10** |
-| Machine state at sample end | `started` | `started` |
-| App | `fizot-cm-6302406165974b8f` | same |
+| Machine state at sample end | `started` | **`suspended`** |
+| App | `fizot-cm-5deeab87fc924201` | same |
 | Machine guest (from Admin contract) | `shared-cpu-1x`, **2 GB** RAM | same |
 | Egress bytes | **null** (not on Machines list API) | **null** |
 
-The asleep file is a second wall-clock sample after a sleep attempt that returned
-HTTP 409; the machine was still `started`. Do **not** treat those 16.101 seconds
-as proven stopped-machine billing.
+Asleep sample: Admin `prepareSleep` succeeded after the `just-woke` window,
+then Fly Machines **suspend** (staging keeps `auto_destroy`, so `stop` would
+destroy the Machine). Wall clock ≥ 60 s in `suspended` with **0** billable
+started-seconds.
 
-Probe sample windows confirm the machine was billable while started. They are
+Probe sample windows confirm started vs suspended billing states. They are
 **not** the monthly awake durations used in the profiles below.
 
 ## Fly unit prices used (published)
@@ -39,7 +41,7 @@ out as an assumption.
 | Additional RAM | $6.00 / GB / month | +1 GB → **2 GB** total |
 | **⇒ `shared-cpu-1x` 2 GB always-on** | **$12.70 / month** | $6.70 + $6.00 |
 | Volume | $0.15 / GB / month | × 10 GB = $1.50 |
-| Stopped Machine rootfs | $0.15 / GB / month | Assumed rootfs size only |
+| Stopped/suspended Machine rootfs | $0.15 / GB / month | Assumed rootfs size only |
 | Outbound egress (NA / Europe) | $0.02 / GB | Assumed GB/month only |
 | Shared IPv4 + IPv6 | $0 | Free on Fly |
 
@@ -57,7 +59,7 @@ was wrong for the 2 GB home. Correct always-on machine+volume floor is
 | Assumption | Value | Why |
 | --- | --- | --- |
 | Egress | **5 GB / customer / month** @ $0.02/GB = **$0.10** | `egressBytes` is null from the Machines API; stated figure only |
-| Stopped rootfs size | **3 GB** | Image size was not measured on the probe |
+| Stopped/suspended rootfs size | **3 GB** | Image size was not measured on the probe |
 | Billing month | 30 days | Matches Fly's published “per month” examples |
 | USD/GBP | 1.30 | Same FX as the plan floor formula |
 | Regional rate | iad/ewr list | Staging was `lhr`; treat list as baseline |
@@ -93,10 +95,11 @@ samples exist, treat AI cost as **TBD pass-through**.
 
 ## Measured vs assumed (summary)
 
-- **Measured:** awake/asleep machine-seconds samples, volume size (10 GB),
-  machine guest shape (shared-cpu-1x 2 GB), probe source run.
+- **Measured:** awake/asleep machine-seconds samples, asleep `suspended` state
+  for ≥60 s wall, volume size (10 GB), machine guest shape (shared-cpu-1x 2 GB),
+  probe source run 41880692381.
 - **From Fly published pricing (cited):** machine $/month, volume $/GB-month,
-  stopped rootfs $/GB-month, egress $/GB.
+  stopped/suspended rootfs $/GB-month, egress $/GB.
 - **Assumed:** egress GB/month, rootfs GB, usage profiles (24/8/1 h), FX,
   iad baseline for an `lhr` staging app.
-- **Not measured / null:** egress bytes, actual stopped billing, AI tokens.
+- **Not measured / null:** egress bytes, AI tokens.

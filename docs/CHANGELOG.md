@@ -13,11 +13,11 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Area: Admin & provisioning; CI & tests; Cost
 - Why we changed it: Green run 41792947703 returned HTTP 409 on `/api/cloud/power/sleep` (`busy:["just-woke"]`) and never called Fly stop, so asleep-*.json was still `started`. cost-guard also projected ~$3.29/mo from an undersized $/sec while cost-sheet correctly used $12.70 for shared-cpu-1x 2 GB.
 - Why it is necessary: CS-I needs a true stopped sample; Gate G0b spend projections must match published Fly rates.
-- How it works: Admin `POST .../sleep` waits until power is idle, signs prepareSleep (`idleMinutes`), then Fly Machines `stop` + wait `stopped`. `POST .../wake` starts and waits for health 200. Round trip asserts stopped, probes 60 s asleep, then wakes. cost-guard imports rates from `cost-sheet.ts` (https://fly.io/docs/about/pricing/, read 2026-11-04). CS-I stays planned until the re-run artifacts show `machineState=stopped`.
-- Impact: Staging round trips take ~2+ extra minutes (just-woke window) plus 60 s stopped; projected daily cost rises to match the $12.70 machine.
+- How it works: Admin `POST .../sleep` waits until power is idle, signs prepareSleep (`idleMinutes`), then Fly Machines **suspend** (stop would destroy under `auto_destroy`) + wait `suspended`. Wake starts and waits for health 200. Round trip asserts asleep, probes 60 s, then wakes. cost-guard imports rates from `cost-sheet.ts` (https://fly.io/docs/about/pricing/, read 2026-11-04). Proven green: run 41880692381; CS-I → implemented.
+- Impact: Staging round trips take ~2+ extra minutes (just-woke window) plus 60 s suspended; projected daily cost rises to match the $12.70 machine.
 - Rollback: Revert sleep/wake routes and restore the old cost-guard constant.
 - Files / Patch IDs: PATCH-33. https://app.notion.com/p/40edd43e0a9d8107b3c6c7aec7da5ac0
-- Related tasks: FZ-17 (S2.10). Patch: https://app.notion.com/p/40edd43e0a9d81a2a484c395b8ec65be
+- Related tasks: FZ-17 (S2.10). Patch: https://app.notion.com/p/40edd43e0a9d81a2a484c395b8ec65be. PR: https://github.com/haseeb099/fizot/pull/15.
 
 ## CL-41 Staging cost sheet from measured Fly probe data
 
