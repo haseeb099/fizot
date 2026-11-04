@@ -4,7 +4,20 @@ Every change records why, how it works, why it is necessary, impact, and rollbac
 
 Notion assigns the CL number. This file uses those ids. The pin entry was first drafted here as CL-1 and is Notion CL-9. The enterprise deletion was first drafted here as CL-2 and is Notion CL-10.
 
-Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39.
+Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40.
+
+## CL-40 Allocate Fly public IPs and fail early on stuck machines
+
+- Date: 2026-11-04
+- Type: Code
+- Area: Admin & provisioning; CI & tests
+- Why we changed it: Run 41747048766 created the app/machine but `*.fly.dev` returned `fetch failed` for 8 minutes — Machines API apps get no public IP until allocated.
+- Why it is necessary: Without shared IPv4 + IPv6 the Admin cannot reach health/pairing/power on staging.
+- How it works: `allocateIps` after `createApp` (Machines `ip_assignments`, GraphQL fallback). Round trip logs `err.cause` and machine state/checks/events every 60s, fails after 3 minutes if state is not `started`, and cleanup reports `remainingCount: 0`.
+- Impact: Staging round trips become reachable; early fail saves CI/Fly spend.
+- Rollback: Revert this commit; restore create without IP allocation.
+- Files / Patch IDs: PATCH-31. https://app.notion.com/p/40edd43e0a9d813b986fc3d3ae4051d4
+- Related tasks: FZ-18 (S2.11).
 
 ## CL-39 Fly staging round trip and S2.10 cost probe hooks
 

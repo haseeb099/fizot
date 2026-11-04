@@ -2,6 +2,7 @@
 /**
  * Destroy staging apps older than 24 hours (Gate G0b cost guard).
  * Prefix: fizot-cm-. Never logs the Fly token.
+ * When FLY_STAGING_MAX_AGE_MS=0 (roundtrip leftover sweep), remaining must be 0.
  */
 import {
   createFlyMachinesClient,
@@ -42,4 +43,18 @@ for (const app of apps) {
   destroyed.push(app.name);
 }
 
-console.log(JSON.stringify({ destroyed, count: destroyed.length }));
+const remaining = (await fly.listApps(org))
+  .filter((a) => a.name.startsWith(FLY_STAGING_APP_PREFIX))
+  .map((a) => a.name);
+
+console.log(JSON.stringify({
+  destroyed,
+  count: destroyed.length,
+  remaining,
+  remainingCount: remaining.length,
+}));
+
+if (maxAgeMs === 0 && remaining.length > 0) {
+  console.error(`cleanup left ${remaining.length} staging app(s): ${remaining.join(", ")}`);
+  process.exit(1);
+}

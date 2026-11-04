@@ -26,6 +26,23 @@ export type CreateWorkspaceInput = {
   teamName?: string;
 };
 
+/** Surface undici/node fetch cause (code, hostname) — "fetch failed" alone is useless. */
+export function describeFetchError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const parts = [error.message];
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") {
+    const c = cause as { code?: string; errno?: string; hostname?: string; address?: string; message?: string };
+    if (c.code || c.errno) parts.push(`code=${c.code ?? c.errno}`);
+    if (c.hostname) parts.push(`hostname=${c.hostname}`);
+    if (c.address) parts.push(`address=${c.address}`);
+    if (c.message && c.message !== error.message) parts.push(`causeMessage=${c.message}`);
+  } else if (cause != null) {
+    parts.push(`cause=${String(cause)}`);
+  }
+  return parts.join(" ");
+}
+
 export function createAdminServices(config: AdminConfig) {
   const { nonces } = config;
   const machineFetch = config.machineFetch ?? fetch;
@@ -49,6 +66,8 @@ export function createAdminServices(config: AdminConfig) {
     const bootstrapSecret = mintBootstrapSecret();
 
     await config.fly.createApp({ appName, org: config.flyOrg, network });
+    // Machines API apps have no public IP until allocated; without this, *.fly.dev fetch fails.
+    await config.fly.allocateIps(appName);
     const volume = await config.fly.createVolume({
       appName,
       name: "omb_home",
@@ -115,7 +134,11 @@ export function createAdminServices(config: AdminConfig) {
       nonces,
       now,
     });
-    return machineFetch(`${workspace.publicUrl}${pathAndQuery}`, { method: "GET", headers });
+    try {
+      return await machineFetch(`${workspace.publicUrl}${pathAndQuery}`, { method: "GET", headers });
+    } catch (error) {
+      throw Object.assign(new Error(describeFetchError(error)), { status: 502, cause: error });
+    }
   }
 
   async function signedMachinePost(workspace: WorkspaceRecord, path: string, bodyObj: unknown): Promise<Response> {
@@ -128,11 +151,15 @@ export function createAdminServices(config: AdminConfig) {
       nonces,
       now,
     });
-    return machineFetch(`${workspace.publicUrl}${path}`, {
-      method: "POST",
-      headers: { ...headers, "content-type": "application/json" },
-      body,
-    });
+    try {
+      return await machineFetch(`${workspace.publicUrl}${path}`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body,
+      });
+    } catch (error) {
+      throw Object.assign(new Error(describeFetchError(error)), { status: 502, cause: error });
+    }
   }
 
   async function workspaceHealth(id: string) {

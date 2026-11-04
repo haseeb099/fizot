@@ -38,10 +38,12 @@ it("creates a Fly app, volume, secrets and machine through the fake client", asy
   expect(workspace.publicUrl).toBe(`https://${workspace.appName}.fly.dev`);
   expect(fly.calls).toEqual([
     `createApp:${workspace.appName}`,
+    `allocateIps:${workspace.appName}`,
     `createVolume:${workspace.appName}:omb_home`,
     `setSecrets:${workspace.appName}`,
     `createMachine:${workspace.appName}:home`,
   ]);
+  expect(fly.ips.get(workspace.appName)?.via).toBe("fake");
   expect(fly.secrets.get(workspace.appName)).toEqual({
     OMB_CLOUD_ADMIN_URL: "https://admin.example.invalid",
     OMB_CLOUD_BOOTSTRAP_SECRET: workspace.bootstrapSecret,

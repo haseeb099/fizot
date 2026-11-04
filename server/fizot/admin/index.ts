@@ -29,6 +29,7 @@ export {
   MAX_STAGING_MACHINES,
   MAX_PROBE_MACHINE_SECONDS,
   FLY_STAGING_APP_PREFIX,
+  describeFetchError,
 } from "./public.ts";
 
 export type CreateAdminServerOptions = {
