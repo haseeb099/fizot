@@ -448,18 +448,24 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
       return rows.map((row: any) => ({ name: String(row.name ?? row.app_name), id: String(row.id ?? row.name) }));
     },
     async listMachines(appName) {
-      const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines`);
-      const rows = Array.isArray(json) ? json : [];
-      return rows.map(mapMachine);
+      try {
+        const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines`);
+        const rows = Array.isArray(json) ? json : [];
+        return rows.map(mapMachine);
+      } catch (error) {
+        if (String(error).includes("404")) return [];
+        throw error;
+      }
     },
     async getMachine(appName, machineId) {
       const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`);
       return mapMachine(json);
     },
     async stopMachine(appName, machineId, opts) {
+      // Fly Machines API parses timeout as a Go duration (e.g. "30s"), not bare seconds.
       await api("POST", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/stop`, {
         ...(opts?.signal ? { signal: opts.signal } : {}),
-        ...(opts?.timeout ? { timeout: opts.timeout } : { timeout: "30" }),
+        ...(opts?.timeout ? { timeout: opts.timeout } : { timeout: "30s" }),
       });
     },
     async startMachine(appName, machineId) {

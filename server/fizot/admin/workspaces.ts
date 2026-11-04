@@ -219,7 +219,7 @@ export function createAdminServices(config: AdminConfig) {
     if (!workspace.flyMachineId) {
       throw Object.assign(new Error("missing_fly_machine_id"), { status: 500 });
     }
-    await config.fly.stopMachine(workspace.appName, workspace.flyMachineId, { timeout: "30" });
+    await config.fly.stopMachine(workspace.appName, workspace.flyMachineId, { timeout: "30s" });
     await config.fly.waitMachine(workspace.appName, workspace.flyMachineId, "stopped", { timeoutSec: 120 });
     const machine = await config.fly.getMachine(workspace.appName, workspace.flyMachineId);
     if (machine.state !== "stopped" && machine.state !== "suspended") {
