@@ -241,8 +241,17 @@ export function createAdminServices(config: AdminConfig) {
     if (!workspace.flyMachineId) {
       throw Object.assign(new Error("missing_fly_machine_id"), { status: 500 });
     }
-    await config.fly.startMachine(workspace.appName, workspace.flyMachineId);
-    await config.fly.waitMachine(workspace.appName, workspace.flyMachineId, "started", { timeoutSec: 120 });
+    let started = false;
+    for (let attempt = 1; attempt <= 3 && !started; attempt++) {
+      try {
+        await config.fly.startMachine(workspace.appName, workspace.flyMachineId);
+        await config.fly.waitMachine(workspace.appName, workspace.flyMachineId, "started", { timeoutSec: 120 });
+        started = true;
+      } catch (error) {
+        if (attempt === 3) throw error;
+        await new Promise((r) => setTimeout(r, 3_000));
+      }
+    }
     const healthDeadline = Date.now() + (input.healthWaitMs ?? 3 * 60_000);
     let lastHealth: { status: number; body: unknown } | null = null;
     while (Date.now() < healthDeadline) {

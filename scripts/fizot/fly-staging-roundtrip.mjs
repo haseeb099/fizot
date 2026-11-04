@@ -288,27 +288,39 @@ try {
   console.log(probeAsleep.stdout);
   report.steps.push(log("cost_probe_asleep", { exit: probeAsleep.status, expectState: asleepMachine.state }));
 
+  // Call the service directly (same process): HTTP to the in-process Admin
+  // briefly ECONNRESET after suspend on CI runners.
   log("wake_begin");
-  const wakeRes = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/wake`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ healthWaitMs: 3 * 60_000 }),
-  });
-  const wakeBody = await wakeRes.json().catch(() => ({}));
-  if (wakeRes.status !== 200 || wakeBody.ok !== true) {
-    throw new Error(`wake failed: ${wakeRes.status} ${JSON.stringify(wakeBody)}`);
+  let wakeBody = null;
+  let wakeError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const woke = await admin.services.workspaceWake(workspaceId, { healthWaitMs: 3 * 60_000 });
+      wakeBody = woke.body;
+      wakeError = null;
+      break;
+    } catch (error) {
+      wakeError = error;
+      report.steps.push(log("wake_retry", {
+        attempt,
+        message: error instanceof Error ? error.message : String(error),
+      }));
+      await sleep(5_000);
+    }
+  }
+  if (!wakeBody || wakeBody.ok !== true) {
+    throw new Error(`wake failed: ${wakeError instanceof Error ? wakeError.message : JSON.stringify(wakeBody)}`);
   }
   report.steps.push(log("wake", {
-    status: wakeRes.status,
+    status: 200,
     machineState: wakeBody.machineState ?? null,
     healthOk: true,
   }));
   await logMachineState("after_wake");
 
-  const healthAfterWake = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/health`);
-  const healthAfterWakeBody = await healthAfterWake.json().catch(() => ({}));
+  const healthAfterWake = await admin.services.workspaceHealth(workspaceId);
   if (healthAfterWake.status !== 200) {
-    throw new Error(`health after wake failed: ${healthAfterWake.status} ${JSON.stringify(healthAfterWakeBody)}`);
+    throw new Error(`health after wake failed: ${healthAfterWake.status} ${JSON.stringify(healthAfterWake.body)}`);
   }
   report.steps.push(log("health_after_wake", { status: healthAfterWake.status }));
 
