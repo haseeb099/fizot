@@ -19,7 +19,7 @@ daily gate's `fizot/` vitest filter picks them up.
 | `POST` | `/admin/workspaces` | Create one Fly app (own network), allocate shared IPv4 + IPv6, 10 GB volume, one machine with `OMB_CLOUD_ROLE`, `OMB_CLOUD_MACHINE_ID`, `OMB_PUBLIC_URL`; set secrets `OMB_CLOUD_ADMIN_URL` and `OMB_CLOUD_BOOTSTRAP_SECRET`. |
 | `GET` | `/admin/workspaces/:id/health` | Signed `GET /api/cloud/health?after=0` to the machine. |
 | `GET` | `/admin/workspaces/:id/power` | Signed `GET /api/cloud/power` to the machine. |
-| `POST` | `/admin/workspaces/:id/sleep` | Wait until power is idle, signed `POST /api/cloud/power/sleep`, then Fly Machines `stop` and wait for `stopped`. |
+| `POST` | `/admin/workspaces/:id/sleep` | Wait until power is idle, signed `POST /api/cloud/power/sleep`, then Fly Machines `suspend` (fallback `stop`; staging keeps `auto_destroy`, so stop would destroy). |
 | `POST` | `/admin/workspaces/:id/wake` | Fly Machines `start`, wait for `started`, then health 200. |
 | `POST` | `/admin/workspaces/:id/pairing` | Signed `POST /api/cloud/pairing`; returns `pairingLink`. Team plan requires a `member` claim (`owner`/`admin` → admin+client scopes; `member` → client). |
 | `DELETE` | `/admin/workspaces/:id` | Destroy the Fly app (force) and drop the store row. |

@@ -71,6 +71,7 @@ export interface FlyClient {
   listMachines(appName: string): Promise<FlyMachine[]>;
   getMachine(appName: string, machineId: string): Promise<FlyMachine>;
   stopMachine(appName: string, machineId: string, opts?: { signal?: string; timeout?: string }): Promise<void>;
+  suspendMachine(appName: string, machineId: string): Promise<void>;
   startMachine(appName: string, machineId: string): Promise<void>;
   waitMachine(
     appName: string,
@@ -256,6 +257,14 @@ export function createFakeFlyClient(): FlyClient & {
       if (!key) throw new Error(`fly machine ${machineId} missing`);
       const m = machines.get(key)!;
       machines.set(key, { ...m, state: "stopped" });
+    },
+    async suspendMachine(appName, machineId) {
+      calls.push(`suspendMachine:${appName}:${machineId}`);
+      const key = [...machines.entries()].find(([k, m]) =>
+        k.startsWith(`${appName}/`) && m.id === machineId)?.[0];
+      if (!key) throw new Error(`fly machine ${machineId} missing`);
+      const m = machines.get(key)!;
+      machines.set(key, { ...m, state: "suspended" });
     },
     async startMachine(appName, machineId) {
       calls.push(`startMachine:${appName}:${machineId}`);
@@ -467,6 +476,9 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
         ...(opts?.signal ? { signal: opts.signal } : {}),
         ...(opts?.timeout ? { timeout: opts.timeout } : { timeout: "30s" }),
       });
+    },
+    async suspendMachine(appName, machineId) {
+      await api("POST", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/suspend`);
     },
     async startMachine(appName, machineId) {
       await api("POST", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/start`);

@@ -219,11 +219,14 @@ export function createAdminServices(config: AdminConfig) {
     if (!workspace.flyMachineId) {
       throw Object.assign(new Error("missing_fly_machine_id"), { status: 500 });
     }
-    await config.fly.stopMachine(workspace.appName, workspace.flyMachineId, { timeout: "30s" });
-    await config.fly.waitMachine(workspace.appName, workspace.flyMachineId, "stopped", { timeoutSec: 120 });
+    // Staging machines use auto_destroy: a Fly stop exits the guest and destroys
+    // the machine. Suspend keeps the Machine (rootfs billed) so the asleep probe
+    // can sample a non-started state, then wake via start.
+    await config.fly.suspendMachine(workspace.appName, workspace.flyMachineId);
+    await config.fly.waitMachine(workspace.appName, workspace.flyMachineId, "suspended", { timeoutSec: 120 });
     const machine = await config.fly.getMachine(workspace.appName, workspace.flyMachineId);
-    if (machine.state !== "stopped" && machine.state !== "suspended") {
-      throw Object.assign(new Error(`machine_not_stopped:${machine.state}`), { status: 502 });
+    if (machine.state !== "suspended" && machine.state !== "stopped") {
+      throw Object.assign(new Error(`machine_not_asleep:${machine.state}`), { status: 502 });
     }
     return {
       status: 200,

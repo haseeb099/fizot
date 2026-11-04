@@ -258,7 +258,7 @@ try {
     throw new Error(`sleep failed: ${sleepRes.status} ${JSON.stringify(sleepBody)}`);
   }
   if (sleepBody.machineState !== "stopped" && sleepBody.machineState !== "suspended") {
-    throw new Error(`sleep did not stop machine: ${JSON.stringify(sleepBody)}`);
+    throw new Error(`sleep did not suspend/stop machine: ${JSON.stringify(sleepBody)}`);
   }
   report.steps.push(log("sleep", {
     status: sleepRes.status,
@@ -267,17 +267,17 @@ try {
   }));
   await logMachineState("after_sleep");
 
-  const stopped = await fly.getMachine(appName, flyMachineId);
-  if (stopped.state !== "stopped" && stopped.state !== "suspended") {
-    throw new Error(`assert stopped failed: state=${stopped.state}`);
+  const asleepMachine = await fly.getMachine(appName, flyMachineId);
+  if (asleepMachine.state !== "stopped" && asleepMachine.state !== "suspended") {
+    throw new Error(`assert asleep failed: state=${asleepMachine.state}`);
   }
-  report.steps.push(log("assert_stopped", { state: stopped.state, machineId: stopped.id }));
+  report.steps.push(log("assert_asleep", { state: asleepMachine.state, machineId: asleepMachine.id }));
 
   const probeAsleep = spawnSync(
     process.execPath,
     ["--experimental-strip-types", path.join(ROOT, "scripts/fizot/fly-cost-probe.mjs"),
       `--app=${appName}`, `--org=${org}`, "--phase=asleep", "--sample-seconds=60",
-      "--expect-state=stopped",
+      `--expect-state=${asleepMachine.state}`,
       `--max-seconds=${Math.min(120, MAX_PROBE_MACHINE_SECONDS)}`],
     { env: process.env, encoding: "utf8" },
   );
@@ -286,7 +286,7 @@ try {
     throw new Error(`asleep cost probe failed (${probeAsleep.status})`);
   }
   console.log(probeAsleep.stdout);
-  report.steps.push(log("cost_probe_asleep", { exit: probeAsleep.status, expectState: "stopped" }));
+  report.steps.push(log("cost_probe_asleep", { exit: probeAsleep.status, expectState: asleepMachine.state }));
 
   log("wake_begin");
   const wakeRes = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/wake`, {

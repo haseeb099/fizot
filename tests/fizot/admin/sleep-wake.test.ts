@@ -49,9 +49,9 @@ it("sleep stops the Fly machine after prepareSleep; wake starts it again", async
   // First attempt would 409; flip idle after a tick so the poll succeeds.
   setTimeout(() => { idle = true; }, 50);
   const slept = await services.workspaceSleep(workspace.id, { idleMinutes: 1, waitMs: 5_000 });
-  expect(slept.body).toMatchObject({ ok: true, machineState: "stopped" });
-  expect(fly.calls.some((c) => c.startsWith(`stopMachine:${workspace.appName}:`))).toBe(true);
-  expect((await fly.getMachine(workspace.appName, workspace.flyMachineId)).state).toBe("stopped");
+  expect(slept.body).toMatchObject({ ok: true, machineState: "suspended" });
+  expect(fly.calls.some((c) => c.startsWith(`suspendMachine:${workspace.appName}:`))).toBe(true);
+  expect((await fly.getMachine(workspace.appName, workspace.flyMachineId)).state).toBe("suspended");
 
   const woke = await services.workspaceWake(workspace.id, { healthWaitMs: 5_000 });
   expect(woke.body).toMatchObject({ ok: true, machineState: "started" });
