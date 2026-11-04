@@ -85,6 +85,8 @@ export function createAdminServices(config: AdminConfig) {
       OMB_CLOUD_ROLE: flags.role,
       OMB_CLOUD_MACHINE_ID: machineId,
       OMB_PUBLIC_URL: publicUrl,
+      // Cold wake after stop: Caddy holds until the server listens (cloud-pro.md).
+      OMB_CLOUD_EDGE_HOLD: "30s",
     };
     if (flags.role === "team" && input.teamId && input.teamName) {
       env.OMB_CLOUD_TEAM_ID = input.teamId;
@@ -170,12 +172,110 @@ export function createAdminServices(config: AdminConfig) {
     return { status: response.status, body, workspaceId: workspace.id };
   }
 
-  async function workspacePower(id: string) {
+  async function workspacePower(id: string, idleMinutes?: number) {
     const workspace = await config.store.get(id);
     if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
-    const response = await signedMachineGet(workspace, "/api/cloud/power");
+    const q = idleMinutes !== undefined ? `?idleMinutes=${idleMinutes}` : "";
+    const response = await signedMachineGet(workspace, `/api/cloud/power${q}`);
     const body = await response.json().catch(() => ({}));
     return { status: response.status, body, workspaceId: workspace.id };
+  }
+
+  /**
+   * Sleep handshake then Fly Machines stop.
+   * HTTP 409 from /api/cloud/power/sleep means the home is not idle yet
+   * (e.g. busy:["just-woke"] for 2 minutes after boot) — callers must wait
+   * and retry; this helper polls until idle or deadline.
+   */
+  async function workspaceSleep(id: string, input: {
+    idleMinutes?: number;
+    waitMs?: number;
+  } = {}) {
+    const workspace = await config.store.get(id);
+    if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    const idleMinutes = input.idleMinutes ?? 1;
+    const deadline = Date.now() + (input.waitMs ?? 5 * 60_000);
+    let lastBusy: unknown = null;
+    while (Date.now() < deadline) {
+      const power = await workspacePower(id, idleMinutes);
+      const body = power.body as { idle?: boolean; busy?: unknown; wokeAt?: number };
+      if (power.status === 200 && body.idle === true) break;
+      lastBusy = body.busy ?? body;
+      const wokeAt = typeof body.wokeAt === "number" ? body.wokeAt : 0;
+      const justWokeLeft = Math.max(0, wokeAt + 120_000 - Date.now());
+      await new Promise((r) => setTimeout(r, Math.min(15_000, Math.max(2_000, justWokeLeft || 5_000))));
+    }
+    const sleepRes = await signedMachinePost(workspace, "/api/cloud/power/sleep", {
+      v: 1,
+      idleMinutes,
+    });
+    const sleepBody = await sleepRes.json().catch(() => ({})) as { ok?: boolean; busy?: unknown; nextDueAt?: number | null };
+    if (sleepRes.status !== 200) {
+      throw Object.assign(
+        new Error(`power_sleep_refused:${sleepRes.status}:${JSON.stringify(sleepBody.busy ?? sleepBody)}`),
+        { status: sleepRes.status === 409 ? 409 : 502, body: sleepBody, lastBusy },
+      );
+    }
+    if (!workspace.flyMachineId) {
+      throw Object.assign(new Error("missing_fly_machine_id"), { status: 500 });
+    }
+    // Staging machines use auto_destroy: a Fly stop exits the guest and destroys
+    // the machine. Suspend keeps the Machine (rootfs billed) so the asleep probe
+    // can sample a non-started state, then wake via start.
+    await config.fly.suspendMachine(workspace.appName, workspace.flyMachineId);
+    await config.fly.waitMachine(workspace.appName, workspace.flyMachineId, "suspended", { timeoutSec: 120 });
+    const machine = await config.fly.getMachine(workspace.appName, workspace.flyMachineId);
+    if (machine.state !== "suspended" && machine.state !== "stopped") {
+      throw Object.assign(new Error(`machine_not_asleep:${machine.state}`), { status: 502 });
+    }
+    return {
+      status: 200,
+      body: { ok: true, sleep: sleepBody, machineState: machine.state, machineId: machine.id },
+      workspaceId: workspace.id,
+    };
+  }
+
+  async function workspaceWake(id: string, input: { healthWaitMs?: number } = {}) {
+    const workspace = await config.store.get(id);
+    if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    if (!workspace.flyMachineId) {
+      throw Object.assign(new Error("missing_fly_machine_id"), { status: 500 });
+    }
+    let started = false;
+    for (let attempt = 1; attempt <= 3 && !started; attempt++) {
+      try {
+        await config.fly.startMachine(workspace.appName, workspace.flyMachineId);
+        await config.fly.waitMachine(workspace.appName, workspace.flyMachineId, "started", { timeoutSec: 120 });
+        started = true;
+      } catch (error) {
+        if (attempt === 3) throw error;
+        await new Promise((r) => setTimeout(r, 3_000));
+      }
+    }
+    const healthDeadline = Date.now() + (input.healthWaitMs ?? 3 * 60_000);
+    let lastHealth: { status: number; body: unknown } | null = null;
+    while (Date.now() < healthDeadline) {
+      try {
+        const health = await workspaceHealth(id);
+        lastHealth = { status: health.status, body: health.body };
+        const body = health.body as { ok?: boolean; v?: number };
+        if (health.status === 200 && (body.ok === true || body.v === 1)) {
+          const machine = await config.fly.getMachine(workspace.appName, workspace.flyMachineId);
+          return {
+            status: 200,
+            body: { ok: true, health: health.body, machineState: machine.state },
+            workspaceId: workspace.id,
+          };
+        }
+      } catch {
+        // Cold wake: edge may 502 until the process listens.
+      }
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+    throw Object.assign(
+      new Error(`wake_health_timeout:${JSON.stringify(lastHealth)}`),
+      { status: 504 },
+    );
   }
 
   async function workspacePairing(id: string, input: {
@@ -219,6 +319,8 @@ export function createAdminServices(config: AdminConfig) {
     createWorkspace,
     workspaceHealth,
     workspacePower,
+    workspaceSleep,
+    workspaceWake,
     workspacePairing,
     destroyWorkspace,
     store: config.store,

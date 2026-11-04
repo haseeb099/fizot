@@ -6,6 +6,19 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-42 True Fly sleep/stop probe and cost-guard price fix
+
+- Date: 2026-11-04
+- Type: Code
+- Area: Admin & provisioning; CI & tests; Cost
+- Why we changed it: Green run 41792947703 returned HTTP 409 on `/api/cloud/power/sleep` (`busy:["just-woke"]`) and never called Fly stop, so asleep-*.json was still `started`. cost-guard also projected ~$3.29/mo from an undersized $/sec while cost-sheet correctly used $12.70 for shared-cpu-1x 2 GB.
+- Why it is necessary: CS-I needs a true stopped sample; Gate G0b spend projections must match published Fly rates.
+- How it works: Admin `POST .../sleep` waits until power is idle, signs prepareSleep (`idleMinutes`), then Fly Machines **suspend** (stop would destroy under `auto_destroy`) + wait `suspended`. Wake starts and waits for health 200. Round trip asserts asleep, probes 60 s, then wakes. cost-guard imports rates from `cost-sheet.ts` (https://fly.io/docs/about/pricing/, read 2026-11-04). Proven green: run 41880692381; CS-I → implemented.
+- Impact: Staging round trips take ~2+ extra minutes (just-woke window) plus 60 s suspended; projected daily cost rises to match the $12.70 machine.
+- Rollback: Revert sleep/wake routes and restore the old cost-guard constant.
+- Files / Patch IDs: PATCH-33. https://app.notion.com/p/40edd43e0a9d8107b3c6c7aec7da5ac0
+- Related tasks: FZ-17 (S2.10). Patch: https://app.notion.com/p/40edd43e0a9d81a2a484c395b8ec65be. PR: https://github.com/haseeb099/fizot/pull/15.
+
 ## CL-41 Staging cost sheet from measured Fly probe data
 
 - Date: 2026-11-04

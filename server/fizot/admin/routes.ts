@@ -63,7 +63,7 @@ export function createAdminHandler(services: AdminServices): (req: IncomingMessa
         return;
       }
 
-      const match = /^\/admin\/workspaces\/([^/]+)\/(health|power|pairing)$/.exec(url.pathname);
+      const match = /^\/admin\/workspaces\/([^/]+)\/(health|power|pairing|sleep|wake)$/.exec(url.pathname);
       if (match) {
         const id = decodeURIComponent(match[1]!);
         const action = match[2]!;
@@ -73,7 +73,21 @@ export function createAdminHandler(services: AdminServices): (req: IncomingMessa
           return;
         }
         if (action === "power" && method === "GET") {
-          const result = await services.workspacePower(id);
+          const idleRaw = url.searchParams.get("idleMinutes");
+          const idleMinutes = idleRaw && /^\d+$/.test(idleRaw) ? Number(idleRaw) : undefined;
+          const result = await services.workspacePower(id, idleMinutes);
+          send(res, result.status, result.body);
+          return;
+        }
+        if (action === "sleep" && method === "POST") {
+          const body = await readJson(req) as { idleMinutes?: number; waitMs?: number };
+          const result = await services.workspaceSleep(id, body);
+          send(res, result.status, result.body);
+          return;
+        }
+        if (action === "wake" && method === "POST") {
+          const body = await readJson(req) as { healthWaitMs?: number };
+          const result = await services.workspaceWake(id, body);
           send(res, result.status, result.body);
           return;
         }

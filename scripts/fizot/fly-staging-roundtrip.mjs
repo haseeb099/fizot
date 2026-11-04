@@ -181,6 +181,7 @@ try {
     process.execPath,
     ["--experimental-strip-types", path.join(ROOT, "scripts/fizot/fly-cost-probe.mjs"),
       `--app=${appName}`, `--org=${org}`, "--phase=awake", "--sample-seconds=25",
+      "--expect-state=started",
       `--max-seconds=${Math.min(120, MAX_PROBE_MACHINE_SECONDS)}`],
     { env: process.env, encoding: "utf8" },
   );
@@ -244,36 +245,84 @@ try {
     report.steps.push(log("negative_replayed_nonce", report.negatives.replayedNonce));
   }
 
-  try {
-    const sleepPath = "/api/cloud/power/sleep";
-    const sleepBody = Buffer.from(JSON.stringify({}));
-    const ts = String(Math.floor(Date.now() / 1000));
-    const nonce = mintNonce();
-    const sig = adminRequestSignature(secret, ts, nonce, "POST", sleepPath, sleepBody);
-    const sleepRes = await fetch(`${publicUrl}${sleepPath}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-omb-cloud-timestamp": ts,
-        "x-omb-cloud-nonce": nonce,
-        "x-omb-cloud-signature": `v1=${sig}`,
-      },
-      body: sleepBody,
-    });
-    report.steps.push(log("sleep_attempt", { status: sleepRes.status }));
-    await sleep(5_000);
-    const probeAsleep = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", path.join(ROOT, "scripts/fizot/fly-cost-probe.mjs"),
-        `--app=${appName}`, `--org=${org}`, "--phase=asleep", "--sample-seconds=15",
-        `--max-seconds=${Math.min(60, MAX_PROBE_MACHINE_SECONDS)}`],
-      { env: process.env, encoding: "utf8" },
-    );
-    console.log(probeAsleep.stdout);
-    report.steps.push(log("cost_probe_asleep", { exit: probeAsleep.status }));
-  } catch (error) {
-    report.steps.push(log("sleep_skipped", { reason: describeFetchError(error) }));
+  // Sleep 409 on the green run was prepareSleep busy:["just-woke"] — the home
+  // refuses sleep for CLOUD_IDLE_AWAKE_MS (2 min). Admin polls then Fly stop.
+  log("sleep_begin", { note: "wait idle (just-woke), prepareSleep, Fly stop" });
+  const sleepRes = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/sleep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ idleMinutes: 1, waitMs: 5 * 60_000 }),
+  });
+  const sleepBody = await sleepRes.json().catch(() => ({}));
+  if (sleepRes.status !== 200 || sleepBody.ok !== true) {
+    throw new Error(`sleep failed: ${sleepRes.status} ${JSON.stringify(sleepBody)}`);
   }
+  if (sleepBody.machineState !== "stopped" && sleepBody.machineState !== "suspended") {
+    throw new Error(`sleep did not suspend/stop machine: ${JSON.stringify(sleepBody)}`);
+  }
+  report.steps.push(log("sleep", {
+    status: sleepRes.status,
+    machineState: sleepBody.machineState,
+    machineId: sleepBody.machineId ?? null,
+  }));
+  await logMachineState("after_sleep");
+
+  const asleepMachine = await fly.getMachine(appName, flyMachineId);
+  if (asleepMachine.state !== "stopped" && asleepMachine.state !== "suspended") {
+    throw new Error(`assert asleep failed: state=${asleepMachine.state}`);
+  }
+  report.steps.push(log("assert_asleep", { state: asleepMachine.state, machineId: asleepMachine.id }));
+
+  const probeAsleep = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", path.join(ROOT, "scripts/fizot/fly-cost-probe.mjs"),
+      `--app=${appName}`, `--org=${org}`, "--phase=asleep", "--sample-seconds=60",
+      `--expect-state=${asleepMachine.state}`,
+      `--max-seconds=${Math.min(120, MAX_PROBE_MACHINE_SECONDS)}`],
+    { env: process.env, encoding: "utf8" },
+  );
+  if (probeAsleep.status !== 0) {
+    console.error(probeAsleep.stderr || probeAsleep.stdout);
+    throw new Error(`asleep cost probe failed (${probeAsleep.status})`);
+  }
+  console.log(probeAsleep.stdout);
+  report.steps.push(log("cost_probe_asleep", { exit: probeAsleep.status, expectState: asleepMachine.state }));
+
+  // Call the service directly (same process): HTTP to the in-process Admin
+  // briefly ECONNRESET after suspend on CI runners.
+  log("wake_begin");
+  let wakeBody = null;
+  let wakeError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const woke = await admin.services.workspaceWake(workspaceId, { healthWaitMs: 3 * 60_000 });
+      wakeBody = woke.body;
+      wakeError = null;
+      break;
+    } catch (error) {
+      wakeError = error;
+      report.steps.push(log("wake_retry", {
+        attempt,
+        message: error instanceof Error ? error.message : String(error),
+      }));
+      await sleep(5_000);
+    }
+  }
+  if (!wakeBody || wakeBody.ok !== true) {
+    throw new Error(`wake failed: ${wakeError instanceof Error ? wakeError.message : JSON.stringify(wakeBody)}`);
+  }
+  report.steps.push(log("wake", {
+    status: 200,
+    machineState: wakeBody.machineState ?? null,
+    healthOk: true,
+  }));
+  await logMachineState("after_wake");
+
+  const healthAfterWake = await admin.services.workspaceHealth(workspaceId);
+  if (healthAfterWake.status !== 200) {
+    throw new Error(`health after wake failed: ${healthAfterWake.status} ${JSON.stringify(healthAfterWake.body)}`);
+  }
+  report.steps.push(log("health_after_wake", { status: healthAfterWake.status }));
 
   log("destroy_begin", { appName });
   const destroyed = await fetch(`${admin.url}/admin/workspaces/${workspaceId}`, { method: "DELETE" });

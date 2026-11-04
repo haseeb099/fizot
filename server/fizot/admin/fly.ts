@@ -49,6 +49,8 @@ export type FlyMachine = {
   id: string;
   name: string;
   state: string;
+  /** Fly instance / version id; required for wait?state=stopped. */
+  instanceId?: string;
   privateIp?: string;
   createdAt?: string;
   checks?: unknown;
@@ -68,6 +70,15 @@ export interface FlyClient {
   listApps(org: string): Promise<Array<{ name: string; id: string }>>;
   listMachines(appName: string): Promise<FlyMachine[]>;
   getMachine(appName: string, machineId: string): Promise<FlyMachine>;
+  stopMachine(appName: string, machineId: string, opts?: { signal?: string; timeout?: string }): Promise<void>;
+  suspendMachine(appName: string, machineId: string): Promise<void>;
+  startMachine(appName: string, machineId: string): Promise<void>;
+  waitMachine(
+    appName: string,
+    machineId: string,
+    state: "started" | "stopped" | "suspended" | "destroyed",
+    opts?: { instanceId?: string; timeoutSec?: number },
+  ): Promise<void>;
   listVolumes(appName: string): Promise<FlyVolume[]>;
   getApp(appName: string): Promise<{ name: string } | null>;
   countLiveStagingMachines(org: string, appPrefix?: string): Promise<number>;
@@ -116,6 +127,7 @@ function mapMachine(row: any): FlyMachine {
     id: String(row.id),
     name: String(row.name ?? ""),
     state: String(row.state ?? ""),
+    instanceId: row.instance_id ? String(row.instance_id) : undefined,
     privateIp: row.private_ip ? String(row.private_ip) : undefined,
     createdAt: row.created_at ? String(row.created_at) : undefined,
     checks: row.checks ?? undefined,
@@ -229,6 +241,7 @@ export function createFakeFlyClient(): FlyClient & {
         id: `mach_${++seq}`,
         name: input.name,
         state: "started",
+        instanceId: `inst_${seq}`,
         privateIp: `fdaa:0:0::${seq}`,
         createdAt: new Date().toISOString(),
         checks: { http: { status: "passing" } },
@@ -236,6 +249,39 @@ export function createFakeFlyClient(): FlyClient & {
       };
       machines.set(`${input.appName}/${input.name}`, machine);
       return machine;
+    },
+    async stopMachine(appName, machineId) {
+      calls.push(`stopMachine:${appName}:${machineId}`);
+      const key = [...machines.entries()].find(([k, m]) =>
+        k.startsWith(`${appName}/`) && m.id === machineId)?.[0];
+      if (!key) throw new Error(`fly machine ${machineId} missing`);
+      const m = machines.get(key)!;
+      machines.set(key, { ...m, state: "stopped" });
+    },
+    async suspendMachine(appName, machineId) {
+      calls.push(`suspendMachine:${appName}:${machineId}`);
+      const key = [...machines.entries()].find(([k, m]) =>
+        k.startsWith(`${appName}/`) && m.id === machineId)?.[0];
+      if (!key) throw new Error(`fly machine ${machineId} missing`);
+      const m = machines.get(key)!;
+      machines.set(key, { ...m, state: "suspended" });
+    },
+    async startMachine(appName, machineId) {
+      calls.push(`startMachine:${appName}:${machineId}`);
+      const key = [...machines.entries()].find(([k, m]) =>
+        k.startsWith(`${appName}/`) && m.id === machineId)?.[0];
+      if (!key) throw new Error(`fly machine ${machineId} missing`);
+      const m = machines.get(key)!;
+      machines.set(key, { ...m, state: "started" });
+    },
+    async waitMachine(appName, machineId, state) {
+      calls.push(`waitMachine:${appName}:${machineId}:${state}`);
+      const found = [...machines.entries()].find(([k, m]) =>
+        k.startsWith(`${appName}/`) && m.id === machineId);
+      if (!found) throw new Error(`fly machine ${machineId} missing`);
+      if (found[1].state !== state) {
+        throw new Error(`fly wait: expected ${state}, got ${found[1].state}`);
+      }
     },
     async destroyApp(appName) {
       calls.push(`destroyApp:${appName}`);
@@ -411,13 +457,62 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
       return rows.map((row: any) => ({ name: String(row.name ?? row.app_name), id: String(row.id ?? row.name) }));
     },
     async listMachines(appName) {
-      const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines`);
-      const rows = Array.isArray(json) ? json : [];
-      return rows.map(mapMachine);
+      try {
+        const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines`);
+        const rows = Array.isArray(json) ? json : [];
+        return rows.map(mapMachine);
+      } catch (error) {
+        if (String(error).includes("404")) return [];
+        throw error;
+      }
     },
     async getMachine(appName, machineId) {
       const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`);
       return mapMachine(json);
+    },
+    async stopMachine(appName, machineId, opts) {
+      // Fly Machines API parses timeout as a Go duration (e.g. "30s"), not bare seconds.
+      await api("POST", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/stop`, {
+        ...(opts?.signal ? { signal: opts.signal } : {}),
+        ...(opts?.timeout ? { timeout: opts.timeout } : { timeout: "30s" }),
+      });
+    },
+    async suspendMachine(appName, machineId) {
+      await api("POST", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/suspend`);
+    },
+    async startMachine(appName, machineId) {
+      await api("POST", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/start`);
+    },
+    async waitMachine(appName, machineId, state, opts) {
+      // Machines wait API: timeout is a Go duration in [1s, 1m0s].
+      const deadline = Date.now() + (opts?.timeoutSec ?? 120) * 1000;
+      let instanceId = opts?.instanceId;
+      if ((state === "stopped" || state === "suspended") && !instanceId) {
+        const current = await client.getMachine(appName, machineId);
+        instanceId = current.instanceId;
+      }
+      while (Date.now() < deadline) {
+        const remainingMs = deadline - Date.now();
+        const sliceSec = Math.max(1, Math.min(60, Math.ceil(remainingMs / 1000)));
+        const params = new URLSearchParams({ state, timeout: `${sliceSec}s` });
+        if (instanceId) params.set("instance_id", instanceId);
+        try {
+          await api(
+            "GET",
+            `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?${params}`,
+          );
+          return;
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (msg.includes("408") || /timeout/i.test(msg)) continue;
+          const current = await client.getMachine(appName, machineId).catch(() => null);
+          if (current?.state === state) return;
+          throw error;
+        }
+      }
+      const final = await client.getMachine(appName, machineId);
+      if (final.state === state) return;
+      throw new Error(`fly wait: timed out waiting for ${state}, got ${final.state}`);
     },
     async listVolumes(appName) {
       const json = await api("GET", `/v1/apps/${encodeURIComponent(appName)}/volumes`);

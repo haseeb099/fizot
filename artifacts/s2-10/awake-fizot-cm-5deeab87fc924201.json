@@ -1,20 +1,21 @@
 {
   "schema": "fizot-s2-10-fly-usage/v1",
   "phase": "awake",
-  "recordedAt": "2026-11-04T07:36:19.487Z",
-  "appName": "fizot-cm-6302406165974b8f",
+  "recordedAt": "2026-11-04T17:52:08.630Z",
+  "appName": "fizot-cm-5deeab87fc924201",
   "org": "fizot",
-  "machineId": "830243f7729d28",
+  "machineId": "83ddd21c7e9398",
   "machineState": "started",
-  "machineSeconds": 26.541,
+  "machineSeconds": 21.816,
+  "sampleWallSeconds": 26.817,
   "volumeGb": 10,
   "egressBytes": null,
   "egressNote": "not exposed by Machines list API; leave null for the cost sheet",
   "costUsd": {
-    "machine": 0.000018,
-    "volumeWindow": 0.000015,
+    "machine": 0.000107,
+    "volumeWindow": 0.000016,
     "rates": {
-      "sharedCpu1xUsdPerSec": 6.92e-7,
+      "sharedCpu1xUsdPerSec": 0.000004899691358024691,
       "volumeUsdPerGbMonth": 0.15
     }
   },

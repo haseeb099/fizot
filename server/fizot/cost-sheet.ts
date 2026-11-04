@@ -182,7 +182,7 @@ export function buildCostSheet(input: {
         "Stopped rootfs GB is assumed (image size not measured on the probe).",
         "Machine USD/month uses Fly iad/ewr published shared-cpu-1x 1GB + 1GB additional RAM; staging region was lhr (regional uplift possible).",
         "Monthly profiles (24h / 8h / 1h) are usage assumptions; probe machine-seconds are short measured samples, not the profile durations.",
-        "The asleep probe file may still show machineState=started if sleep returned 409 — treat asleep seconds as a second wall-clock sample, not proven stopped billing.",
+        "Asleep probe records machineState=suspended (Fly suspend; auto_destroy forbids stop) after Admin prepareSleep; billable machineSeconds while suspended are ~0.",
       ],
     },
     profiles: USAGE_PROFILES.map((p) => profileCost(p, volumeGb, assumptions)),
