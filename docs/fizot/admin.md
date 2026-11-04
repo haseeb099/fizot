@@ -24,6 +24,11 @@ daily gate's `fizot/` vitest filter picks them up.
 | `POST` | `/admin/workspaces/:id/pairing` | Signed `POST /api/cloud/pairing`; returns `pairingLink`. Team plan requires a `member` claim (`owner`/`admin` → admin+client scopes; `member` → client). |
 | `DELETE` | `/admin/workspaces/:id` | Destroy the Fly app (force) and drop the store row. |
 
+All Admin routes require a session cookie (`fizot_admin_session`). Workspace-scoped
+routes also require membership via `authorizeWorkspaceAccess` (unknown and
+forbidden → same 404). See `docs/fizot/edge.md` for AuthProvider, Edge open,
+TC36, and the independent HMAC known-answer.
+
 Signer: HMAC-SHA256 over `v1\n<timestamp>\n<nonce>\n<METHOD>\n<path+query>\n<bodyHash>` (base64url), ±300 s skew, nonces refused for 10 minutes.
 
 ## Environment

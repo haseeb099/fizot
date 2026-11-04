@@ -19,3 +19,13 @@ export {
   MAX_STAGING_MACHINES,
   MAX_PROBE_MACHINE_SECONDS,
 } from "./cost-guard.ts";
+export {
+  createMemoryTenantStore,
+  createPostgresTenantStore,
+  roleAtLeast,
+  hashSessionToken,
+  mintSessionToken,
+} from "./tenant.ts";
+export { FakeAuthProvider, UnconfiguredAuthProvider, SESSION_COOKIE_NAME } from "./auth.ts";
+export { authorizeWorkspaceAccess, AUTHORIZE_HELPER_ID } from "./authorize.ts";
+export { ROUTE_REGISTRY, matchRoute, publicRouteIds } from "./route-registry.ts";
