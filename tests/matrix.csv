@@ -46,5 +46,5 @@ DA-I,Dependency audit,integration,Daily static job runs pnpm audit high/critical
 RD-I,Pilot readiness,integration,"Insurance certificate, ICO fee receipt and written solicitor licence sign-off are on file before any partner is hosted",none,G3,planned,S2.12
 GN-I,Go or no-go,integration,"Every row in tests/matrix.csv has a pass, and there is no open P0 or P1",none,G6,planned,H7.4
 GN-E,Go or no-go,e2e,J1 to J11 pass at desktop and phone width,"J1; J2; J3; J4; J5; J6; J7; J8; J9; J10; J11",G6,planned,H7.4
-PX-U,Fizot AI proxy,unit,"Tier price table, reserve/settle, idempotency, exactly 80% alert and 100% hard cap, key redaction, mock stream and provider 500",none,G5,implemented,P4.3
-PX-I,Fizot AI proxy,integration,"Postgres append-only ledger and 50 parallel requests against a balance of 10 (admin-postgres.yml)",none,G5,implemented,P4.3
+PX-U,Fizot AI proxy,unit,"Tier price table, reserve/settle, idempotency, exactly 80% alert and 100% hard cap, key redaction, mock stream and provider 500 (CI 42129866259 static fizot/ vitest)",none,G5,pass,P4.3
+PX-I,Fizot AI proxy,integration,"Postgres append-only ledger and 50 parallel requests against a balance of 10 (admin-postgres.yml run 42129889814: 10 of 200, 40 of 402, settled 10)",none,G5,pass,P4.3
