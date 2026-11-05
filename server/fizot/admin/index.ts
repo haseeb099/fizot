@@ -2,6 +2,11 @@ import { createServer, type Server } from "node:http";
 import { FakeAuthProvider, UnconfiguredAuthProvider, type AuthProvider } from "./auth.ts";
 import { createFakeFlyClient, createFlyMachinesClient, type FlyClient } from "./fly.ts";
 import { createMemoryNonceStore, type NonceStore } from "./nonce-store.ts";
+import {
+  createMemoryInviteStore,
+  createPostgresInviteStore,
+  type InviteStore,
+} from "./invites.ts";
 import { createAdminHandler } from "./routes.ts";
 import { createMemoryWorkspaceStore, createPostgresWorkspaceStore, type WorkspaceStore } from "./store.ts";
 import {
@@ -11,7 +16,7 @@ import {
 } from "./tenant.ts";
 import { createAdminServices, type AdminConfig } from "./workspaces.ts";
 
-export type { FlyClient, NonceStore, WorkspaceStore, AdminConfig, AuthProvider, TenantStore };
+export type { FlyClient, NonceStore, WorkspaceStore, AdminConfig, AuthProvider, TenantStore, InviteStore };
 
 export {
   createFakeFlyClient,
@@ -50,6 +55,7 @@ export type CreateAdminServerOptions = {
   fly?: FlyClient;
   store?: WorkspaceStore;
   tenant?: TenantStore;
+  invites?: InviteStore;
   auth?: AuthProvider;
   nonces?: NonceStore;
   machineFetch?: typeof fetch;
@@ -83,6 +89,7 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   url: string;
   services: ReturnType<typeof createAdminServices>;
   tenant: TenantStore;
+  invites: InviteStore;
   auth: AuthProvider;
   close(): Promise<void>;
 }> {
@@ -99,6 +106,10 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     ?? (databaseUrl
       ? await createPostgresTenantStore(databaseUrl, store)
       : createMemoryTenantStore(store));
+  const invites = options.invites
+    ?? (databaseUrl
+      ? await createPostgresInviteStore(databaseUrl)
+      : createMemoryInviteStore());
 
   const resolved = resolveAdminAuth({ auth: options.auth });
   const auth = resolved.auth;
@@ -124,6 +135,7 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   const handler = createAdminHandler({
     services,
     tenant,
+    invites,
     auth,
     cookieSecure,
     allowFakeSignIn,
@@ -143,11 +155,13 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     url,
     services,
     tenant,
+    invites,
     auth,
     async close() {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       if (store && "close" in store && typeof store.close === "function") await store.close();
       if (tenant && "close" in tenant && typeof tenant.close === "function") await (tenant as { close(): Promise<void> }).close();
+      if (invites && "close" in invites && typeof invites.close === "function") await (invites as { close(): Promise<void> }).close();
     },
   };
 }

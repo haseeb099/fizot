@@ -30,6 +30,7 @@ export const ROUTE_REGISTRY: readonly RouteDef[] = [
   { id: "edge.signOut", method: "POST", path: "/edge/auth/sign-out", auth: "session", surface: "edge" },
   { id: "edge.me", method: "GET", path: "/edge/me", auth: "session", surface: "edge" },
   { id: "edge.openWorkspace", method: "POST", path: "/edge/workspaces/:workspaceId/open", auth: "membership", minRole: "member", surface: "edge" },
+  { id: "edge.acceptInvite", method: "POST", path: "/edge/invites/:token/accept", auth: "session", surface: "edge" },
 
   // Admin — session / membership
   { id: "admin.createWorkspace", method: "POST", path: "/admin/workspaces", auth: "session", surface: "admin" },
@@ -40,6 +41,12 @@ export const ROUTE_REGISTRY: readonly RouteDef[] = [
   { id: "admin.sleep", method: "POST", path: "/admin/workspaces/:workspaceId/sleep", auth: "membership", minRole: "admin", surface: "admin" },
   { id: "admin.wake", method: "POST", path: "/admin/workspaces/:workspaceId/wake", auth: "membership", minRole: "admin", surface: "admin" },
   { id: "admin.pairing", method: "POST", path: "/admin/workspaces/:workspaceId/pairing", auth: "membership", minRole: "admin", surface: "admin" },
+  { id: "admin.listMembers", method: "GET", path: "/admin/workspaces/:workspaceId/members", auth: "membership", minRole: "admin", surface: "admin" },
+  { id: "admin.patchMember", method: "POST", path: "/admin/workspaces/:workspaceId/members/:accountId", auth: "membership", minRole: "admin", surface: "admin" },
+  { id: "admin.removeMember", method: "DELETE", path: "/admin/workspaces/:workspaceId/members/:accountId", auth: "membership", minRole: "admin", surface: "admin" },
+  { id: "admin.createInvite", method: "POST", path: "/admin/workspaces/:workspaceId/invites", auth: "membership", minRole: "admin", surface: "admin" },
+  { id: "admin.listInvites", method: "GET", path: "/admin/workspaces/:workspaceId/invites", auth: "membership", minRole: "admin", surface: "admin" },
+  { id: "admin.revokeInvite", method: "DELETE", path: "/admin/workspaces/:workspaceId/invites/:inviteId", auth: "membership", minRole: "admin", surface: "admin" },
 ] as const;
 
 export function publicRouteIds(): string[] {

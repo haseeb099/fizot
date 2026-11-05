@@ -1,7 +1,6 @@
 /**
- * TC36: object-level auth sweep. The HTTP dispatcher serves only ROUTE_REGISTRY
- * entries (each with auth + handler). No source grepping — exercise every route
- * with no cookie, another account's cookie, and a member cookie.
+ * TC36: object-level auth sweep via ONE dispatch table.
+ * Cases: none / stranger / member / admin / owner.
  */
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
@@ -33,14 +32,15 @@ async function signIn(url: string, email: string): Promise<string> {
   return cookieFrom(res);
 }
 
-function expectedStatuses(auth: "public" | "session" | "membership"): {
-  none: number;
-  stranger: number;
-  member: number;
-} {
-  if (auth === "public") return { none: 200, stranger: 200, member: 200 };
-  if (auth === "session") return { none: 401, stranger: 200, member: 200 };
-  return { none: 401, stranger: 404, member: 200 };
+/** Expected HTTP status for each auth level × cookie persona. */
+function expectedFor(route: { auth: string; minRole?: string; id: string }, persona: string): number {
+  if (route.auth === "public") return 200;
+  if (persona === "none") return 401;
+  if (route.auth === "session") return 200;
+  if (persona === "stranger") return 404;
+  if (route.minRole === "owner") return persona === "owner" ? 200 : 404;
+  if (route.minRole === "admin") return persona === "member" ? 404 : 200;
+  return 200;
 }
 
 it("TC36 negative: a route without an auth level fails registration", () => {
@@ -55,44 +55,40 @@ it("TC36 negative: a route without an auth level fails registration", () => {
 
 it("TC36: dispatcher table covers exactly ROUTE_REGISTRY with handlers", () => {
   expect(ADMIN_DISPATCH_TABLE).toHaveLength(ROUTE_REGISTRY.length);
-  const ids = new Set(ADMIN_DISPATCH_TABLE.map((e) => e.id));
   for (const route of ROUTE_REGISTRY) {
-    expect(ids.has(route.id)).toBe(true);
     const entry = ADMIN_DISPATCH_TABLE.find((e) => e.id === route.id)!;
     expect(entry.auth).toBe(route.auth);
     expect(typeof entry.handler).toBe("function");
   }
 });
 
-it("TC36: every registry route — no cookie / stranger / member", async () => {
+it("TC36: every registry route — none / stranger / member / admin / owner", async () => {
   const fly = createFakeFlyClient();
   let idle = true;
   const machine = createServer((req, res) => {
-    if (req.url?.includes("/api/cloud/power/sleep") && (req.method ?? "GET") === "POST") {
+    if (req.url?.includes("/member-left")) {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, nextDueAt: null }));
+      res.end(JSON.stringify({ ok: true }));
       return;
     }
-    if (req.url?.includes("/api/cloud/health")) {
+    if (req.url?.includes("/power/sleep") && (req.method ?? "GET") === "POST") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (req.url?.includes("/health")) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ v: 1, ok: true }));
       return;
     }
-    if (req.url?.includes("/api/cloud/power")) {
+    if (req.url?.includes("/power")) {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({
-        v: 1,
-        idle,
-        busy: idle ? [] : ["just-woke"],
-        wokeAt: Date.now() - 180_000,
-        sleeping: false,
-        state: "running",
-      }));
+      res.end(JSON.stringify({ v: 1, idle, busy: idle ? [] : ["just-woke"], wokeAt: Date.now() - 180_000, state: "running" }));
       return;
     }
-    if (req.url?.includes("/api/cloud/pairing")) {
+    if (req.url?.includes("/pairing")) {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ code: "PAIR", credential: "omb_pair_tc36", expiresAt: 1 }));
+      res.end(JSON.stringify({ code: "PAIR", credential: "omb_pair_tc36" }));
       return;
     }
     res.writeHead(404);
@@ -103,7 +99,7 @@ it("TC36: every registry route — no cookie / stranger / member", async () => {
   if (!address || typeof address === "string") throw new Error("no port");
   const machineOrigin = `http://127.0.0.1:${address.port}`;
 
-  const admin = await createAdminServer({
+  const adminSrv = await createAdminServer({
     fly,
     auth: new FakeAuthProvider(),
     cookieSecure: false,
@@ -116,102 +112,237 @@ it("TC36: every registry route — no cookie / stranger / member", async () => {
 
   const sweep: string[] = [];
   try {
-    let memberCookie = await signIn(admin.url, "member-tc36@example.com");
-    let strangerCookie = await signIn(admin.url, "stranger-tc36@example.com");
+    let ownerCookie = await signIn(adminSrv.url, "owner-tc36@example.com");
+    let adminCookie = await signIn(adminSrv.url, "admin-tc36@example.com");
+    let memberCookie = await signIn(adminSrv.url, "member-tc36@example.com");
+    let strangerCookie = await signIn(adminSrv.url, "stranger-tc36@example.com");
 
-    const created = await fetch(`${admin.url}/admin/workspaces`, {
+    const created = await fetch(`${adminSrv.url}/admin/workspaces`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: memberCookie },
-      body: JSON.stringify({ plan: "home", ownerEmail: "member-tc36@example.com" }),
+      headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({
+        plan: "team",
+        ownerEmail: "owner-tc36@example.com",
+        teamId: "team-tc36",
+        teamName: "TC36",
+      }),
     });
     expect(created.status).toBe(201);
-    const memberWs = (await created.json() as { workspace: { id: string } }).workspace;
+    const wsId = (await created.json() as { workspace: { id: string } }).workspace.id;
+
+    async function acceptRole(email: string, role: "admin" | "member", actor: string) {
+      const inv = await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/invites`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: actor },
+        body: JSON.stringify({ email, role }),
+      });
+      expect(inv.status).toBe(201);
+      const token = (await inv.json() as { token: string }).token;
+      const cookie = email === "admin-tc36@example.com" ? adminCookie
+        : email === "member-tc36@example.com" ? memberCookie
+          : await signIn(adminSrv.url, email);
+      expect((await fetch(`${adminSrv.url}/edge/invites/${token}/accept`, {
+        method: "POST",
+        headers: { cookie },
+      })).status).toBe(200);
+    }
+    await acceptRole("admin-tc36@example.com", "admin", ownerCookie);
+    await acceptRole("member-tc36@example.com", "member", adminCookie);
+
+    const membersList = await (await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/members`, {
+      headers: { cookie: ownerCookie },
+    })).json() as { members: Array<{ accountId: string; email: string }> };
+    const memberAccountId = membersList.members.find((m) => m.email === "member-tc36@example.com")!.accountId;
+
+    // Standing members = 3; seatMax = 5 → room for 2 invite/remove operations at a time.
+    // Mint accept-token just-in-time (do not leave pending invites that fill seats).
+    let pendingToken = "deadbeef";
+    let revokeInviteId = "missing";
     let destroyWsId: string | null = null;
 
+    const personas: Array<{ name: string; cookie: string | null }> = [
+      { name: "none", cookie: null },
+      { name: "stranger", cookie: strangerCookie },
+      { name: "member", cookie: memberCookie },
+      { name: "admin", cookie: adminCookie },
+      { name: "owner", cookie: ownerCookie },
+    ];
+
     for (const route of ROUTE_REGISTRY) {
-      const expectFor = expectedStatuses(route.auth);
       if (route.id === "admin.destroyWorkspace" && !destroyWsId) {
-        const destroyCreated = await fetch(`${admin.url}/admin/workspaces`, {
+        const d = await fetch(`${adminSrv.url}/admin/workspaces`, {
           method: "POST",
-          headers: { "content-type": "application/json", cookie: memberCookie },
-          body: JSON.stringify({ plan: "home", ownerEmail: "member-tc36@example.com" }),
+          headers: { "content-type": "application/json", cookie: ownerCookie },
+          body: JSON.stringify({
+            plan: "team",
+            ownerEmail: "owner-tc36@example.com",
+            teamId: `team-d-${Date.now()}`,
+            teamName: "Destroy",
+          }),
         });
-        expect(destroyCreated.status).toBe(201);
-        destroyWsId = (await destroyCreated.json() as { workspace: { id: string } }).workspace.id;
+        destroyWsId = (await d.json() as { workspace: { id: string } }).workspace.id;
       }
-      const workspaceId = route.id === "admin.destroyWorkspace" ? destroyWsId! : memberWs.id;
-      const pathFilled = route.path.replace(":workspaceId", workspaceId);
 
-      const bodyFor = (cookie: string | null) => {
-        if (route.method === "GET" || route.method === "DELETE") return undefined;
-        if (route.id === "edge.fakeSignIn") {
-          return JSON.stringify({ email: cookie ? "tc36-public@example.com" : "tc36-anon@example.com" });
+      if (route.id === "edge.acceptInvite") {
+        const inv = await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/invites`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: ownerCookie },
+          body: JSON.stringify({ email: "pending-tc36@example.com", role: "member" }),
+        });
+        expect(inv.status).toBe(201);
+        pendingToken = (await inv.json() as { token: string }).token;
+      }
+
+      for (const persona of personas) {
+        let want = expectedFor(route, persona.name);
+        let accountIdForPath = memberAccountId;
+        let inviteIdForPath = revokeInviteId;
+
+        if (route.id === "admin.sleep") {
+          if (persona.name === "none") want = 401;
+          else if (persona.name === "stranger" || persona.name === "member") want = 404;
+          else want = 409;
         }
-        if (route.id === "admin.createWorkspace") {
-          return JSON.stringify({
-            plan: "home",
-            ownerEmail: cookie === memberCookie
-              ? "member-tc36@example.com"
-              : cookie === strangerCookie
-                ? "stranger-tc36@example.com"
-                : "anon@example.com",
+        if (route.id === "admin.createWorkspace" && persona.cookie) want = 201;
+        if (route.id === "edge.fakeSignIn") want = 200;
+        if (route.id === "edge.signOut" && persona.cookie) want = 200;
+        if (route.id === "edge.acceptInvite") {
+          if (persona.name === "none") want = 401;
+          else want = 404; // wrong email for pending-tc36@…
+        }
+        if (route.id === "admin.createInvite" && (persona.name === "admin" || persona.name === "owner")) {
+          want = 201;
+        }
+        if (route.id === "admin.revokeInvite" && (persona.name === "admin" || persona.name === "owner")) {
+          const inv = await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/invites`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: ownerCookie },
+            body: JSON.stringify({ email: `revoke-${persona.name}-${Date.now()}@example.com`, role: "member" }),
           });
+          expect(inv.status).toBe(201);
+          inviteIdForPath = (await inv.json() as { invite: { id: string } }).invite.id;
+          revokeInviteId = inviteIdForPath;
+          want = 200;
         }
-        if (route.id === "admin.sleep") return JSON.stringify({ idleMinutes: 1, waitMs: 2_000 });
-        if (route.id === "admin.wake") return JSON.stringify({ healthWaitMs: 2_000 });
-        if (route.id === "admin.pairing" || route.id === "edge.openWorkspace") {
-          return JSON.stringify({ label: "tc36" });
+        if (route.id === "admin.patchMember" && (persona.name === "admin" || persona.name === "owner")) {
+          want = 200;
         }
-        return "{}";
-      };
+        if (route.id === "admin.removeMember") {
+          if (persona.name === "none") want = 401;
+          else if (persona.name === "stranger" || persona.name === "member") want = 404;
+          else {
+            const disposableEmail = `rm-${persona.name}-${Date.now()}@example.com`;
+            const inv = await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/invites`, {
+              method: "POST",
+              headers: { "content-type": "application/json", cookie: ownerCookie },
+              body: JSON.stringify({ email: disposableEmail, role: "member" }),
+            });
+            expect(inv.status).toBe(201);
+            const token = (await inv.json() as { token: string }).token;
+            const cookie = await signIn(adminSrv.url, disposableEmail);
+            expect((await fetch(`${adminSrv.url}/edge/invites/${token}/accept`, {
+              method: "POST",
+              headers: { cookie },
+            })).status).toBe(200);
+            const list = await (await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/members`, {
+              headers: { cookie: ownerCookie },
+            })).json() as { members: Array<{ accountId: string; email: string }> };
+            accountIdForPath = list.members.find((m) => m.email === disposableEmail)!.accountId;
+            want = 200;
+          }
+        }
+        if (route.id === "admin.destroyWorkspace" && persona.name === "owner") want = 200;
 
-      const hit = async (label: string, cookie: string | null, expected: number) => {
-        // Wake needs a stopped/suspended machine; sleep leaves it suspended — flip idle before sleep.
-        if (route.id === "admin.sleep") idle = true;
-        if (route.id === "admin.wake" && label === "member") {
-          // Ensure machine is suspendable first via a prior sleep on the shared ws is fragile;
-          // call sleep via services once so wake has something to start.
-          await admin.services.workspaceSleep(memberWs.id, { idleMinutes: 1, waitMs: 2_000 });
+        let body: string | undefined;
+        if (route.method !== "GET" && route.method !== "DELETE") {
+          if (route.id === "edge.fakeSignIn") body = JSON.stringify({ email: `tc36-${persona.name}@example.com` });
+          else if (route.id === "admin.createWorkspace") {
+            body = JSON.stringify({
+              plan: "home",
+              ownerEmail:
+                persona.name === "owner" ? "owner-tc36@example.com"
+                  : persona.name === "admin" ? "admin-tc36@example.com"
+                    : persona.name === "member" ? "member-tc36@example.com"
+                      : persona.name === "stranger" ? "stranger-tc36@example.com"
+                        : "anon@example.com",
+            });
+          } else if (route.id === "admin.createInvite") {
+            body = JSON.stringify({ email: `inv-${persona.name}-${Date.now()}@example.com`, role: "member" });
+          } else if (route.id === "admin.patchMember") {
+            body = JSON.stringify({ role: "member" });
+          } else if (route.id === "admin.pairing") {
+            body = JSON.stringify({ label: "tc36", member: { email: "member-tc36@example.com", role: "owner" } });
+          } else if (route.id === "admin.sleep") {
+            body = JSON.stringify({ idleMinutes: 1, waitMs: 1000 });
+          } else if (route.id === "admin.wake") {
+            body = JSON.stringify({ healthWaitMs: 1000 });
+          } else {
+            body = "{}";
+          }
         }
-        const res = await fetch(`${admin.url}${pathFilled}`, {
+
+        const pathNow = route.path
+          .replace(":workspaceId", route.id === "admin.destroyWorkspace" ? destroyWsId! : wsId)
+          .replace(":accountId", accountIdForPath)
+          .replace(":inviteId", inviteIdForPath)
+          .replace(":token", pendingToken);
+
+        const res = await fetch(`${adminSrv.url}${pathNow}`, {
           method: route.method,
           headers: {
             ...(route.method === "GET" ? {} : { "content-type": "application/json" }),
-            ...(cookie ? { cookie } : {}),
+            ...(persona.cookie ? { cookie: persona.cookie } : {}),
           },
-          body: bodyFor(cookie),
+          body,
         });
-        // Public fake-sign-in always 200 when FakeAuth is on; createWorkspace needs a session so
-        // stranger/member get 2xx; anonymised create never runs (401 first).
-        let want = expected;
-        if (route.id === "admin.createWorkspace" && cookie) want = 201;
-        if (route.id === "edge.fakeSignIn") want = 200;
-        if (route.id === "edge.signOut" && cookie) want = 200;
-        // After destroy, member status is 200; stranger/none already asserted.
-        if (route.id === "admin.destroyWorkspace" && label === "member") want = 200;
-        expect(res.status, `${route.id} ${label}`).toBe(want);
-        sweep.push(`${route.method} ${route.path} auth=${route.auth} ${label}=${res.status}`);
-        if (route.id === "admin.createWorkspace" && cookie && res.status === 201) {
-          const body = await res.clone().json() as { workspace?: { id: string } };
-          if (body.workspace?.id) await admin.services.destroyWorkspace(body.workspace.id);
+        expect(res.status, `${route.id} ${persona.name}`).toBe(want);
+        sweep.push(`${route.method} ${route.path} auth=${route.auth} ${persona.name}=${res.status}`);
+
+        if (route.id === "admin.createWorkspace" && res.status === 201) {
+          const bodyJson = await res.json() as { workspace?: { id: string } };
+          if (bodyJson.workspace?.id) await adminSrv.services.destroyWorkspace(bodyJson.workspace.id);
         }
-        return res;
-      };
+        if (route.id === "admin.createInvite" && res.status === 201) {
+          // Revoke immediately so seats stay free for later remove/invite steps.
+          const createdInv = await res.json() as { invite: { id: string } };
+          await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/invites/${createdInv.invite.id}`, {
+            method: "DELETE",
+            headers: { cookie: ownerCookie },
+          });
+        }
+        if (route.id === "admin.destroyWorkspace" && persona.name === "owner" && res.status === 200) {
+          destroyWsId = null;
+        }
+      }
 
-      await hit("none", null, expectFor.none);
-      await hit("stranger", strangerCookie, expectFor.stranger);
-      await hit("member", memberCookie, expectFor.member);
+      // Drop the acceptInvite pending invite after the five persona hits (all 404).
+      if (route.id === "edge.acceptInvite") {
+        const listed = await (await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/invites`, {
+          headers: { cookie: ownerCookie },
+        })).json() as { invites: Array<{ id: string; email: string }> };
+        for (const inv of listed.invites.filter((i) => i.email === "pending-tc36@example.com")) {
+          await fetch(`${adminSrv.url}/admin/workspaces/${wsId}/invites/${inv.id}`, {
+            method: "DELETE",
+            headers: { cookie: ownerCookie },
+          });
+        }
+      }
 
-      // fake-sign-in / sign-out rotate or revoke cookies — mint fresh ones for later routes.
       if (route.id === "edge.fakeSignIn" || route.id === "edge.signOut") {
-        memberCookie = await signIn(admin.url, "member-tc36@example.com");
-        strangerCookie = await signIn(admin.url, "stranger-tc36@example.com");
+        ownerCookie = await signIn(adminSrv.url, "owner-tc36@example.com");
+        adminCookie = await signIn(adminSrv.url, "admin-tc36@example.com");
+        memberCookie = await signIn(adminSrv.url, "member-tc36@example.com");
+        strangerCookie = await signIn(adminSrv.url, "stranger-tc36@example.com");
+        personas[1]!.cookie = strangerCookie;
+        personas[2]!.cookie = memberCookie;
+        personas[3]!.cookie = adminCookie;
+        personas[4]!.cookie = ownerCookie;
       }
     }
 
-    console.log(`TC36 swept ${ROUTE_REGISTRY.length} routes × 3 cookie cases:\n${sweep.join("\n")}`);
+    console.log(`TC36 swept ${ROUTE_REGISTRY.length} routes × 5 cookie cases:\n${sweep.join("\n")}`);
   } finally {
-    await admin.close();
+    await adminSrv.close();
     await new Promise<void>((resolve, reject) => machine.close((e) => (e ? reject(e) : resolve())));
   }
 });

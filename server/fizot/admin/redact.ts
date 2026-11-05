@@ -6,6 +6,12 @@ const SECRET_KEYS = [
   "credential",
   "authorization",
   "x-omb-cloud-signature",
+  // Private-chat content must never appear in Admin/Edge logs (docs/team-cloud.md).
+  "privateChat",
+  "threadBody",
+  "messages",
+  "messageText",
+  "aboutMe",
 ];
 
 const SECRET_VALUE = /(?:omb_pair_|v1=)[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{43,}/g;

@@ -18,3 +18,21 @@ it("never logs bootstrap secrets or pairing credentials", () => {
   expect((redacted.nested as { token: string }).token).toBe("[redacted]");
   expect(safeLogLine("admin", { bootstrapSecret: secret })).not.toContain(secret);
 });
+
+it("never logs private-chat content fields", () => {
+  const redacted = redactForLog({
+    privateChat: "Ada's interview notes",
+    threadBody: "salary expectations",
+    messages: [{ text: "keep this private" }],
+    messageText: "secret",
+    aboutMe: "personal bio",
+    ok: true,
+  }) as Record<string, unknown>;
+  const dump = JSON.stringify(redacted);
+  expect(dump).not.toContain("interview");
+  expect(dump).not.toContain("salary");
+  expect(dump).not.toContain("keep this private");
+  expect(redacted.privateChat).toBe("[redacted]");
+  expect(redacted.messages).toBe("[redacted]");
+  expect(redacted.ok).toBe(true);
+});

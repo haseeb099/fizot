@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-44 Team roles, invites and J10 privacy (P4.1 part 2)
+
+- Why we changed it: A Team workspace needs Owner/Admin/Member with invites and seat limits, and a member's private chat must be invisible to every other member and to Admin/Owner — proven before Team UI.
+- How it works: Membership roles via `authorizeWorkspaceAccess(minRole)`; hashed single-use 7-day invites (Admin invites members; only Owner invites admins; seatMax from `plans.ts`); remove member revokes sessions and signs `POST /api/cloud/team/member-left` (Apache path already exists — no inventing machine code in `enterprise/`); Edge open carries the membership claim (client-supplied role elevation ignored); Admin returns member metadata only; redaction covers private-chat keys; TC36 sweeps none/stranger/member/admin/owner; J10 daily gate on fakes; `fly-staging-roundtrip` `mode=team` for real Fly. TC28/TC59 stay under P4.7; Stripe seats under P4.4.
+- Why this was necessary: P4.1 / FZ-24 part 2 (Notion FZ-24).
+- Impact: No Fly spend on the daily gate. Manual Fly team mode costs one staging machine; auto-destroy; remainingCount must be 0. AD-E (J10) stays planned until a green Fly team run.
+- Rollback? Revert the PR.
+- Files / Patch IDs: PATCH-35. https://app.notion.com/p/40fdd43e0a9d8139986cd3e00411654b
+- Related tasks: FZ-24 (P4.1). Patch: https://app.notion.com/p/40fdd43e0a9d8139937df88828b384cd
+
 ## CL-43 Accounts, sign-in and tenant routing (P4.1 part 1)
 
 - Why we changed it: A signed-in user must reach only their own workspaces. Cross-tenant leaks end the business, so isolation is built and proven before Team UI / invites / private chats.

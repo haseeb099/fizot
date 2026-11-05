@@ -334,9 +334,17 @@ describe("CI concurrency", () => {
         inputs: {
           fly_org: { description: expect.any(String), required: true, type: "string" },
           fly_region: { description: expect.any(String), required: false, default: "lhr", type: "string" },
+          mode: {
+            description: expect.any(String),
+            required: false,
+            default: "home",
+            type: "choice",
+            options: ["home", "team"],
+          },
         },
       },
     });
+    expect(roundtrip.jobs["fly-staging-roundtrip"].env.FIZOT_ROUNDTRIP_MODE).toBe("${{ inputs.mode }}");
     expect(Object.keys(workflow.jobs)).not.toContain("fly-staging-roundtrip");
     const cleanup = parse(readFileSync(new URL("../.github/workflows/fly-staging-cleanup.yml", import.meta.url), "utf8"));
     expect(cleanup.on).toHaveProperty("workflow_dispatch");
