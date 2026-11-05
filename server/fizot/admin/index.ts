@@ -1,6 +1,11 @@
 import { createServer, type Server } from "node:http";
 import { FakeAuthProvider, UnconfiguredAuthProvider, type AuthProvider } from "./auth.ts";
-import { createFakeFlyClient, createFlyMachinesClient, type FlyClient } from "./fly.ts";
+import {
+  createFakeFlyClient,
+  createFlyMachinesClient,
+  resolveFlyOrg,
+  type FlyClient,
+} from "./fly.ts";
 import { createMemoryNonceStore, type NonceStore } from "./nonce-store.ts";
 import {
   createMemoryInviteStore,
@@ -44,6 +49,8 @@ export {
   MAX_STAGING_MACHINES,
   MAX_PROBE_MACHINE_SECONDS,
   FLY_STAGING_APP_PREFIX,
+  DEFAULT_FLY_ORG,
+  resolveFlyOrg,
   describeFetchError,
 } from "./public.ts";
 
@@ -116,7 +123,7 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   const allowFakeSignIn = options.allowFakeSignIn ?? resolved.allowFakeSignIn;
   const cookieSecure = options.cookieSecure ?? true;
 
-  const flyOrg = options.flyOrg ?? process.env.FLY_ORG ?? "fizot-staging";
+  const flyOrg = resolveFlyOrg(options.flyOrg);
   const token = process.env.FLY_API_TOKEN?.trim();
   const fly = options.fly
     ?? (token

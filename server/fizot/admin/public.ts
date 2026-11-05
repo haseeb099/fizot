@@ -4,6 +4,8 @@ export {
   FLY_HOME_GUEST,
   FLY_HOME_VOLUME_GB,
   FLY_STAGING_APP_PREFIX,
+  DEFAULT_FLY_ORG,
+  resolveFlyOrg,
 } from "./fly.ts";
 export { createMemoryNonceStore } from "./nonce-store.ts";
 export { createMemoryWorkspaceStore, createPostgresWorkspaceStore } from "./store.ts";
