@@ -172,11 +172,12 @@ export function createMemoryWorkspaceStore(): WorkspaceStore & {
     },
     async upsertDeletionReceipt(receipt) {
       const prev = receipts.get(receipt.workspaceId);
+      // Lease columns are owned by tryAcquire/release — never clobber from status upserts.
       const next: DeletionReceipt = {
         ...receipt,
         appName: receipt.appName ?? prev?.appName ?? null,
-        leaseOwner: receipt.leaseOwner !== undefined ? receipt.leaseOwner : (prev?.leaseOwner ?? null),
-        leaseUntil: receipt.leaseUntil !== undefined ? receipt.leaseUntil : (prev?.leaseUntil ?? null),
+        leaseOwner: receipt.status === "complete" ? null : (prev?.leaseOwner ?? null),
+        leaseUntil: receipt.status === "complete" ? null : (prev?.leaseUntil ?? null),
       };
       receipts.set(receipt.workspaceId, next);
       return receipts.get(receipt.workspaceId)!;
@@ -423,21 +424,23 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
       await pool.query(`DELETE FROM fizot_admin_workspaces WHERE id = $1`, [id]);
     },
     async upsertDeletionReceipt(receipt) {
+      // Lease columns stay under tryAcquire/release; complete clears them.
       await pool.query(
         `INSERT INTO fizot_admin_deletion_receipts
           (workspace_id, workspace_id_hash, requested_at, completed_at, failed_at, steps_done, status, last_error, alerted_at_12h, last_alert_at, app_name, lease_owner, lease_until)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,NULL,NULL)
          ON CONFLICT (workspace_id) DO UPDATE SET
            completed_at=EXCLUDED.completed_at, failed_at=EXCLUDED.failed_at, steps_done=EXCLUDED.steps_done,
            status=EXCLUDED.status, last_error=EXCLUDED.last_error, alerted_at_12h=EXCLUDED.alerted_at_12h,
            last_alert_at=EXCLUDED.last_alert_at,
            app_name=COALESCE(EXCLUDED.app_name, fizot_admin_deletion_receipts.app_name),
-           lease_owner=EXCLUDED.lease_owner, lease_until=EXCLUDED.lease_until,
-           workspace_id_hash=EXCLUDED.workspace_id_hash`,
+           workspace_id_hash=EXCLUDED.workspace_id_hash,
+           lease_owner=CASE WHEN EXCLUDED.status = 'complete' THEN NULL ELSE fizot_admin_deletion_receipts.lease_owner END,
+           lease_until=CASE WHEN EXCLUDED.status = 'complete' THEN NULL ELSE fizot_admin_deletion_receipts.lease_until END`,
         [
           receipt.workspaceId, receipt.workspaceIdHash, receipt.requestedAt, receipt.completedAt,
           receipt.failedAt, JSON.stringify(receipt.stepsDone), receipt.status, receipt.lastError,
-          receipt.alertedAt12h, receipt.lastAlertAt, receipt.appName, receipt.leaseOwner, receipt.leaseUntil,
+          receipt.alertedAt12h, receipt.lastAlertAt, receipt.appName,
         ],
       );
       return receipt;
