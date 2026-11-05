@@ -277,10 +277,11 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
     };
     await store.upsertDeletionReceipt(receipt);
 
-    let attempts = 0;
     for (const step of DELETION_STEPS) {
       if (receipt.stepsDone.includes(step)) continue;
-      while (attempts < maxAttempts) {
+      let attempts = 0;
+      let stepDone = false;
+      while (attempts < maxAttempts && !stepDone) {
         attempts++;
         try {
           await runStep(appName, step, workspaceId);
@@ -290,7 +291,7 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
             lastError: null,
           };
           await store.upsertDeletionReceipt(receipt);
-          break;
+          stepDone = true;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           receipt = { ...receipt, lastError: message };
