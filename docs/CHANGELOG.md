@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-47 AI proxy credit ledger, tiers and metering (P4.3 part 1)
+
+- Why we changed it: Fizot pays the inference bill. A hard cap and an append-only ledger are what stop one workspace from creating an unbounded cost.
+- How it works: Spike B's token scheme, redaction and mock provider stay. Postgres `credit_accounts` plus an append-only `credit_ledger` (grant, usage, refund, adjust) in integer micro-GBP; balance is the sum of the ledger. Tiers Fast, Balanced and Best map in `server/fizot/proxy/pricing.ts` to a provider model and a placeholder price with markup. The proxy reserves the worst case, returns 402 when credit is short, then settles the provider usage (or the reserve if usage is missing). A repeated `request_id` does not charge twice. 80% of included credit alerts once per month through the existing webhook; 100% plus top-up is a hard 402. `FIZOT_PROXY_DISABLED=1` and `POST /admin/proxy/kill` stop provider traffic. Provider keys stay in the proxy environment. `scripts/fizot/ledger-reconcile.mjs` fails when fixture drift is over 1%. TC55 and TC68 stay planned.
+- Why it is necessary: P4.3 / FZ-26 part 1. Bring-your-own-key, Stripe and sandbox egress are later parts.
+- Impact: No real provider calls on the daily gate (mock only). Placeholder prices are not verified against provider price pages. Postgres checks run on `admin-postgres.yml`.
+- Rollback? Revert the PR.
+- Files / Patch IDs: PATCH-38. https://app.notion.com/p/40fdd43e0a9d818f9263d57ba9e05ac4
+- Related tasks: FZ-26 (P4.3). Patch: https://app.notion.com/p/40fdd43e0a9d81f49e60cc3fde6fb80f
+
 ## CL-46 Workspace provisioning, deletion job and webhooks (P4.2)
 
 - Why we changed it: UK GDPR erasure depends on fail-loud, idempotent, provable workspace deletion. A silent failure is a legal breach.
