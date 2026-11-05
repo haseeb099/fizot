@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   FakeAuthProvider,
@@ -10,6 +11,12 @@ import {
 } from "./auth.ts";
 import { authorizeWorkspaceAccess, type AuthorizeOk } from "./authorize.ts";
 import {
+  acceptWorkspaceInvite,
+  createWorkspaceInvite,
+  type InviteStore,
+} from "./invites.ts";
+import { mayChangeMemberRole, mayRemoveMember } from "./roles.ts";
+import {
   buildDispatchTable,
   matchDispatchEntry,
   ROUTE_REGISTRY,
@@ -17,9 +24,8 @@ import {
 } from "./route-registry.ts";
 import { safeLogLine } from "./redact.ts";
 import type { PlanId } from "./plans.ts";
-import type { SessionContext, TenantStore } from "./tenant.ts";
+import type { MembershipRole, SessionContext, TenantStore } from "./tenant.ts";
 import type { AdminServices } from "./workspaces.ts";
-import type { TeamRole } from "../../cloud-team.ts";
 import { openWorkspaceSession } from "../edge/routing.ts";
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -47,6 +53,16 @@ function statusOf(error: unknown): number {
   return 500;
 }
 
+/** Member metadata only — never private-chat content. */
+function memberPublic(row: { account: { id: string; email: string }; membership: { role: MembershipRole; joinedAt: string } }) {
+  return {
+    accountId: row.account.id,
+    email: row.account.email,
+    role: row.membership.role,
+    joinedAt: row.membership.joinedAt,
+  };
+}
+
 export type RouteContext = {
   req: IncomingMessage;
   res: ServerResponse;
@@ -56,6 +72,7 @@ export type RouteContext = {
   authz: AuthorizeOk | null;
   services: AdminServices;
   tenant: TenantStore;
+  invites: InviteStore;
   auth: AuthProvider;
   cookieSecure: boolean;
   allowFakeSignIn: boolean;
@@ -64,10 +81,9 @@ export type RouteContext = {
 export type AdminHandlerDeps = {
   services: AdminServices;
   tenant: TenantStore;
+  invites: InviteStore;
   auth: AuthProvider;
-  /** When false, skip Secure on Set-Cookie (loopback tests). Default true. */
   cookieSecure?: boolean;
-  /** Allow POST /edge/auth/fake-sign-in. */
   allowFakeSignIn?: boolean;
 };
 
@@ -113,18 +129,38 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       });
     },
     async "edge.openWorkspace"(ctx) {
-      const workspaceId = ctx.authz!.workspace.id;
+      const body = await readJson(ctx.req).catch(() => ({})) as { label?: string; role?: string };
       const result = await openWorkspaceSession({
         tenant: ctx.tenant,
         session: ctx.authz!.session,
-        workspaceId,
+        workspaceId: ctx.authz!.workspace.id,
         services: ctx.services,
+        label: body.label,
+        requestedRole: body.role,
       });
       if (!result.ok) {
         send(ctx.res, result.status, { error: result.error });
         return;
       }
       send(ctx.res, 200, result);
+    },
+    async "edge.acceptInvite"(ctx) {
+      const token = ctx.params.token;
+      if (!token) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const result = await acceptWorkspaceInvite({
+        tenant: ctx.tenant,
+        invites: ctx.invites,
+        token,
+        sessionEmail: ctx.session!.account.email,
+      });
+      if (!result.ok) {
+        send(ctx.res, result.status, { error: result.error });
+        return;
+      }
+      send(ctx.res, 200, { ok: true, workspaceId: result.workspaceId, role: result.role });
     },
     async "admin.createWorkspace"(ctx) {
       const body = await readJson(ctx.req) as {
@@ -145,8 +181,8 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       const record = await ctx.services.createWorkspace({
         plan: body.plan as PlanId,
         ownerEmail,
-        teamId: body.teamId,
-        teamName: body.teamName,
+        teamId: body.teamId ?? (body.plan === "team" ? `team-${randomUUID()}` : undefined),
+        teamName: body.teamName ?? (body.plan === "team" ? "Team" : undefined),
       });
       await ctx.tenant.upsertMembership(ctx.session!.account.id, record.id, "owner");
       const { bootstrapSecret: _secret, ...publicRecord } = record;
@@ -167,8 +203,7 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       });
     },
     async "admin.destroyWorkspace"(ctx) {
-      const workspaceId = ctx.authz!.workspace.id;
-      await ctx.services.destroyWorkspace(workspaceId);
+      await ctx.services.destroyWorkspace(ctx.authz!.workspace.id);
       send(ctx.res, 200, { ok: true, destroyed: true, appName: ctx.authz!.workspace.appName });
     },
     async "admin.health"(ctx) {
@@ -195,26 +230,168 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       const body = await readJson(ctx.req) as {
         label?: string;
         ttlSeconds?: number;
-        member?: { email: string; role: TeamRole };
+        member?: { email: string; role?: string };
       };
-      const result = await ctx.services.workspacePairing(ctx.authz!.workspace.id, body);
+      const workspace = ctx.authz!.workspace;
+      let member: { email: string; role: MembershipRole } | undefined;
+      if (workspace.role === "team") {
+        const email = body.member?.email?.trim().toLowerCase();
+        if (!email) {
+          send(ctx.res, 400, { error: "member_required" });
+          return;
+        }
+        const account = await ctx.tenant.getAccountByEmail(email);
+        if (!account) {
+          send(ctx.res, 404, { error: "not_found" });
+          return;
+        }
+        const membership = await ctx.tenant.getMembership(account.id, workspace.id);
+        if (!membership) {
+          send(ctx.res, 404, { error: "not_found" });
+          return;
+        }
+        // Membership role from the store — ignore any client-supplied elevation.
+        member = { email: account.email, role: membership.role };
+      }
+      const result = await ctx.services.workspacePairing(workspace.id, {
+        label: body.label,
+        ttlSeconds: body.ttlSeconds,
+        member,
+      });
       send(ctx.res, result.status === 200 ? 200 : result.status, result.body);
+    },
+    async "admin.listMembers"(ctx) {
+      const rows = await ctx.tenant.listMembers(ctx.authz!.workspace.id);
+      send(ctx.res, 200, { ok: true, members: rows.map(memberPublic) });
+    },
+    async "admin.patchMember"(ctx) {
+      const accountId = ctx.params.accountId;
+      const body = await readJson(ctx.req) as { role?: string };
+      const nextRole = body.role as MembershipRole;
+      const target = (await ctx.tenant.listMembers(ctx.authz!.workspace.id)).find((m) => m.account.id === accountId);
+      if (!target) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const decision = mayChangeMemberRole({
+        actorRole: ctx.authz!.membership.role,
+        targetRole: target.membership.role,
+        nextRole,
+        targetIsSelf: accountId === ctx.authz!.account.id,
+      });
+      if (!decision.ok) {
+        send(ctx.res, decision.error === "forbidden" || decision.error === "owner_locked" ? 404 : 404, { error: "not_found" });
+        return;
+      }
+      if (nextRole === "owner") {
+        // Transfer: promote target, demote current owner to admin.
+        await ctx.tenant.upsertMembership(accountId, ctx.authz!.workspace.id, "owner");
+        if (accountId !== ctx.authz!.account.id) {
+          await ctx.tenant.upsertMembership(ctx.authz!.account.id, ctx.authz!.workspace.id, "admin");
+        }
+      } else {
+        await ctx.tenant.upsertMembership(accountId, ctx.authz!.workspace.id, nextRole);
+      }
+      const updated = (await ctx.tenant.listMembers(ctx.authz!.workspace.id)).find((m) => m.account.id === accountId)!;
+      send(ctx.res, 200, { ok: true, member: memberPublic(updated) });
+    },
+    async "admin.removeMember"(ctx) {
+      const accountId = ctx.params.accountId;
+      const target = (await ctx.tenant.listMembers(ctx.authz!.workspace.id)).find((m) => m.account.id === accountId);
+      if (!target) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const decision = mayRemoveMember({
+        actorRole: ctx.authz!.membership.role,
+        targetRole: target.membership.role,
+        targetIsSelf: accountId === ctx.authz!.account.id,
+      });
+      if (!decision.ok) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const email = target.account.email;
+      await ctx.tenant.deleteMembership(accountId, ctx.authz!.workspace.id);
+      const revoked = await ctx.tenant.revokeAllSessionsForAccount(accountId);
+      let machine: { status: number; body: unknown } | null = null;
+      if (ctx.authz!.workspace.role === "team") {
+        machine = await ctx.services.workspaceMemberLeft(ctx.authz!.workspace.id, email);
+      }
+      send(ctx.res, 200, {
+        ok: true,
+        removed: true,
+        accountId,
+        sessionsRevoked: revoked,
+        ...(machine ? { memberLeft: machine.body } : {}),
+      });
+    },
+    async "admin.createInvite"(ctx) {
+      const body = await readJson(ctx.req) as { email?: string; role?: string };
+      const role = body.role === "admin" ? "admin" : body.role === "member" ? "member" : null;
+      if (!role || !body.email) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const plan = ctx.authz!.workspace.plan as PlanId;
+      const result = await createWorkspaceInvite({
+        tenant: ctx.tenant,
+        invites: ctx.invites,
+        workspaceId: ctx.authz!.workspace.id,
+        plan,
+        actorAccountId: ctx.authz!.account.id,
+        actorRole: ctx.authz!.membership.role,
+        email: body.email,
+        role,
+      });
+      if (!result.ok) {
+        send(ctx.res, result.status, { error: result.error, ...(result.code ? { code: result.code } : {}) });
+        return;
+      }
+      send(ctx.res, 201, {
+        ok: true,
+        invite: {
+          id: result.invite.id,
+          email: result.invite.email,
+          role: result.invite.role,
+          expiresAt: result.invite.expiresAt,
+        },
+        token: result.token,
+      });
+    },
+    async "admin.listInvites"(ctx) {
+      const rows = await ctx.invites.listInvites(ctx.authz!.workspace.id);
+      send(ctx.res, 200, {
+        ok: true,
+        invites: rows.map((i) => ({
+          id: i.id,
+          email: i.email,
+          role: i.role,
+          expiresAt: i.expiresAt,
+          createdAt: i.createdAt,
+        })),
+      });
+    },
+    async "admin.revokeInvite"(ctx) {
+      const inviteId = ctx.params.inviteId;
+      const rows = await ctx.invites.listInvites(ctx.authz!.workspace.id);
+      if (!rows.some((i) => i.id === inviteId)) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      await ctx.invites.revokeInvite(inviteId!);
+      send(ctx.res, 200, { ok: true, revoked: true });
     },
   };
 }
 
-/** Single dispatcher table: ROUTE_REGISTRY × handlers. Built once per process. */
 export const ADMIN_DISPATCH_TABLE: DispatchEntry[] = buildDispatchTable(
   ROUTE_REGISTRY,
   buildHandlers() as Record<string, (ctx: unknown) => Promise<void>>,
 );
 
-/**
- * ONE HTTP dispatcher: match ROUTE_REGISTRY only, enforce auth from the entry,
- * then call that entry's handler. No route can be served without a registry row.
- */
 export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const { services, tenant, auth } = deps;
+  const { services, tenant, invites, auth } = deps;
   const cookieSecure = deps.cookieSecure !== false;
   const allowFakeSignIn = deps.allowFakeSignIn ?? auth instanceof FakeAuthProvider;
 
@@ -266,6 +443,7 @@ export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessag
         authz,
         services,
         tenant,
+        invites,
         auth,
         cookieSecure,
         allowFakeSignIn,

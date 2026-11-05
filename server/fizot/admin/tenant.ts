@@ -23,6 +23,7 @@ export type MembershipRecord = {
   accountId: string;
   workspaceId: string;
   role: MembershipRole;
+  joinedAt: string;
 };
 
 export type SessionRecord = {
@@ -63,6 +64,10 @@ export interface TenantStore {
   /** Workspace only when the account is a member — JOIN in one query. */
   getWorkspaceForMember(accountId: string, workspaceId: string): Promise<{ workspace: WorkspaceRecord; membership: MembershipRecord } | null>;
   listWorkspacesForAccount(accountId: string): Promise<Array<{ workspace: WorkspaceRecord; membership: MembershipRecord }>>;
+  /** Members of a workspace (metadata only: account + role + joinedAt). */
+  listMembers(workspaceId: string): Promise<Array<{ account: AccountRecord; membership: MembershipRecord }>>;
+  deleteMembership(accountId: string, workspaceId: string): Promise<void>;
+  revokeAllSessionsForAccount(accountId: string): Promise<number>;
   createSession(accountId: string, opts?: { ttlMs?: number; rotatedFrom?: string | null }): Promise<{ session: SessionRecord; token: string }>;
   resolveSession(token: string): Promise<SessionContext | null>;
   revokeSession(sessionId: string): Promise<void>;
@@ -108,12 +113,40 @@ export function createMemoryTenantStore(workspaces: WorkspaceStore): TenantStore
       return (await this.getAccountByEmail(email)) ?? this.createAccount(email);
     },
     async upsertMembership(accountId, workspaceId, role) {
-      const record: MembershipRecord = { accountId, workspaceId, role };
+      const existing = memberships.get(memKey(accountId, workspaceId));
+      const record: MembershipRecord = {
+        accountId,
+        workspaceId,
+        role,
+        joinedAt: existing?.joinedAt ?? new Date().toISOString(),
+      };
       memberships.set(memKey(accountId, workspaceId), record);
       return record;
     },
     async getMembership(accountId, workspaceId) {
       return memberships.get(memKey(accountId, workspaceId)) ?? null;
+    },
+    async listMembers(workspaceId) {
+      const out: Array<{ account: AccountRecord; membership: MembershipRecord }> = [];
+      for (const membership of memberships.values()) {
+        if (membership.workspaceId !== workspaceId) continue;
+        const account = accounts.get(membership.accountId);
+        if (account) out.push({ account, membership });
+      }
+      return out;
+    },
+    async deleteMembership(accountId, workspaceId) {
+      memberships.delete(memKey(accountId, workspaceId));
+    },
+    async revokeAllSessionsForAccount(accountId) {
+      let n = 0;
+      for (const session of sessions.values()) {
+        if (session.accountId !== accountId || session.revokedAt) continue;
+        sessionsByHash.delete(session.tokenHash);
+        sessions.set(session.id, { ...session, revokedAt: new Date().toISOString() });
+        n++;
+      }
+      return n;
     },
     async getWorkspaceForMember(accountId, workspaceId) {
       const membership = memberships.get(memKey(accountId, workspaceId));
@@ -193,8 +226,10 @@ export async function createPostgresTenantStore(
       account_id TEXT NOT NULL REFERENCES fizot_admin_accounts(id) ON DELETE CASCADE,
       workspace_id TEXT NOT NULL REFERENCES fizot_admin_workspaces(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
+      joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (account_id, workspace_id)
     );
+    ALTER TABLE fizot_admin_memberships ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     CREATE TABLE IF NOT EXISTS fizot_admin_sessions (
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL REFERENCES fizot_admin_accounts(id) ON DELETE CASCADE,
@@ -262,27 +297,39 @@ export async function createPostgresTenantStore(
       return (await store.getAccountByEmail(email)) ?? store.createAccount(email);
     },
     async upsertMembership(accountId, workspaceId, role) {
-      await pool.query(
-        `INSERT INTO fizot_admin_memberships (account_id, workspace_id, role)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (account_id, workspace_id) DO UPDATE SET role = EXCLUDED.role`,
-        [accountId, workspaceId, role],
+      const joinedAt = new Date().toISOString();
+      const result = await pool.query(
+        `INSERT INTO fizot_admin_memberships (account_id, workspace_id, role, joined_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (account_id, workspace_id) DO UPDATE SET role = EXCLUDED.role
+         RETURNING joined_at`,
+        [accountId, workspaceId, role, joinedAt],
       );
-      return { accountId, workspaceId, role };
+      return {
+        accountId,
+        workspaceId,
+        role,
+        joinedAt: new Date(String(result.rows[0]?.joined_at ?? joinedAt)).toISOString(),
+      };
     },
     async getMembership(accountId, workspaceId) {
       const result = await pool.query(
-        `SELECT account_id, workspace_id, role FROM fizot_admin_memberships
+        `SELECT account_id, workspace_id, role, joined_at FROM fizot_admin_memberships
          WHERE account_id = $1 AND workspace_id = $2`,
         [accountId, workspaceId],
       );
       const row = result.rows[0];
       if (!row) return null;
-      return { accountId: String(row.account_id), workspaceId: String(row.workspace_id), role: row.role as MembershipRole };
+      return {
+        accountId: String(row.account_id),
+        workspaceId: String(row.workspace_id),
+        role: row.role as MembershipRole,
+        joinedAt: new Date(String(row.joined_at)).toISOString(),
+      };
     },
     async getWorkspaceForMember(accountId, workspaceId) {
       const result = await pool.query(
-        `SELECT w.*, m.role AS membership_role
+        `SELECT w.*, m.role AS membership_role, m.joined_at AS membership_joined_at
          FROM fizot_admin_workspaces w
          INNER JOIN fizot_admin_memberships m
            ON m.workspace_id = w.id AND m.account_id = $1
@@ -293,12 +340,17 @@ export async function createPostgresTenantStore(
       if (!row) return null;
       return {
         workspace: toWorkspace(row),
-        membership: { accountId, workspaceId, role: row.membership_role as MembershipRole },
+        membership: {
+          accountId,
+          workspaceId,
+          role: row.membership_role as MembershipRole,
+          joinedAt: new Date(String(row.membership_joined_at)).toISOString(),
+        },
       };
     },
     async listWorkspacesForAccount(accountId) {
       const result = await pool.query(
-        `SELECT w.*, m.role AS membership_role
+        `SELECT w.*, m.role AS membership_role, m.joined_at AS membership_joined_at
          FROM fizot_admin_workspaces w
          INNER JOIN fizot_admin_memberships m
            ON m.workspace_id = w.id AND m.account_id = $1
@@ -311,8 +363,42 @@ export async function createPostgresTenantStore(
           accountId,
           workspaceId: String(row.id),
           role: row.membership_role as MembershipRole,
+          joinedAt: new Date(String(row.membership_joined_at)).toISOString(),
         },
       }));
+    },
+    async listMembers(workspaceId) {
+      const result = await pool.query(
+        `SELECT a.*, m.role AS membership_role, m.joined_at AS membership_joined_at, m.workspace_id
+         FROM fizot_admin_memberships m
+         INNER JOIN fizot_admin_accounts a ON a.id = m.account_id
+         WHERE m.workspace_id = $1
+         ORDER BY m.joined_at ASC`,
+        [workspaceId],
+      );
+      return result.rows.map((row: Record<string, unknown>) => ({
+        account: toAccount(row),
+        membership: {
+          accountId: String(row.id),
+          workspaceId: String(row.workspace_id),
+          role: row.membership_role as MembershipRole,
+          joinedAt: new Date(String(row.membership_joined_at)).toISOString(),
+        },
+      }));
+    },
+    async deleteMembership(accountId, workspaceId) {
+      await pool.query(
+        `DELETE FROM fizot_admin_memberships WHERE account_id = $1 AND workspace_id = $2`,
+        [accountId, workspaceId],
+      );
+    },
+    async revokeAllSessionsForAccount(accountId) {
+      const result = await pool.query(
+        `UPDATE fizot_admin_sessions SET revoked_at = NOW()
+         WHERE account_id = $1 AND revoked_at IS NULL`,
+        [accountId],
+      );
+      return result.rowCount ?? 0;
     },
     async createSession(accountId, opts) {
       const token = mintSessionToken();

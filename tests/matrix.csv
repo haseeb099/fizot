@@ -14,9 +14,9 @@ SB-E,Spike B,e2e,A bot told to find the secrets fails in a real browser chat,non
 CS-U,Cost sheet,unit,"The price formula reproduces the 25 GBP case: 20.83 GBP before VAT allows about 15.40 dollars of monthly cost",none,"G2, G3",planned,S2.10
 CS-I,Cost sheet,integration,The sheet reads measured Fly staging usage after Gate 0b,none,"G0b, G2, G3",implemented,S2.10
 CS-E,Cost sheet,e2e,A J4 run on staging feeds measured cost into the sheet,J4,"G2, G3",planned,S2.10
-AD-U,Fizot Admin,unit,"Plan and flag rules, tenant lookup, session and role rules, pairing signature KAT, TC36 route auth sweep, TC27 two-tenant isolation on fakes",TC27,G4,implemented,P4.1
-AD-I,Fizot Admin,integration,"Tenant routing on a real database (admin-postgres.yml, manual); recorded pairing request replayed against each new upstream image; Fly staging create and delete, with everything gone inside 24 hours",TC36,G4,pass,S2.11
-AD-E,Fizot Admin,e2e,"J1, J2, J8, J10","J1; J2; J8; J10",G4,planned,S2.11
+AD-U,Fizot Admin,unit,"Plan and flag rules, tenant lookup, session and role rules, invites seat/token rules, J10 privacy on fakes, pairing signature KAT, TC36 route auth sweep (none/stranger/member/admin/owner), TC27 two-tenant isolation on fakes","TC27; TC36; J10",G4,implemented,P4.1
+AD-I,Fizot Admin,integration,"Tenant routing + roles/invites on real Postgres (admin-postgres.yml, manual); Fly staging create and delete, with everything gone inside 24 hours",TC36,G4,pass,P4.1
+AD-E,Fizot Admin,e2e,"J10 Team private-chat isolation on real Fly (fly-staging-roundtrip mode=team, run 41945112080); J1 J2 J8 remain planned",J10,G4,implemented,P4.1
 SW-U,Sleep and wake,unit,Idle timer and wake time,none,G4,planned,P4.5
 SW-I,Sleep and wake,integration,Ready within 60 seconds; schedules wake the instance; each event delivered once,TC56,G4,planned,P4.5
 SW-E,Sleep and wake,e2e,A chat after idle sleep (add this step to J2),J2,G4,planned,P4.5

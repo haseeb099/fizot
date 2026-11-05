@@ -9,8 +9,18 @@ export { createMemoryNonceStore } from "./nonce-store.ts";
 export { createMemoryWorkspaceStore, createPostgresWorkspaceStore } from "./store.ts";
 export { createAdminServices, describeFetchError } from "./workspaces.ts";
 export { adminRequestSignature, signAdminRequest, verifyAdminRequest, ADMIN_SIGN_SKEW_S, ADMIN_NONCE_TTL_MS, mintBootstrapSecret, mintNonce, bodyHash } from "./signer.ts";
-export { planFlags, assertPlanAllows } from "./plans.ts";
+export { planFlags, assertPlanAllows, seatMaxForPlan } from "./plans.ts";
 export { redactForLog, safeLogLine } from "./redact.ts";
+export { mayChangeMemberRole, mayRemoveMember, mayInviteRole } from "./roles.ts";
+export {
+  createMemoryInviteStore,
+  createPostgresInviteStore,
+  createWorkspaceInvite,
+  acceptWorkspaceInvite,
+  hashInviteToken,
+  mintInviteToken,
+  INVITE_TTL_MS,
+} from "./invites.ts";
 export {
   projectDailyCost,
   formatCostProjection,

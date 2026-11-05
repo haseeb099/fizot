@@ -1,10 +1,10 @@
-# Fizot Edge — auth and tenant routing (P4.1 part 1)
+# Fizot Edge — auth, tenant routing, Team roles (P4.1)
 
 Clean-room from `docs/cloud-pro.md`, `docs/team-cloud.md`, and Apache
 `server/cloud-home.ts` / `server/cloud-team.ts`. No `enterprise/` imports.
 
 Code: `server/fizot/edge/` (routing) and `server/fizot/admin/` (accounts,
-memberships, sessions, AuthProvider, object-level authorisation).
+memberships, sessions, invites, AuthProvider, object-level authorisation).
 
 ## AuthProvider
 
@@ -43,9 +43,29 @@ via `authorizeWorkspaceAccess`. The HTTP server dispatches **only** through
 1. Resolve session cookie.
 2. `authorizeWorkspaceAccess` (membership JOIN; unknown and forbidden → same 404).
 3. Call Admin `workspacePairing` which signs the cloud-home pairing request
-   (HMAC over method, path+query, timestamp, nonce, body hash).
-4. Return `pairingLink` to the member. Never forwards a client-supplied
-   workspace id without the membership check.
+   (HMAC over method, path+query, timestamp, nonce, body hash). For Team
+   workspaces the signed body carries the member's email and **membership
+   role from the store** (owner/admin → admin+client scopes; member → client
+   only). A client-supplied `role` in the Edge body is ignored.
+4. Return `pairingLink` (and scopes) to the member. Never forwards a
+   client-supplied workspace id without the membership check.
+
+## Team roles and invites
+
+- Roles: exactly one Owner (paying account; cannot be removed/demoted except
+  by transfer); Admin manages members/settings/invites; Member uses the
+  workspace. Every membership route goes through `authorizeWorkspaceAccess`
+  with `minRole` from `ROUTE_REGISTRY` — never inline role checks.
+- Invites: `POST/GET/DELETE /admin/workspaces/:id/invites` and
+  `POST /edge/invites/:token/accept`. Tokens are 32 random bytes, stored
+  hashed, single-use, 7-day expiry, email-bound (wrong signed-in email → same
+  404 as unknown token). Admin may invite members; only Owner may invite
+  admins. Seat limit from `plans.ts` (`home`=1, `team`=5); over → 409
+  `seat_limit`.
+- Remove member: revoke sessions and signed `POST /api/cloud/team/member-left`
+  so private chats are deleted on the machine (Apache path; Admin never
+  receives chat content).
+- Admin member list returns metadata only (email, role, joinedAt).
 
 ## Object-level authorisation
 

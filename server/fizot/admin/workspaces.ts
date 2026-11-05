@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { teamRoleScopes, type TeamRole } from "../../cloud-team.ts";
+import { CLOUD_TEAM_MEMBER_LEFT_PATH } from "../../routes/cloud-signed.ts";
 import { FLY_HOME_VOLUME_GB, type FlyClient } from "./fly.ts";
 import type { NonceStore } from "./nonce-store.ts";
 import { planFlags, type PlanId } from "./plans.ts";
@@ -193,6 +194,14 @@ export function createAdminServices(config: AdminConfig) {
   } = {}) {
     const workspace = await config.store.get(id);
     if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    // Team Clouds never sleep (docs/team-cloud.md busy:["team"]).
+    if (workspace.role === "team" || planFlags(workspace.plan)?.sleepAllowed === false) {
+      return {
+        status: 409,
+        body: { ok: false, busy: ["team"], error: "sleep_refused_team" },
+        workspaceId: workspace.id,
+      };
+    }
     const idleMinutes = input.idleMinutes ?? 1;
     const deadline = Date.now() + (input.waitMs ?? 5 * 60_000);
     let lastBusy: unknown = null;
@@ -281,20 +290,23 @@ export function createAdminServices(config: AdminConfig) {
   async function workspacePairing(id: string, input: {
     label?: string;
     ttlSeconds?: number;
+    /** Membership claim — role must come from Admin membership, never a client-supplied elevation. */
     member?: { email: string; role: TeamRole };
   }) {
     const workspace = await config.store.get(id);
     if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
     const body: Record<string, unknown> = {
-      label: input.label ?? "Fizot app (Cloud)",
+      label: input.label ?? (workspace.role === "team" ? "Fizot app (Team Cloud)" : "Fizot app (Cloud)"),
       ttlSeconds: input.ttlSeconds ?? 300,
     };
     if (workspace.role === "team") {
       if (!input.member) throw Object.assign(new Error("member_required"), { status: 400 });
-      body.member = input.member;
-      if (workspace.teamId) body.team = { id: workspace.teamId };
-      const scopes = teamRoleScopes(input.member.role);
-      body._scopes = scopes;
+      body.member = { email: input.member.email, role: input.member.role };
+      if (workspace.teamId && workspace.teamName) {
+        body.team = { id: workspace.teamId, name: workspace.teamName };
+      } else if (workspace.teamId) {
+        body.team = { id: workspace.teamId };
+      }
     }
     const response = await signedMachinePost(workspace, "/api/cloud/pairing", body);
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -302,9 +314,27 @@ export function createAdminServices(config: AdminConfig) {
     const pairingLink = `${workspace.publicUrl}/pair#signin=${credential}`;
     return {
       status: response.status,
-      body: { ...payload, pairingLink, ...(workspace.role === "team" && input.member ? { scopes: teamRoleScopes(input.member.role) } : {}) },
+      body: {
+        ...payload,
+        pairingLink,
+        ...(workspace.role === "team" && input.member ? { scopes: teamRoleScopes(input.member.role) } : {}),
+      },
       workspaceId: workspace.id,
     };
+  }
+
+  /** Tell the Team machine a member left — private chats deleted, never handed to an admin. */
+  async function workspaceMemberLeft(id: string, email: string) {
+    const workspace = await config.store.get(id);
+    if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
+    if (workspace.role !== "team") {
+      throw Object.assign(new Error("not_a_team"), { status: 400 });
+    }
+    const response = await signedMachinePost(workspace, CLOUD_TEAM_MEMBER_LEFT_PATH, {
+      email: email.trim().toLowerCase(),
+    });
+    const body = await response.json().catch(() => ({}));
+    return { status: response.status, body, workspaceId: workspace.id };
   }
 
   async function destroyWorkspace(id: string): Promise<{ destroyed: true; appName: string }> {
@@ -322,6 +352,7 @@ export function createAdminServices(config: AdminConfig) {
     workspaceSleep,
     workspaceWake,
     workspacePairing,
+    workspaceMemberLeft,
     destroyWorkspace,
     store: config.store,
     fly: config.fly,

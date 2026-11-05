@@ -1,6 +1,6 @@
 /**
  * Edge routing: session → membership → signed cloud-home pairing on the machine.
- * Never trusts a client-supplied workspace id without authorizeWorkspaceAccess.
+ * Never trusts a client-supplied workspace id or role without authorizeWorkspaceAccess.
  */
 import type { AdminServices } from "../admin/workspaces.ts";
 import { authorizeWorkspaceAccess } from "../admin/authorize.ts";
@@ -11,6 +11,7 @@ export type OpenWorkspaceSessionResult = {
   workspaceId: string;
   pairingLink: string;
   role: string;
+  scopes?: string[];
 } | {
   ok: false;
   status: 401 | 404 | 502;
@@ -23,6 +24,8 @@ export async function openWorkspaceSession(input: {
   workspaceId: string;
   services: AdminServices;
   label?: string;
+  /** Ignored for Team workspaces — membership role from the store is authoritative. */
+  requestedRole?: string;
 }): Promise<OpenWorkspaceSessionResult> {
   const authz = await authorizeWorkspaceAccess({
     tenant: input.tenant,
@@ -33,9 +36,14 @@ export async function openWorkspaceSession(input: {
   if (!authz.ok) return { ok: false, status: authz.status, error: authz.error };
 
   try {
+    const member =
+      authz.workspace.role === "team"
+        ? { email: authz.account.email, role: authz.membership.role }
+        : undefined;
     const pairing = await input.services.workspacePairing(authz.workspace.id, {
-      label: input.label ?? "Fizot edge",
+      label: input.label ?? (authz.workspace.role === "team" ? "Fizot edge (Team)" : "Fizot edge"),
       ttlSeconds: 120,
+      member,
     });
     if (pairing.status !== 200 || typeof pairing.body.pairingLink !== "string") {
       return { ok: false, status: 502, error: "pairing_failed" };
@@ -45,6 +53,7 @@ export async function openWorkspaceSession(input: {
       workspaceId: authz.workspace.id,
       pairingLink: pairing.body.pairingLink,
       role: authz.membership.role,
+      ...(Array.isArray(pairing.body.scopes) ? { scopes: pairing.body.scopes as string[] } : {}),
     };
   } catch (error) {
     return {
