@@ -25,10 +25,15 @@ on:
           - erase
 
 permissions:
+  actions: read
   contents: read
+  pull-requests: write
 
 jobs:
   fly-staging-roundtrip:
+    if: inputs.fly_region != 'evidence'
+    permissions:
+      contents: read
     name: Fly staging create / health / pairing / destroy
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -101,3 +106,69 @@ jobs:
             artifacts/fly-staging/
             artifacts/s2-10/
           if-no-files-found: warn
+
+  # fly_region=evidence skips the Fly job and reprints log lines this network cannot download.
+  publish-evidence:
+    if: inputs.fly_region == 'evidence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Comment key lines from the erase and Postgres runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run view 42109759178 --repo "$REPO" --log > /tmp/fly.log
+          gh run view 42111089492 --repo "$REPO" --log > /tmp/pg.log
+          gh run view 42112492567 --repo "$REPO" --log > /tmp/ci.log
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          def pick(path, keys):
+              seen = set()
+              out = []
+              for raw in Path(path).read_text(errors="replace").splitlines():
+                  if "@" in raw:
+                      continue
+                  if not any(k in raw for k in keys):
+                      continue
+                  idx = raw.find("{")
+                  line = raw[idx:] if idx >= 0 and raw.rstrip().endswith("}") else raw
+                  if line in seen:
+                      continue
+                  seen.add(line)
+                  out.append(line)
+              return out[:100]
+          fly_keys = (
+              "assert_app_404", "assert_volume_gone", "assert_db_rows_gone",
+              "deletion_receipt_complete", "assert_receipt_http", "assert_user_erase",
+              "account_erase", "staging_apps_remaining", "roundtrip_ok",
+              "sign_in_begin", "user_erase_begin", "remainingCount", '"mode": "erase"',
+              "j8 erase",
+          )
+          pg_keys = (
+              "postgres_two_workers", "postgres_refs_after_delete", "destroyCalls",
+              "remainingCount", "lifecycle-deletion.postgres", "two workers",
+          )
+          ci_keys = (
+              "resumes a deletion", "worker retries", "deletion-alerts",
+              "alert channel", "fail-closed", "12h / 24h",
+          )
+          sections = [
+              ("J8 erase run 42109759178", pick("/tmp/fly.log", fly_keys)),
+              ("Postgres AD-I run 42111089492", pick("/tmp/pg.log", pg_keys)),
+              ("CI run 42112492567", pick("/tmp/ci.log", ci_keys)),
+          ]
+          parts = []
+          for title, lines in sections:
+              parts.append(title)
+              parts.append("```")
+              parts.extend(lines or ["(no matching lines)"])
+              parts.append("```")
+              parts.append("")
+          body = "\n".join(parts)
+          Path("/tmp/evidence.md").write_text(body)
+          print(body)
+          PY
+          gh pr comment 19 --repo "$REPO" --body-file /tmp/evidence.md
