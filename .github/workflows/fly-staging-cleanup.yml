@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
     inputs:
       fly_org:
-        description: Fly org slug for staging
-        required: true
+        description: Fly org slug (default repo var FLY_ORG, else fizot)
+        required: false
         type: string
   schedule:
     # Once a day — destroy fizot-cm-* apps older than 24 hours.
@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   cleanup:
@@ -23,7 +24,8 @@ jobs:
     timeout-minutes: 20
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      FLY_ORG: ${{ inputs.fly_org || vars.FLY_ORG || 'fizot-staging' }}
+      # Prefer dispatch input → repo variable → real org slug "fizot".
+      FLY_ORG: ${{ inputs.fly_org || vars.FLY_ORG || 'fizot' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,6 +38,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "FLY_ORG=$FLY_ORG"
           fi
       - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
         if: steps.token.outputs.skip != 'true'
@@ -54,8 +57,32 @@ jobs:
             console.log(formatCostProjection(projectDailyCost({})));
           "
       - name: Destroy apps older than 24 hours
+        id: destroy
         if: steps.token.outputs.skip != 'true'
         run: node --experimental-strip-types scripts/fizot/fly-staging-cleanup.mjs
       - name: Skipped
         if: steps.token.outputs.skip == 'true'
         run: echo "No FLY_API_TOKEN; nothing to clean."
+      - name: Open or update Fly cleanup failed issue
+        if: failure() && steps.token.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="Fly cleanup failed"
+          BODY="Scheduled/manual Fizot Fly staging cleanup failed.
+
+          - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - Org: \`$FLY_ORG\`
+          - Workflow: \`${{ github.workflow }}\`
+          - Ref: \`${{ github.ref_name }}\`
+
+          Check FLY_API_TOKEN and that FLY_ORG (repo variable or input) names a real Fly org (default \`fizot\`).
+          "
+          EXISTING=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title --jq ".[] | select(.title==\"$TITLE\") | .number" | head -n1)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+            echo "Updated issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi

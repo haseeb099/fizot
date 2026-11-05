@@ -87,6 +87,17 @@ export interface FlyClient {
 export const FLY_HOME_GUEST: FlyMachineGuest = { cpu_kind: "shared", cpus: 1, memory_mb: 2048 };
 export const FLY_HOME_VOLUME_GB = 10;
 export const FLY_STAGING_APP_PREFIX = "fizot-cm-";
+/** Real Fly org for staging (Gate G0b). Override with env/repo var `FLY_ORG`. */
+export const DEFAULT_FLY_ORG = "fizot";
+
+/** Resolve Fly org: explicit → `FLY_ORG` → `DEFAULT_FLY_ORG`. */
+export function resolveFlyOrg(explicit?: string | null, env: NodeJS.ProcessEnv = process.env): string {
+  const fromExplicit = explicit?.trim() ?? "";
+  if (fromExplicit) return fromExplicit;
+  const fromEnv = env.FLY_ORG?.trim() ?? "";
+  if (fromEnv) return fromEnv;
+  return DEFAULT_FLY_ORG;
+}
 const MACHINES_API = "https://api.machines.dev";
 const FLY_GRAPHQL = "https://api.fly.io/graphql";
 
@@ -452,9 +463,19 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
       await api("DELETE", `/v1/apps/${encodeURIComponent(appName)}?force=true`);
     },
     async listApps(orgSlug) {
-      const json = await api("GET", `/v1/apps?org_slug=${encodeURIComponent(orgSlug)}`);
-      const rows = Array.isArray(json) ? json : (json?.apps ?? []);
-      return rows.map((row: any) => ({ name: String(row.name ?? row.app_name), id: String(row.id ?? row.name) }));
+      try {
+        const json = await api("GET", `/v1/apps?org_slug=${encodeURIComponent(orgSlug)}`);
+        const rows = Array.isArray(json) ? json : (json?.apps ?? []);
+        return rows.map((row: any) => ({ name: String(row.name ?? row.app_name), id: String(row.id ?? row.name) }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/\b404\b/i.test(message) || /organization not found/i.test(message)) {
+          throw new Error(
+            `Fly organization not found for org_slug=${orgSlug}. Set repo variable/secret env FLY_ORG to a real org (default ${DEFAULT_FLY_ORG}). Original: ${message}`,
+          );
+        }
+        throw error;
+      }
     },
     async listMachines(appName) {
       try {

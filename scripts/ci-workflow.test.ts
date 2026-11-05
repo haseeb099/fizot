@@ -350,5 +350,8 @@ describe("CI concurrency", () => {
     expect(cleanup.on).toHaveProperty("workflow_dispatch");
     expect(cleanup.on).toHaveProperty("schedule");
     expect(Object.keys(workflow.jobs)).not.toContain("cleanup");
+    expect(cleanup.jobs.cleanup.env.FLY_ORG).toContain("fizot");
+    expect(cleanup.jobs.cleanup.env.FLY_ORG).not.toContain("fizot-staging");
+    expect(cleanup.permissions).toMatchObject({ contents: "read", issues: "write" });
   });
 });

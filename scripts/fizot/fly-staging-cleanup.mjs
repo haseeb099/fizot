@@ -7,22 +7,44 @@
 import {
   createFlyMachinesClient,
   FLY_STAGING_APP_PREFIX,
+  DEFAULT_FLY_ORG,
+  resolveFlyOrg,
   formatCostProjection,
   projectDailyCost,
-} from "../../server/fizot/admin/public.ts";
+} from "../../server/fizot/admin/index.ts";
 
 const token = process.env.FLY_API_TOKEN?.trim() ?? "";
-const org = process.env.FLY_ORG?.trim() ?? "";
+const org = resolveFlyOrg();
 const maxAgeMs = Number(process.env.FLY_STAGING_MAX_AGE_MS ?? String(24 * 60 * 60 * 1000));
 
-if (!token || !org) {
-  console.error("FLY_API_TOKEN and FLY_ORG are required");
+if (!token) {
+  console.error("FLY_API_TOKEN is required");
+  process.exit(2);
+}
+if (!org) {
+  console.error(`FLY_ORG is required (default ${DEFAULT_FLY_ORG})`);
   process.exit(2);
 }
 
 console.log(formatCostProjection(projectDailyCost({})));
+console.log(JSON.stringify({ flyOrg: org, defaultFlyOrg: DEFAULT_FLY_ORG }));
 const fly = createFlyMachinesClient({ token, org, printCost: false });
-const apps = await fly.listApps(org);
+
+let apps;
+try {
+  apps = await fly.listApps(org);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+}
+
+console.log(JSON.stringify({
+  found: apps.filter((a) => a.name.startsWith(FLY_STAGING_APP_PREFIX)).map((a) => a.name),
+  foundCount: apps.filter((a) => a.name.startsWith(FLY_STAGING_APP_PREFIX)).length,
+  org,
+}));
+
 const now = Date.now();
 const destroyed = [];
 

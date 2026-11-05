@@ -19,6 +19,8 @@ import {
   formatCostProjection,
   projectDailyCost,
   FLY_STAGING_APP_PREFIX,
+  DEFAULT_FLY_ORG,
+  resolveFlyOrg,
   MAX_PROBE_MACHINE_SECONDS,
   describeFetchError,
 } from "../../server/fizot/admin/index.ts";
@@ -43,7 +45,7 @@ function sleep(ms) {
 }
 
 const token = process.env.FLY_API_TOKEN?.trim() ?? "";
-const org = process.env.FLY_ORG?.trim() ?? "";
+const org = resolveFlyOrg();
 const region = process.env.FLY_REGION?.trim() ?? "lhr";
 const image = process.env.FIZOT_MACHINE_IMAGE?.trim() ?? "";
 
@@ -56,7 +58,7 @@ if (!token) {
   process.exit(2);
 }
 if (!org) {
-  console.error("FLY_ORG is required.");
+  console.error(`FLY_ORG is required (default ${DEFAULT_FLY_ORG}).`);
   process.exit(2);
 }
 if (!image) {
