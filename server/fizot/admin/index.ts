@@ -1,5 +1,12 @@
 import { createServer, type Server } from "node:http";
+import { assertAlertChannelsForProduction, resolveDeletionAlert } from "./alerts.ts";
 import { FakeAuthProvider, UnconfiguredAuthProvider, type AuthProvider } from "./auth.ts";
+import type { DeletionAlert } from "./deletion.ts";
+import {
+  createDeletionWorker,
+  shouldStartDeletionWorker,
+  type DeletionWorker,
+} from "./deletion-worker.ts";
 import {
   createFakeFlyClient,
   createFlyMachinesClient,
@@ -69,6 +76,14 @@ export type CreateAdminServerOptions = {
   port?: number;
   cookieSecure?: boolean;
   allowFakeSignIn?: boolean;
+  /** Override deletion alert (tests inject a spy / fake HTTP). */
+  deletionAlert?: DeletionAlert;
+  /** Start background deletion worker (default: off in NODE_ENV=test). */
+  enableDeletionWorker?: boolean;
+  deletionWorkerIntervalMs?: number;
+  deletionWorkerId?: string;
+  alertFetch?: typeof fetch;
+  now?: () => number;
 };
 
 export function isProductionAdminEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -98,8 +113,10 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   tenant: TenantStore;
   invites: InviteStore;
   auth: AuthProvider;
+  deletionWorker: DeletionWorker | null;
   close(): Promise<void>;
 }> {
+  assertAlertChannelsForProduction();
   const databaseUrl = process.env.ADMIN_DATABASE_URL?.trim();
   if (!options.store && !databaseUrl && isProductionAdminEnv()) {
     throw new Error("ADMIN_DATABASE_URL is required when NODE_ENV or FIZOT_ENV is production");
@@ -129,6 +146,8 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     ?? (token
       ? createFlyMachinesClient({ token, org: flyOrg })
       : createFakeFlyClient());
+  const deletionAlert = options.deletionAlert
+    ?? resolveDeletionAlert({ fetchImpl: options.alertFetch, now: options.now });
   const services = createAdminServices({
     adminUrl: options.adminUrl ?? process.env.FIZOT_ADMIN_URL ?? "https://admin.example.invalid",
     flyOrg,
@@ -140,6 +159,10 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     machineFetch: options.machineFetch,
     tenant,
     invites,
+    deletionAlert,
+    deletionWorkerId: options.deletionWorkerId,
+    alertFetch: options.alertFetch,
+    now: options.now,
   });
   const handler = createAdminHandler({
     services,
@@ -159,6 +182,16 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("admin server has no port");
   const url = `http://127.0.0.1:${address.port}`;
+
+  const startWorker = shouldStartDeletionWorker({ enabled: options.enableDeletionWorker });
+  const deletionWorker = startWorker
+    ? createDeletionWorker({
+      runner: services.deletionRunner,
+      intervalMs: options.deletionWorkerIntervalMs,
+      enabled: true,
+    })
+    : null;
+
   return {
     server,
     url,
@@ -166,7 +199,9 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     tenant,
     invites,
     auth,
+    deletionWorker,
     async close() {
+      deletionWorker?.stop();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       if (store && "close" in store && typeof store.close === "function") await store.close();
       if (tenant && "close" in tenant && typeof tenant.close === "function") await (tenant as { close(): Promise<void> }).close();

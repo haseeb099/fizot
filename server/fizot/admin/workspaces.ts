@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { teamRoleScopes, type TeamRole } from "../../cloud-team.ts";
 import { CLOUD_TEAM_MEMBER_LEFT_PATH } from "../../routes/cloud-signed.ts";
+import { resolveDeletionAlert } from "./alerts.ts";
 import {
   createDeletionRunner,
   requestDeletion,
@@ -29,6 +30,8 @@ export type AdminConfig = {
   tenant?: TenantStore;
   invites?: InviteStore;
   deletionAlert?: DeletionAlert;
+  deletionWorkerId?: string;
+  alertFetch?: typeof fetch;
 };
 
 export type CreateWorkspaceInput = {
@@ -62,13 +65,19 @@ export function createAdminServices(config: AdminConfig) {
   const machineFetch = config.machineFetch ?? fetch;
   const now = config.now ?? Date.now;
 
+  const deletionAlert = resolveDeletionAlert({
+    alert: config.deletionAlert,
+    fetchImpl: config.alertFetch,
+    now,
+  });
   const deletionRunner: DeletionRunner = createDeletionRunner({
     store: config.store,
     fly: config.fly,
     tenant: config.tenant,
     invites: config.invites,
     now,
-    alert: config.deletionAlert,
+    alert: deletionAlert,
+    workerId: config.deletionWorkerId,
   });
 
   async function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceRecord> {

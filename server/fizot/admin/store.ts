@@ -32,6 +32,8 @@ export type DeletionReceipt = {
   /** SHA-256 of workspace id (no personal data). */
   workspaceIdHash: string;
   workspaceId: string;
+  /** Fly app name captured at delete-request time for resume after row purge. */
+  appName: string | null;
   requestedAt: string;
   completedAt: string | null;
   failedAt: string | null;
@@ -40,6 +42,8 @@ export type DeletionReceipt = {
   lastError: string | null;
   alertedAt12h: string | null;
   lastAlertAt: string | null;
+  leaseOwner: string | null;
+  leaseUntil: string | null;
 };
 
 export interface WorkspaceStore {
@@ -53,11 +57,19 @@ export interface WorkspaceStore {
   update(id: string, patch: Partial<WorkspaceRecord>): Promise<WorkspaceRecord>;
   transition(id: string, toState: WorkspaceState, reason: string, now?: () => number): Promise<WorkspaceRecord>;
   listTransitions(workspaceId: string): Promise<StateTransition[]>;
+  /** Remove transition history for a workspace (kept out of erasure evidence). */
+  deleteTransitions(workspaceId: string): Promise<number>;
   delete(id: string): Promise<void>;
   upsertDeletionReceipt(receipt: DeletionReceipt): Promise<DeletionReceipt>;
   getDeletionReceipt(workspaceId: string): Promise<DeletionReceipt | null>;
   getDeletionReceiptByHash(workspaceIdHash: string): Promise<DeletionReceipt | null>;
   listDeletionReceipts(): Promise<DeletionReceipt[]>;
+  /**
+   * Exclusive lease so two Admin instances never run the same deletion.
+   * Returns true if acquired (or already held by the same owner).
+   */
+  tryAcquireDeletionLease(workspaceId: string, ownerId: string, ttlMs: number, now?: () => number): Promise<boolean>;
+  releaseDeletionLease(workspaceId: string, ownerId: string): Promise<void>;
 }
 
 function defaultLifecycle(partial: Partial<WorkspaceRecord> & Pick<WorkspaceRecord, "id" | "plan" | "appName" | "network" | "machineId" | "flyMachineId" | "flyVolumeId" | "publicUrl" | "role" | "bootstrapSecret" | "createdAt">): WorkspaceRecord {
@@ -145,11 +157,28 @@ export function createMemoryWorkspaceStore(): WorkspaceStore & {
     async listTransitions(workspaceId) {
       return transitions.filter((t) => t.workspaceId === workspaceId);
     },
+    async deleteTransitions(workspaceId) {
+      let n = 0;
+      for (let i = transitions.length - 1; i >= 0; i--) {
+        if (transitions[i]!.workspaceId === workspaceId) {
+          transitions.splice(i, 1);
+          n++;
+        }
+      }
+      return n;
+    },
     async delete(id) {
       rows.delete(id);
     },
     async upsertDeletionReceipt(receipt) {
-      receipts.set(receipt.workspaceId, { ...receipt });
+      const prev = receipts.get(receipt.workspaceId);
+      const next: DeletionReceipt = {
+        ...receipt,
+        appName: receipt.appName ?? prev?.appName ?? null,
+        leaseOwner: receipt.leaseOwner !== undefined ? receipt.leaseOwner : (prev?.leaseOwner ?? null),
+        leaseUntil: receipt.leaseUntil !== undefined ? receipt.leaseUntil : (prev?.leaseUntil ?? null),
+      };
+      receipts.set(receipt.workspaceId, next);
       return receipts.get(receipt.workspaceId)!;
     },
     async getDeletionReceipt(workspaceId) {
@@ -161,6 +190,24 @@ export function createMemoryWorkspaceStore(): WorkspaceStore & {
     },
     async listDeletionReceipts() {
       return [...receipts.values()];
+    },
+    async tryAcquireDeletionLease(workspaceId, ownerId, ttlMs, now = Date.now) {
+      const receipt = receipts.get(workspaceId);
+      if (!receipt) return false;
+      const at = now();
+      const until = receipt.leaseUntil ? Date.parse(receipt.leaseUntil) : 0;
+      if (receipt.leaseOwner && receipt.leaseOwner !== ownerId && until > at) return false;
+      receipts.set(workspaceId, {
+        ...receipt,
+        leaseOwner: ownerId,
+        leaseUntil: new Date(at + ttlMs).toISOString(),
+      });
+      return true;
+    },
+    async releaseDeletionLease(workspaceId, ownerId) {
+      const receipt = receipts.get(workspaceId);
+      if (!receipt || receipt.leaseOwner !== ownerId) return;
+      receipts.set(workspaceId, { ...receipt, leaseOwner: null, leaseUntil: null });
     },
   };
 }
@@ -221,8 +268,14 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
       status TEXT NOT NULL,
       last_error TEXT,
       alerted_at_12h TIMESTAMPTZ,
-      last_alert_at TIMESTAMPTZ
+      last_alert_at TIMESTAMPTZ,
+      app_name TEXT,
+      lease_owner TEXT,
+      lease_until TIMESTAMPTZ
     );
+    ALTER TABLE fizot_admin_deletion_receipts ADD COLUMN IF NOT EXISTS app_name TEXT;
+    ALTER TABLE fizot_admin_deletion_receipts ADD COLUMN IF NOT EXISTS lease_owner TEXT;
+    ALTER TABLE fizot_admin_deletion_receipts ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
   `);
 
   const toRow = (r: Record<string, unknown>): WorkspaceRecord => {
@@ -253,6 +306,7 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
   const toReceipt = (r: Record<string, unknown>): DeletionReceipt => ({
     workspaceId: String(r.workspace_id),
     workspaceIdHash: String(r.workspace_id_hash),
+    appName: r.app_name == null ? null : String(r.app_name),
     requestedAt: new Date(String(r.requested_at)).toISOString(),
     completedAt: r.completed_at ? new Date(String(r.completed_at)).toISOString() : null,
     failedAt: r.failed_at ? new Date(String(r.failed_at)).toISOString() : null,
@@ -261,6 +315,8 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
     lastError: r.last_error == null ? null : String(r.last_error),
     alertedAt12h: r.alerted_at_12h ? new Date(String(r.alerted_at_12h)).toISOString() : null,
     lastAlertAt: r.last_alert_at ? new Date(String(r.last_alert_at)).toISOString() : null,
+    leaseOwner: r.lease_owner == null ? null : String(r.lease_owner),
+    leaseUntil: r.lease_until ? new Date(String(r.lease_until)).toISOString() : null,
   });
 
   const api: WorkspaceStore & { close(): Promise<void> } = {
@@ -356,22 +412,32 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
         reason: String(r.reason),
       }));
     },
+    async deleteTransitions(workspaceId) {
+      const result = await pool.query(
+        `DELETE FROM fizot_admin_workspace_transitions WHERE workspace_id = $1`,
+        [workspaceId],
+      );
+      return result.rowCount ?? 0;
+    },
     async delete(id) {
       await pool.query(`DELETE FROM fizot_admin_workspaces WHERE id = $1`, [id]);
     },
     async upsertDeletionReceipt(receipt) {
       await pool.query(
         `INSERT INTO fizot_admin_deletion_receipts
-          (workspace_id, workspace_id_hash, requested_at, completed_at, failed_at, steps_done, status, last_error, alerted_at_12h, last_alert_at)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
+          (workspace_id, workspace_id_hash, requested_at, completed_at, failed_at, steps_done, status, last_error, alerted_at_12h, last_alert_at, app_name, lease_owner, lease_until)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (workspace_id) DO UPDATE SET
            completed_at=EXCLUDED.completed_at, failed_at=EXCLUDED.failed_at, steps_done=EXCLUDED.steps_done,
            status=EXCLUDED.status, last_error=EXCLUDED.last_error, alerted_at_12h=EXCLUDED.alerted_at_12h,
-           last_alert_at=EXCLUDED.last_alert_at`,
+           last_alert_at=EXCLUDED.last_alert_at,
+           app_name=COALESCE(EXCLUDED.app_name, fizot_admin_deletion_receipts.app_name),
+           lease_owner=EXCLUDED.lease_owner, lease_until=EXCLUDED.lease_until,
+           workspace_id_hash=EXCLUDED.workspace_id_hash`,
         [
           receipt.workspaceId, receipt.workspaceIdHash, receipt.requestedAt, receipt.completedAt,
           receipt.failedAt, JSON.stringify(receipt.stepsDone), receipt.status, receipt.lastError,
-          receipt.alertedAt12h, receipt.lastAlertAt,
+          receipt.alertedAt12h, receipt.lastAlertAt, receipt.appName, receipt.leaseOwner, receipt.leaseUntil,
         ],
       );
       return receipt;
@@ -387,6 +453,28 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
     async listDeletionReceipts() {
       const result = await pool.query(`SELECT * FROM fizot_admin_deletion_receipts`);
       return result.rows.map(toReceipt);
+    },
+    async tryAcquireDeletionLease(workspaceId, ownerId, ttlMs, now = Date.now) {
+      // Row lease (atomic UPDATE) — pool-safe; two Admin instances never both succeed.
+      const at = now();
+      const until = new Date(at + ttlMs).toISOString();
+      const result = await pool.query(
+        `UPDATE fizot_admin_deletion_receipts
+         SET lease_owner = $2, lease_until = $3
+         WHERE workspace_id = $1
+           AND (lease_owner IS NULL OR lease_owner = $2 OR lease_until IS NULL OR lease_until < $4::timestamptz)
+         RETURNING workspace_id`,
+        [workspaceId, ownerId, until, new Date(at).toISOString()],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+    async releaseDeletionLease(workspaceId, ownerId) {
+      await pool.query(
+        `UPDATE fizot_admin_deletion_receipts
+         SET lease_owner = NULL, lease_until = NULL
+         WHERE workspace_id = $1 AND lease_owner = $2`,
+        [workspaceId, ownerId],
+      );
     },
     async close() {
       await pool.end();

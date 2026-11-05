@@ -29,7 +29,23 @@ export {
   DELETION_STEPS,
   DELETION_ALERT_12H_MS,
   DELETION_FAIL_24H_MS,
+  DELETION_LEASE_TTL_MS,
 } from "./deletion.ts";
+export {
+  createDeletionWorker,
+  shouldStartDeletionWorker,
+  DEFAULT_DELETION_WORKER_INTERVAL_MS,
+} from "./deletion-worker.ts";
+export {
+  createDeletionAlert,
+  resolveDeletionAlert,
+  alertChannelsConfigured,
+  assertAlertChannelsForProduction,
+  buildDeletionAlertPayload,
+  signAlertBody,
+  verifyAlertSignature,
+  openOrUpdateGithubIssue,
+} from "./alerts.ts";
 export { reconcileWorkspaces, ORPHAN_REPORT_AGE_MS } from "./reconcile.ts";
 export {
   createMemoryWebhookEventStore,

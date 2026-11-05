@@ -2,7 +2,7 @@
  * Workspace deletion job + legal receipt (P4.2 / FZ-25 / UK GDPR erasure).
  * Fail-loud, idempotent, verified. Receipt holds hashed workspace id only — no PII.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { InviteStore } from "./invites.ts";
 import type { DeletionReceipt, WorkspaceStore } from "./store.ts";
 import type { TenantStore } from "./tenant.ts";
@@ -21,6 +21,7 @@ export type DeletionStep = (typeof DELETION_STEPS)[number];
 export const DELETION_ALERT_12H_MS = 12 * 60 * 60_000;
 export const DELETION_FAIL_24H_MS = 24 * 60 * 60_000;
 export const DELETION_HOURLY_ALERT_MS = 60 * 60_000;
+export const DELETION_LEASE_TTL_MS = 5 * 60_000;
 
 export function hashWorkspaceId(workspaceId: string): string {
   return createHash("sha256").update(workspaceId).digest("hex");
@@ -56,6 +57,9 @@ export type DeletionRunnerOptions = {
   /** Max attempts per runOnce call before yielding. */
   maxAttempts?: number;
   backoffMs?: number;
+  /** Stable id for this Admin instance (lease owner). */
+  workerId?: string;
+  leaseTtlMs?: number;
 };
 
 function isNotFound(error: unknown): boolean {
@@ -84,6 +88,7 @@ export async function requestDeletion(
   const receipt: DeletionReceipt = {
     workspaceId,
     workspaceIdHash: hashWorkspaceId(workspaceId),
+    appName: workspace?.appName ?? existing?.appName ?? null,
     requestedAt: existing?.requestedAt ?? requestedAt,
     completedAt: null,
     failedAt: null,
@@ -92,6 +97,8 @@ export async function requestDeletion(
     lastError: null,
     alertedAt12h: existing?.alertedAt12h ?? null,
     lastAlertAt: existing?.lastAlertAt ?? null,
+    leaseOwner: existing?.leaseOwner ?? null,
+    leaseUntil: existing?.leaseUntil ?? null,
   };
   return store.upsertDeletionReceipt(receipt);
 }
@@ -105,6 +112,8 @@ export async function countWorkspaceRefs(
   const details: string[] = [];
   const row = await store.get(workspaceId);
   if (row) details.push("workspace_row");
+  const transitions = await store.listTransitions(workspaceId);
+  if (transitions.length) details.push(`transitions:${transitions.length}`);
   if (tenant) {
     const members = await tenant.listMembers(workspaceId);
     if (members.length) details.push(`memberships:${members.length}`);
@@ -123,7 +132,10 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
   const sleep = options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const maxAttempts = options.maxAttempts ?? 8;
   const backoffMs = options.backoffMs ?? 50;
+  const workerId = options.workerId ?? randomUUID();
+  const leaseTtlMs = options.leaseTtlMs ?? DELETION_LEASE_TTL_MS;
   const alerts: string[] = [];
+  let stepRuns = 0;
 
   async function maybeAlert(receipt: DeletionReceipt): Promise<DeletionReceipt> {
     const elapsed = now() - Date.parse(receipt.requestedAt);
@@ -166,6 +178,7 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
   }
 
   async function runStep(appName: string, step: DeletionStep, workspaceId: string): Promise<void> {
+    stepRuns += 1;
     switch (step) {
       case "machines": {
         let machines: Array<{ id: string }> = [];
@@ -182,9 +195,6 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
               if (!isNotFound(error)) throw error;
             }
           }
-        }
-        if (!fly.destroyMachine && machines.length) {
-          // Coarse path: destroyApp later removes machines.
         }
         return;
       }
@@ -242,12 +252,12 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
           if (vols.length) throw new Error("verify_failed:volume_remains");
         } catch (error) {
           if (!isNotFound(error) && !(error instanceof Error && error.message.startsWith("verify_failed"))) {
-            // App gone → volume list 404 is success.
             if (!isNotFound(error)) throw error;
           } else if (error instanceof Error && error.message.startsWith("verify_failed")) {
             throw error;
           }
         }
+        await store.deleteTransitions(workspaceId);
         const refs = await countWorkspaceRefs(store, options.tenant, options.invites, workspaceId);
         if (refs.remainingCount !== 0) {
           throw new Error(`verify_failed:remainingCount=${refs.remainingCount}:${refs.details.join(",")}`);
@@ -259,68 +269,83 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
     }
   }
 
-  async function runOnce(workspaceId: string): Promise<DeletionReceipt> {
+  async function runOnce(workspaceId: string, opts: { skipLease?: boolean } = {}): Promise<DeletionReceipt> {
     let receipt = await store.getDeletionReceipt(workspaceId);
     if (!receipt) throw Object.assign(new Error("no_receipt"), { status: 404 });
     if (receipt.status === "complete") return receipt;
 
-    receipt = await maybeAlert(receipt);
-
-    const workspace = await store.get(workspaceId);
-    const appName = workspace?.appName
-      ?? `fizot-cm-${workspaceId.replace(/-/g, "").slice(0, 16)}`;
-
-    receipt = {
-      ...receipt,
-      status: receipt.status === "failed" ? "failed" : "running",
-      lastError: null,
-    };
-    await store.upsertDeletionReceipt(receipt);
-
-    for (const step of DELETION_STEPS) {
-      if (receipt.stepsDone.includes(step)) continue;
-      let attempts = 0;
-      let stepDone = false;
-      while (attempts < maxAttempts && !stepDone) {
-        attempts++;
-        try {
-          await runStep(appName, step, workspaceId);
-          receipt = {
-            ...receipt,
-            stepsDone: [...receipt.stepsDone, step],
-            lastError: null,
-          };
-          await store.upsertDeletionReceipt(receipt);
-          stepDone = true;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          receipt = { ...receipt, lastError: message };
-          await store.upsertDeletionReceipt(receipt);
-          if (attempts >= maxAttempts) {
-            receipt = await maybeAlert(receipt);
-            return receipt;
-          }
-          await sleep(backoffMs * attempts);
-        }
-      }
+    if (!opts.skipLease) {
+      const got = await store.tryAcquireDeletionLease(workspaceId, workerId, leaseTtlMs, now);
+      if (!got) return receipt;
     }
 
-    const done = receipt;
-    if (DELETION_STEPS.every((s) => done.stepsDone.includes(s))) {
-      const completedAt = new Date(now()).toISOString();
+    try {
+      receipt = await maybeAlert(receipt);
+
+      const workspace = await store.get(workspaceId);
+      const appName = workspace?.appName
+        ?? receipt.appName
+        ?? `fizot-cm-${workspaceId.replace(/-/g, "").slice(0, 16)}`;
+
       receipt = {
-        ...done,
-        status: "complete",
-        completedAt,
+        ...receipt,
+        appName,
+        status: receipt.status === "failed" ? "failed" : "running",
         lastError: null,
       };
       await store.upsertDeletionReceipt(receipt);
-      const ws = await store.get(workspaceId);
-      if (ws && ws.state === "deleting") {
-        await store.transition(workspaceId, "deleted", "deletion_verified", now).catch(() => undefined);
+
+      for (const step of DELETION_STEPS) {
+        if (receipt.stepsDone.includes(step)) continue;
+        let attempts = 0;
+        let stepDone = false;
+        while (attempts < maxAttempts && !stepDone) {
+          attempts++;
+          try {
+            await runStep(appName, step, workspaceId);
+            receipt = {
+              ...receipt,
+              stepsDone: [...receipt.stepsDone, step],
+              lastError: null,
+            };
+            await store.upsertDeletionReceipt(receipt);
+            stepDone = true;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            receipt = { ...receipt, lastError: message };
+            await store.upsertDeletionReceipt(receipt);
+            if (attempts >= maxAttempts) {
+              receipt = await maybeAlert(receipt);
+              return receipt;
+            }
+            await sleep(backoffMs * attempts);
+          }
+        }
+      }
+
+      const done = receipt;
+      if (DELETION_STEPS.every((s) => done.stepsDone.includes(s))) {
+        const completedAt = new Date(now()).toISOString();
+        receipt = {
+          ...done,
+          status: "complete",
+          completedAt,
+          lastError: null,
+          leaseOwner: null,
+          leaseUntil: null,
+        };
+        await store.upsertDeletionReceipt(receipt);
+        const ws = await store.get(workspaceId);
+        if (ws && ws.state === "deleting") {
+          await store.transition(workspaceId, "deleted", "deletion_verified", now).catch(() => undefined);
+        }
+      }
+      return receipt;
+    } finally {
+      if (!opts.skipLease) {
+        await store.releaseDeletionLease(workspaceId, workerId).catch(() => undefined);
       }
     }
-    return receipt;
   }
 
   async function processQueue(): Promise<DeletionReceipt[]> {
@@ -334,12 +359,16 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
   }
 
   return {
+    workerId,
     requestDeletion: (workspaceId: string, reason?: string) =>
       requestDeletion(store, workspaceId, { now, reason }),
     runOnce,
     processQueue,
     alerts,
     hashWorkspaceId,
+    get stepRuns() {
+      return stepRuns;
+    },
   };
 }
 
@@ -390,8 +419,6 @@ export async function eraseAccount(input: {
   }
 
   await input.tenant.revokeAllSessionsForAccount(input.accountId);
-  // Soft-delete: remove memberships already done; account row stay optional —
-  // mark by revoking sessions. Callers that have deleteAccount may extend.
   if ("deleteAccount" in input.tenant && typeof (input.tenant as { deleteAccount?: (id: string) => Promise<void> }).deleteAccount === "function") {
     await (input.tenant as { deleteAccount: (id: string) => Promise<void> }).deleteAccount(input.accountId);
   }
