@@ -49,7 +49,13 @@ it("creates a Fly app, volume, secrets and machine through the fake client", asy
     OMB_CLOUD_BOOTSTRAP_SECRET: workspace.bootstrapSecret,
   });
   expect(fly.volumes.get(`${workspace.appName}/omb_home`)?.sizeGb).toBe(10);
-  expect(await store.get(workspace.id)).toMatchObject({ ownerEmail: "owner@example.com", role: "home" });
+  expect(await store.get(workspace.id)).toMatchObject({
+    ownerEmail: "owner@example.com",
+    role: "home",
+    state: "ready",
+  });
+  expect(workspace.state).toBe("ready");
+  expect(workspace.requestId).toBeTruthy();
 });
 
 it("signs health, power and pairing against a fake machine", async () => {

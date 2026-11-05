@@ -15,6 +15,7 @@ import {
   createWorkspaceInvite,
   type InviteStore,
 } from "./invites.ts";
+import { eraseAccount } from "./deletion.ts";
 import { mayChangeMemberRole, mayRemoveMember } from "./roles.ts";
 import {
   buildDispatchTable,
@@ -24,7 +25,15 @@ import {
 } from "./route-registry.ts";
 import { safeLogLine } from "./redact.ts";
 import type { PlanId } from "./plans.ts";
-import type { MembershipRole, SessionContext, TenantStore } from "./tenant.ts";
+import { roleAtLeast, type MembershipRole, type SessionContext, type TenantStore } from "./tenant.ts";
+import {
+  createMemoryWebhookEventStore,
+  deliverWebhookEvent,
+  resolveWebhookSecret,
+  verifyHmacSha256,
+  verifyStripeSignature,
+  type WebhookEventStore,
+} from "./webhooks.ts";
 import type { AdminServices } from "./workspaces.ts";
 import { openWorkspaceSession } from "../edge/routing.ts";
 
@@ -76,6 +85,8 @@ export type RouteContext = {
   auth: AuthProvider;
   cookieSecure: boolean;
   allowFakeSignIn: boolean;
+  webhooks: WebhookEventStore;
+  rawBody: Buffer;
 };
 
 export type AdminHandlerDeps = {
@@ -85,6 +96,7 @@ export type AdminHandlerDeps = {
   auth: AuthProvider;
   cookieSecure?: boolean;
   allowFakeSignIn?: boolean;
+  webhooks?: WebhookEventStore;
 };
 
 function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
@@ -168,6 +180,7 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         ownerEmail?: string;
         teamId?: string;
         teamName?: string;
+        requestId?: string;
       };
       if (body.plan !== "home" && body.plan !== "team") {
         send(ctx.res, 400, { error: "unknown_plan" });
@@ -183,6 +196,7 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         ownerEmail,
         teamId: body.teamId ?? (body.plan === "team" ? `team-${randomUUID()}` : undefined),
         teamName: body.teamName ?? (body.plan === "team" ? "Team" : undefined),
+        requestId: body.requestId,
       });
       await ctx.tenant.upsertMembership(ctx.session!.account.id, record.id, "owner");
       const { bootstrapSecret: _secret, ...publicRecord } = record;
@@ -203,8 +217,129 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       });
     },
     async "admin.destroyWorkspace"(ctx) {
-      await ctx.services.destroyWorkspace(ctx.authz!.workspace.id);
-      send(ctx.res, 200, { ok: true, destroyed: true, appName: ctx.authz!.workspace.appName });
+      const result = await ctx.services.destroyWorkspace(ctx.authz!.workspace.id);
+      send(ctx.res, 202, {
+        ok: true,
+        deleting: true,
+        appName: result.appName,
+        receipt: {
+          workspaceIdHash: result.receipt.workspaceIdHash,
+          status: result.receipt.status,
+          requestedAt: result.receipt.requestedAt,
+          stepsDone: result.receipt.stepsDone,
+        },
+      });
+    },
+    async "admin.deletionReceipt"(ctx) {
+      const workspaceId = ctx.params.workspaceId;
+      if (!workspaceId) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const membership = await ctx.tenant.getMembership(ctx.session!.account.id, workspaceId);
+      const receipt = await ctx.services.getDeletionReceipt(workspaceId);
+      if (!receipt) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      // While the workspace exists, require admin+; after erasure only the receipt remains.
+      if (membership && !roleAtLeast(membership.role, "admin")) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      send(ctx.res, 200, {
+        ok: true,
+        receipt: {
+          workspaceIdHash: receipt.workspaceIdHash,
+          status: receipt.status,
+          requestedAt: receipt.requestedAt,
+          completedAt: receipt.completedAt,
+          failedAt: receipt.failedAt,
+          stepsDone: receipt.stepsDone,
+        },
+      });
+    },
+    async "admin.eraseAccount"(ctx) {
+      const body = await readJson(ctx.req).catch(() => ({})) as { confirm?: string };
+      if (body.confirm !== "erase") {
+        send(ctx.res, 400, { error: "confirm_required" });
+        return;
+      }
+      const result = await eraseAccount({
+        accountId: ctx.session!.account.id,
+        tenant: ctx.tenant,
+        store: ctx.services.store,
+        runner: ctx.services.deletionRunner,
+        memberLeft: async (workspaceId, email) => {
+          await ctx.services.workspaceMemberLeft(workspaceId, email).catch(() => undefined);
+        },
+      });
+      send(ctx.res, 200, {
+        ok: true,
+        erased: true,
+        deletedWorkspaceIds: result.deletedWorkspaceIds,
+        leftWorkspaceIds: result.leftWorkspaceIds,
+        receipts: result.receipts.map((r) => ({
+          workspaceIdHash: r.workspaceIdHash,
+          status: r.status,
+          completedAt: r.completedAt,
+          stepsDone: r.stepsDone,
+        })),
+      });
+    },
+    async "admin.webhook"(ctx) {
+      const provider = (ctx.params.provider ?? "").toLowerCase();
+      if (provider !== "generic" && provider !== "stripe") {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const secret = resolveWebhookSecret(provider);
+      if (!secret) {
+        send(ctx.res, 401, { error: "unauthorized" });
+        return;
+      }
+      const raw = ctx.rawBody.toString("utf8");
+      const verified = provider === "stripe"
+        ? verifyStripeSignature({
+          secret,
+          body: raw,
+          header: String(ctx.req.headers["stripe-signature"] ?? ""),
+        })
+        : verifyHmacSha256({
+          secret,
+          body: raw,
+          signature: String(ctx.req.headers["x-fizot-signature"] ?? ctx.req.headers["x-webhook-signature"] ?? ""),
+          timestamp: String(ctx.req.headers["x-fizot-timestamp"] ?? ctx.req.headers["x-webhook-timestamp"] ?? ""),
+        });
+      if (!verified.ok) {
+        send(ctx.res, verified.error === "missing_signature" || verified.error === "invalid_signature" ? 401 : 400, {
+          error: verified.error,
+        });
+        return;
+      }
+      let payload: { id?: string; type?: string } = {};
+      try {
+        payload = JSON.parse(raw || "{}") as { id?: string; type?: string };
+      } catch {
+        send(ctx.res, 400, { error: "invalid_json" });
+        return;
+      }
+      const eventId = typeof payload.id === "string" && payload.id ? payload.id : "";
+      if (!eventId) {
+        send(ctx.res, 400, { error: "missing_event_id" });
+        return;
+      }
+      const delivered = await deliverWebhookEvent({
+        store: ctx.webhooks,
+        provider,
+        eventId,
+        handler: async () => ({ type: payload.type ?? "unknown", accepted: true }),
+      });
+      if (!delivered.delivered) {
+        send(ctx.res, 200, { ok: true, duplicate: true });
+        return;
+      }
+      send(ctx.res, 200, { ok: true, duplicate: false, result: delivered.result });
     },
     async "admin.health"(ctx) {
       const result = await ctx.services.workspaceHealth(ctx.authz!.workspace.id);
@@ -280,15 +415,18 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         targetIsSelf: accountId === ctx.authz!.account.id,
       });
       if (!decision.ok) {
-        send(ctx.res, decision.error === "forbidden" || decision.error === "owner_locked" ? 404 : 404, { error: "not_found" });
+        // Self-demote without transfer and owner locks → 409; others stay 404 (TC36).
+        if (decision.error === "transfer_required" || decision.error === "owner_locked") {
+          send(ctx.res, 409, { error: decision.error });
+          return;
+        }
+        send(ctx.res, 404, { error: "not_found" });
         return;
       }
       if (nextRole === "owner") {
-        // Transfer: promote target, demote current owner to admin.
+        // Explicit transfer only: promote target, demote current owner → admin (same txn semantics).
         await ctx.tenant.upsertMembership(accountId, ctx.authz!.workspace.id, "owner");
-        if (accountId !== ctx.authz!.account.id) {
-          await ctx.tenant.upsertMembership(ctx.authz!.account.id, ctx.authz!.workspace.id, "admin");
-        }
+        await ctx.tenant.upsertMembership(ctx.authz!.account.id, ctx.authz!.workspace.id, "admin");
       } else {
         await ctx.tenant.upsertMembership(accountId, ctx.authz!.workspace.id, nextRole);
       }
@@ -390,10 +528,17 @@ export const ADMIN_DISPATCH_TABLE: DispatchEntry[] = buildDispatchTable(
   buildHandlers() as Record<string, (ctx: unknown) => Promise<void>>,
 );
 
+async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
 export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { services, tenant, invites, auth } = deps;
   const cookieSecure = deps.cookieSecure !== false;
   const allowFakeSignIn = deps.allowFakeSignIn ?? auth instanceof FakeAuthProvider;
+  const webhooks = deps.webhooks ?? createMemoryWebhookEventStore();
 
   return async (req, res) => {
     try {
@@ -405,6 +550,7 @@ export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessag
         return;
       }
       const { entry, params } = matched;
+      const rawBody = await readRawBody(req);
       const session = await resolveRequestSession(tenant, req);
 
       if (entry.auth === "session" || entry.auth === "membership") {
@@ -434,8 +580,15 @@ export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessag
         authz = result;
       }
 
+      // Re-bind JSON reader for handlers that still call readJson — consume from buffer.
+      const reqWithBody = Object.assign(req, {
+        [Symbol.asyncIterator]: async function* () {
+          if (rawBody.length) yield rawBody;
+        },
+      });
+
       const ctx: RouteContext = {
-        req,
+        req: reqWithBody,
         res,
         url,
         params,
@@ -447,6 +600,8 @@ export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessag
         auth,
         cookieSecure,
         allowFakeSignIn,
+        webhooks,
+        rawBody,
       };
       await (entry.handler as (c: RouteContext) => Promise<void>)(ctx);
     } catch (error) {

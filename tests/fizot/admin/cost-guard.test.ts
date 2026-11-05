@@ -63,7 +63,9 @@ it("destroys the Fly app and drops the store row", async () => {
   const workspace = await services.createWorkspace({ plan: "home", ownerEmail: "a@b.co" });
   expect(fly.apps.has(workspace.appName)).toBe(true);
   await services.destroyWorkspace(workspace.id);
-  expect(fly.calls.at(-1)).toBe(`destroyApp:${workspace.appName}`);
+  const receipt = await services.runDeletionJob(workspace.id);
+  expect(receipt.status).toBe("complete");
+  expect(fly.calls.some((c) => c === `destroyApp:${workspace.appName}`)).toBe(true);
   expect(fly.apps.has(workspace.appName)).toBe(false);
   expect(await store.get(workspace.id)).toBeNull();
 });

@@ -138,6 +138,8 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     store,
     nonces: options.nonces ?? createMemoryNonceStore(),
     machineFetch: options.machineFetch,
+    tenant,
+    invites,
   });
   const handler = createAdminHandler({
     services,

@@ -15,13 +15,14 @@ on:
         default: lhr
         type: string
       mode:
-        description: home (sleep/wake) or team (J10 private-chat isolation)
+        description: home (sleep/wake), team (J10), or erase (J8 GDPR erasure)
         required: false
         default: home
         type: choice
         options:
           - home
           - team
+          - erase
 
 permissions:
   contents: read

@@ -1,11 +1,19 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { teamRoleScopes, type TeamRole } from "../../cloud-team.ts";
 import { CLOUD_TEAM_MEMBER_LEFT_PATH } from "../../routes/cloud-signed.ts";
+import {
+  createDeletionRunner,
+  requestDeletion,
+  type DeletionAlert,
+  type DeletionRunner,
+} from "./deletion.ts";
 import { FLY_HOME_VOLUME_GB, type FlyClient } from "./fly.ts";
+import type { InviteStore } from "./invites.ts";
 import type { NonceStore } from "./nonce-store.ts";
 import { planFlags, type PlanId } from "./plans.ts";
 import { mintBootstrapSecret, signAdminRequest } from "./signer.ts";
 import type { WorkspaceRecord, WorkspaceStore } from "./store.ts";
+import type { TenantStore } from "./tenant.ts";
 
 export type AdminConfig = {
   adminUrl: string;
@@ -18,6 +26,9 @@ export type AdminConfig = {
   /** Signed machine HTTP for health/power/pairing. Tests inject a fake. */
   machineFetch?: typeof fetch;
   now?: () => number;
+  tenant?: TenantStore;
+  invites?: InviteStore;
+  deletionAlert?: DeletionAlert;
 };
 
 export type CreateWorkspaceInput = {
@@ -25,6 +36,8 @@ export type CreateWorkspaceInput = {
   ownerEmail?: string;
   teamId?: string;
   teamName?: string;
+  /** Idempotent create key — same requestId never makes a second Fly app. */
+  requestId?: string;
 };
 
 /** Surface undici/node fetch cause (code, hostname) — "fetch failed" alone is useless. */
@@ -49,6 +62,15 @@ export function createAdminServices(config: AdminConfig) {
   const machineFetch = config.machineFetch ?? fetch;
   const now = config.now ?? Date.now;
 
+  const deletionRunner: DeletionRunner = createDeletionRunner({
+    store: config.store,
+    fly: config.fly,
+    tenant: config.tenant,
+    invites: config.invites,
+    now,
+    alert: config.deletionAlert,
+  });
+
   async function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceRecord> {
     const flags = planFlags(input.plan);
     if (!flags) throw Object.assign(new Error("unknown_plan"), { status: 400 });
@@ -59,73 +81,105 @@ export function createAdminServices(config: AdminConfig) {
       throw Object.assign(new Error("owner_required"), { status: 400 });
     }
 
+    const requestId = (input.requestId ?? randomUUID()).trim();
+    if (!requestId) throw Object.assign(new Error("request_id_required"), { status: 400 });
+    const existing = await config.store.getByRequestId(requestId);
+    if (existing) return existing;
+
     const id = randomUUID();
     const machineId = `cm-${id.replace(/-/g, "").slice(0, 16)}`;
     const appName = `fizot-${machineId}`.toLowerCase();
     const network = `fizot-net-${machineId}`;
     const publicUrl = `https://${appName}.fly.dev`;
     const bootstrapSecret = mintBootstrapSecret();
+    const createdAt = new Date(now()).toISOString();
 
-    await config.fly.createApp({ appName, org: config.flyOrg, network });
-    // Machines API apps have no public IP until allocated; without this, *.fly.dev fetch fails.
-    await config.fly.allocateIps(appName);
-    const volume = await config.fly.createVolume({
-      appName,
-      name: "omb_home",
-      region: config.flyRegion,
-      sizeGb: flags.volumeGb || FLY_HOME_VOLUME_GB,
-    });
-    const secrets = await config.fly.setSecrets({
-      appName,
-      secrets: {
-        OMB_CLOUD_ADMIN_URL: config.adminUrl,
-        OMB_CLOUD_BOOTSTRAP_SECRET: bootstrapSecret,
-      },
-    });
-    const env: Record<string, string> = {
-      OMB_CLOUD_ROLE: flags.role,
-      OMB_CLOUD_MACHINE_ID: machineId,
-      OMB_PUBLIC_URL: publicUrl,
-      // Cold wake after stop: Caddy holds until the server listens (cloud-pro.md).
-      OMB_CLOUD_EDGE_HOLD: "30s",
-    };
-    if (flags.role === "team" && input.teamId && input.teamName) {
-      env.OMB_CLOUD_TEAM_ID = input.teamId;
-      env.OMB_CLOUD_TEAM_NAME = input.teamName;
-    }
-    const machine = await config.fly.createMachine({
-      appName,
-      region: config.flyRegion,
-      name: "home",
-      image: config.machineImage,
-      volumeId: volume.id,
-      env,
-      guest: {
-        cpu_kind: "shared",
-        cpus: flags.cpus,
-        memory_mb: flags.memoryMb,
-      },
-      autoDestroy: true,
-      minSecretsVersion: secrets.version || undefined,
-    });
-
-    const record: WorkspaceRecord = {
+    const stub: WorkspaceRecord = {
       id,
       plan: input.plan,
       appName,
       network,
       machineId,
-      flyMachineId: machine.id,
-      flyVolumeId: volume.id,
+      flyMachineId: "",
+      flyVolumeId: "",
       publicUrl,
       role: flags.role,
       bootstrapSecret,
-      createdAt: new Date(now()).toISOString(),
+      createdAt,
+      requestId,
+      state: "requested",
+      stateChangedAt: createdAt,
+      stateReason: "create_requested",
       ...(input.ownerEmail ? { ownerEmail: input.ownerEmail.trim().toLowerCase() } : {}),
       ...(input.teamId ? { teamId: input.teamId } : {}),
       ...(input.teamName ? { teamName: input.teamName } : {}),
     };
-    return config.store.create(record);
+    await config.store.create(stub);
+    await config.store.transition(id, "creating", "provision_start", now);
+
+    try {
+      const priorApp = await config.fly.getApp(appName);
+      if (!priorApp) {
+        await config.fly.createApp({ appName, org: config.flyOrg, network });
+      }
+      // Machines API apps have no public IP until allocated; without this, *.fly.dev fetch fails.
+      await config.fly.allocateIps(appName).catch(() => undefined);
+      let volumes = await config.fly.listVolumes(appName).catch(() => []);
+      let volume = volumes[0];
+      if (!volume) {
+        volume = await config.fly.createVolume({
+          appName,
+          name: "omb_home",
+          region: config.flyRegion,
+          sizeGb: flags.volumeGb || FLY_HOME_VOLUME_GB,
+        });
+      }
+      const secrets = await config.fly.setSecrets({
+        appName,
+        secrets: {
+          OMB_CLOUD_ADMIN_URL: config.adminUrl,
+          OMB_CLOUD_BOOTSTRAP_SECRET: bootstrapSecret,
+        },
+      });
+      const env: Record<string, string> = {
+        OMB_CLOUD_ROLE: flags.role,
+        OMB_CLOUD_MACHINE_ID: machineId,
+        OMB_PUBLIC_URL: publicUrl,
+        // Cold wake after stop: Caddy holds until the server listens (cloud-pro.md).
+        OMB_CLOUD_EDGE_HOLD: "30s",
+      };
+      if (flags.role === "team" && input.teamId && input.teamName) {
+        env.OMB_CLOUD_TEAM_ID = input.teamId;
+        env.OMB_CLOUD_TEAM_NAME = input.teamName;
+      }
+      let machines = await config.fly.listMachines(appName).catch(() => []);
+      let machine = machines[0];
+      if (!machine) {
+        machine = await config.fly.createMachine({
+          appName,
+          region: config.flyRegion,
+          name: "home",
+          image: config.machineImage,
+          volumeId: volume.id,
+          env,
+          guest: {
+            cpu_kind: "shared",
+            cpus: flags.cpus,
+            memory_mb: flags.memoryMb,
+          },
+          autoDestroy: true,
+          minSecretsVersion: secrets.version || undefined,
+        });
+      }
+      await config.store.update(id, {
+        flyMachineId: machine.id,
+        flyVolumeId: volume.id,
+      });
+      return config.store.transition(id, "ready", "provision_complete", now);
+    } catch (error) {
+      await config.store.transition(id, "failed", `provision_error:${error instanceof Error ? error.message : String(error)}`, now).catch(() => undefined);
+      throw error;
+    }
   }
 
   async function signedMachineGet(workspace: WorkspaceRecord, pathAndQuery: string): Promise<Response> {
@@ -337,12 +391,32 @@ export function createAdminServices(config: AdminConfig) {
     return { status: response.status, body, workspaceId: workspace.id };
   }
 
-  async function destroyWorkspace(id: string): Promise<{ destroyed: true; appName: string }> {
+  /**
+   * Marks deleting + enqueues the deletion job. Returns immediately with the
+   * receipt; callers (tests / erase mode) may await runDeletionJob.
+   */
+  async function destroyWorkspace(id: string): Promise<{
+    destroyed: false;
+    deleting: true;
+    appName: string;
+    receipt: Awaited<ReturnType<typeof requestDeletion>>;
+  }> {
     const workspace = await config.store.get(id);
     if (!workspace) throw Object.assign(new Error("not_found"), { status: 404 });
-    await config.fly.destroyApp(workspace.appName);
-    await config.store.delete(workspace.id);
-    return { destroyed: true, appName: workspace.appName };
+    const receipt = await deletionRunner.requestDeletion(id, "owner_delete");
+    // Kick the job; do not block the HTTP response on full completion.
+    void deletionRunner.runOnce(id).catch((error) => {
+      console.error(`deletion_job_error:${id}:${error instanceof Error ? error.message : String(error)}`);
+    });
+    return { destroyed: false, deleting: true, appName: workspace.appName, receipt };
+  }
+
+  async function runDeletionJob(id: string) {
+    return deletionRunner.runOnce(id);
+  }
+
+  async function getDeletionReceipt(id: string) {
+    return config.store.getDeletionReceipt(id);
   }
 
   return {
@@ -354,6 +428,9 @@ export function createAdminServices(config: AdminConfig) {
     workspacePairing,
     workspaceMemberLeft,
     destroyWorkspace,
+    runDeletionJob,
+    getDeletionReceipt,
+    deletionRunner,
     store: config.store,
     fly: config.fly,
   };

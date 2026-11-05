@@ -67,6 +67,9 @@ export interface FlyClient {
   setSecrets(input: FlySetSecretsInput): Promise<FlySecretsResult>;
   createMachine(input: FlyCreateMachineInput): Promise<FlyMachine>;
   destroyApp(appName: string): Promise<void>;
+  destroyMachine(appName: string, machineId: string): Promise<void>;
+  destroyVolume(appName: string, volumeId: string): Promise<void>;
+  unsetSecrets(appName: string): Promise<void>;
   listApps(org: string): Promise<Array<{ name: string; id: string }>>;
   listMachines(appName: string): Promise<FlyMachine[]>;
   getMachine(appName: string, machineId: string): Promise<FlyMachine>;
@@ -294,6 +297,25 @@ export function createFakeFlyClient(): FlyClient & {
         throw new Error(`fly wait: expected ${state}, got ${found[1].state}`);
       }
     },
+    async destroyMachine(appName, machineId) {
+      calls.push(`destroyMachine:${appName}:${machineId}`);
+      const key = [...machines.entries()].find(([k, m]) =>
+        k.startsWith(`${appName}/`) && m.id === machineId)?.[0];
+      if (!key) throw new Error(`fly machine ${machineId} missing 404`);
+      const m = machines.get(key)!;
+      machines.set(key, { ...m, state: "destroyed" });
+    },
+    async destroyVolume(appName, volumeId) {
+      calls.push(`destroyVolume:${appName}:${volumeId}`);
+      const key = [...volumes.entries()].find(([k, v]) =>
+        k.startsWith(`${appName}/`) && v.id === volumeId)?.[0];
+      if (!key) throw new Error(`fly volume ${volumeId} missing 404`);
+      volumes.delete(key);
+    },
+    async unsetSecrets(appName) {
+      calls.push(`unsetSecrets:${appName}`);
+      secrets.delete(appName);
+    },
     async destroyApp(appName) {
       calls.push(`destroyApp:${appName}`);
       apps.delete(appName);
@@ -458,6 +480,20 @@ export function createFlyMachinesClient(options: FlyMachinesClientOptions): FlyC
         ...(input.minSecretsVersion ? { min_secrets_version: input.minSecretsVersion } : {}),
       });
       return mapMachine(json);
+    },
+    async destroyMachine(appName, machineId) {
+      await api("DELETE", `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}?force=true`);
+    },
+    async destroyVolume(appName, volumeId) {
+      await api("DELETE", `/v1/apps/${encodeURIComponent(appName)}/volumes/${encodeURIComponent(volumeId)}`);
+    },
+    async unsetSecrets(appName) {
+      // Fly clears secrets with the app; unset is a no-op when app is already gone.
+      try {
+        await api("POST", `/v1/apps/${encodeURIComponent(appName)}/secrets`, { values: {} });
+      } catch (error) {
+        if (!String(error).includes("404")) throw error;
+      }
     },
     async destroyApp(appName) {
       await api("DELETE", `/v1/apps/${encodeURIComponent(appName)}?force=true`);
