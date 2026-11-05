@@ -53,7 +53,7 @@ it("J10 fake: member A private chat invisible to B and Admin; removal deletes it
       req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
       req.on("end", () => {
         const email = JSON.parse(Buffer.concat(chunks).toString("utf8")).email as string;
-        for (const [id, chat] of [...chats.entries()]) {
+        for (const [id, chat] of chats) {
           if (chat.ownerEmail === email) chats.delete(id);
         }
         res.writeHead(200, { "content-type": "application/json" });

@@ -224,14 +224,15 @@ async function edgeOpenToken(cookie, publicUrl) {
 }
 
 async function machineFetch(publicUrl, machineToken, method, pathName, body) {
-  const res = await fetch(`${publicUrl}${pathName}`, {
+  const init = {
     method,
     headers: {
       authorization: `Bearer ${machineToken}`,
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const res = await fetch(`${publicUrl}${pathName}`, init);
   const json = await res.json().catch(() => ({}));
   return { status: res.status, body: json };
 }
