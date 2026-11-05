@@ -34,6 +34,8 @@ async function signIn(url: string, email: string): Promise<string> {
 
 /** Expected HTTP status for each auth level × cookie persona. */
 function expectedFor(route: { auth: string; minRole?: string; id: string }, persona: string): number {
+  // Public webhook verifies its own signature — unsigned probes must never reach the handler success path.
+  if (route.id === "admin.webhook") return 401;
   if (route.auth === "public") return 200;
   if (persona === "none") return 401;
   if (route.auth === "session") return 200;
@@ -251,7 +253,10 @@ it("TC36: every registry route — none / stranger / member / admin / owner", as
             want = 200;
           }
         }
-        if (route.id === "admin.destroyWorkspace" && persona.name === "owner") want = 200;
+        if (route.id === "admin.destroyWorkspace" && persona.name === "owner") want = 202;
+        if (route.id === "admin.eraseAccount" && persona.cookie) want = 400; // confirm_required
+        if (route.id === "admin.deletionReceipt" && persona.cookie) want = 404; // no receipt yet on live ws
+        if (route.id === "admin.webhook") want = 401; // unsigned / badly signed
 
         let body: string | undefined;
         if (route.method !== "GET" && route.method !== "DELETE") {
@@ -276,16 +281,22 @@ it("TC36: every registry route — none / stranger / member / admin / owner", as
             body = JSON.stringify({ idleMinutes: 1, waitMs: 1000 });
           } else if (route.id === "admin.wake") {
             body = JSON.stringify({ healthWaitMs: 1000 });
+          } else if (route.id === "admin.webhook") {
+            body = JSON.stringify({ id: "evt_unsigned", type: "test" });
           } else {
             body = "{}";
           }
+        }
+        if (route.id === "admin.eraseAccount" && persona.cookie) {
+          body = JSON.stringify({}); // missing confirm → 400
         }
 
         const pathNow = route.path
           .replace(":workspaceId", route.id === "admin.destroyWorkspace" ? destroyWsId! : wsId)
           .replace(":accountId", accountIdForPath)
           .replace(":inviteId", inviteIdForPath)
-          .replace(":token", pendingToken);
+          .replace(":token", pendingToken)
+          .replace(":provider", "generic");
 
         const res = await fetch(`${adminSrv.url}${pathNow}`, {
           method: route.method,
@@ -310,7 +321,7 @@ it("TC36: every registry route — none / stranger / member / admin / owner", as
             headers: { cookie: ownerCookie },
           });
         }
-        if (route.id === "admin.destroyWorkspace" && persona.name === "owner" && res.status === 200) {
+        if (route.id === "admin.destroyWorkspace" && persona.name === "owner" && res.status === 202) {
           destroyWsId = null;
         }
       }

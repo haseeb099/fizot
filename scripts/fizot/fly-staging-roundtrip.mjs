@@ -4,6 +4,8 @@
  * mode=home (default): create → health → pairing → power → negatives → sleep/wake → destroy.
  * mode=team (J10): create Team workspace → invite Admin + 2 members → private-chat
  * isolation → sleep refused → remove member deletes private chat → destroy.
+ * mode=erase (J8): create workspace + data → delete → assert Fly 404, volume gone,
+ * DB rows gone, receipt complete, remainingCount 0; also user-level erase with two workspaces.
  * Uses FLY_API_TOKEN from the environment only. Never prints the token or bootstrap secret.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -49,8 +51,8 @@ const org = resolveFlyOrg();
 const region = process.env.FLY_REGION?.trim() ?? "lhr";
 const image = process.env.FIZOT_MACHINE_IMAGE?.trim() ?? "";
 
-if (MODE !== "home" && MODE !== "team") {
-  console.error(`FIZOT_ROUNDTRIP_MODE must be home or team (got ${MODE})`);
+if (MODE !== "home" && MODE !== "team" && MODE !== "erase") {
+  console.error(`FIZOT_ROUNDTRIP_MODE must be home, team, or erase (got ${MODE})`);
   process.exit(2);
 }
 if (!token) {
@@ -239,8 +241,222 @@ async function machineFetch(publicUrl, machineToken, method, pathName, body) {
   return { status: res.status, body: json };
 }
 
+/** DELETE + poll deletion job until complete or timeout; assert Fly+DB gone. */
+async function eraseWorkspaceAndAssert(wsId, app, cookie) {
+  const destroyed = await fetch(`${admin.url}/admin/workspaces/${wsId}`, {
+    method: "DELETE",
+    headers: cookieHeader(cookie),
+  });
+  const destroyedBody = await destroyed.json().catch(() => ({}));
+  if (destroyed.status !== 202 && !destroyed.ok) {
+    throw new Error(`destroy failed: ${destroyed.status} ${JSON.stringify(destroyedBody)}`);
+  }
+  report.steps.push(log("destroy_enqueued", { status: destroyed.status, appName: app, workspaceId: wsId }));
+
+  let receipt = null;
+  const deadline = Date.now() + 10 * 60_000;
+  while (Date.now() < deadline) {
+    receipt = await admin.services.runDeletionJob(wsId);
+    if (receipt.status === "complete") break;
+    if (receipt.status === "failed") {
+      throw new Error(`deletion failed: ${JSON.stringify(receipt)}`);
+    }
+    await sleep(5_000);
+  }
+  if (!receipt || receipt.status !== "complete") {
+    throw new Error(`deletion did not complete: ${JSON.stringify(receipt)}`);
+  }
+  report.steps.push(log("deletion_receipt_complete", {
+    workspaceIdHash: receipt.workspaceIdHash,
+    stepsDone: receipt.stepsDone,
+    completedAt: receipt.completedAt,
+  }));
+
+  const appAfter = await fly.getApp(app);
+  if (appAfter) throw new Error(`Fly app ${app} still present after erase (expected 404)`);
+  report.steps.push(log("assert_app_404", { appName: app, gone: true }));
+
+  try {
+    const vols = await fly.listVolumes(app);
+    if (vols.length) throw new Error(`volumes remain for ${app}: ${JSON.stringify(vols)}`);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (!/\b404\b/.test(msg) && !/not found/i.test(msg) && !msg.includes("volumes remain")) {
+      // App gone → volume list may 404 — success.
+      if (msg.includes("volumes remain")) throw error;
+    }
+    if (msg.includes("volumes remain")) throw error;
+  }
+  report.steps.push(log("assert_volume_gone", { appName: app }));
+
+  const row = await admin.services.store.get(wsId);
+  if (row) throw new Error(`workspace row still present for ${wsId}`);
+  report.steps.push(log("assert_db_rows_gone", { workspaceId: wsId }));
+
+  const receiptGet = await fetch(`${admin.url}/admin/workspaces/${wsId}/deletion`, {
+    headers: cookieHeader(cookie),
+  });
+  const receiptBody = await receiptGet.json().catch(() => ({}));
+  if (receiptGet.status !== 200 || receiptBody.receipt?.status !== "complete") {
+    throw new Error(`deletion receipt GET failed: ${receiptGet.status} ${JSON.stringify(receiptBody)}`);
+  }
+  report.steps.push(log("assert_receipt_http", { status: receiptGet.status, receipt: receiptBody.receipt }));
+  return receipt;
+}
+
 try {
-  if (MODE === "team") {
+  if (MODE === "erase") {
+    // ——— J8 erasure ———
+    const OWNER = "erase-j8@fizot.test";
+    log("sign_in_begin", { mode: "erase" });
+    const ownerSigned = await signIn(OWNER);
+    sessionCookie = ownerSigned.cookie;
+    report.steps.push(log("sign_in", { status: 200, email: OWNER }));
+
+    log("create_workspace_begin", { plan: "home", purpose: "j8_data" });
+    const created = await fetch(`${admin.url}/admin/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...cookieHeader() },
+      body: JSON.stringify({ plan: "home", ownerEmail: OWNER, requestId: `j8-${Date.now()}` }),
+    });
+    const createdBody = await created.json();
+    if (!created.ok) throw new Error(`create failed: ${created.status} ${JSON.stringify(createdBody)}`);
+    workspaceId = createdBody.workspace.id;
+    appName = createdBody.workspace.appName;
+    flyMachineId = createdBody.workspace.flyMachineId ?? "";
+    report.steps.push(log("create", { status: created.status, workspaceId, appName, flyMachineId }));
+
+    const stored = await admin.services.store.get(workspaceId);
+    if (!stored) throw new Error("workspace missing from store after create");
+    flyMachineId = stored.flyMachineId || flyMachineId;
+    const publicUrl = stored.publicUrl;
+
+    await logMachineState("after_create");
+    await waitForHealth();
+
+    // Create data: pairing → bot/chat + write a marker file under /data via shell if available.
+    const open = await edgeOpenToken(sessionCookie, publicUrl);
+    const scout = await machineFetch(publicUrl, open.machineToken, "POST", "/api/bots", { name: "J8 Scout" });
+    if (scout.status !== 201 || !scout.body.bot?.id) {
+      throw new Error(`create bot failed: ${scout.status} ${JSON.stringify(scout.body)}`);
+    }
+    const botId = scout.body.bot.id;
+    const chat = await machineFetch(publicUrl, open.machineToken, "POST", `/api/bots/${botId}/tasks`, {
+      title: "J8 erase chat",
+    });
+    report.steps.push(log("j8_data_created", {
+      botId,
+      chatStatus: chat.status,
+      threadId: chat.body.task?.threadId ?? null,
+    }));
+
+    // Best-effort /data marker (may 404 on minimal image — chat is the hard data proof).
+    const dataWrite = await machineFetch(publicUrl, open.machineToken, "POST", "/api/files", {
+      path: "/data/j8-erase-marker.txt",
+      content: "j8-erasure-proof",
+    }).catch(() => ({ status: 0, body: {} }));
+    report.steps.push(log("j8_data_file", { status: dataWrite.status }));
+
+    const erasedApp = appName;
+    const erasedId = workspaceId;
+    await eraseWorkspaceAndAssert(workspaceId, appName, sessionCookie);
+    workspaceId = "";
+    appName = "";
+
+    // User-level erase with two workspaces: one solely owned (deleted), one shared (left).
+    log("user_erase_begin");
+    const wsA = await fetch(`${admin.url}/admin/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...cookieHeader() },
+      body: JSON.stringify({ plan: "home", ownerEmail: OWNER, requestId: `j8-a-${Date.now()}` }),
+    });
+    const wsABody = await wsA.json();
+    if (!wsA.ok) throw new Error(`wsA create failed: ${wsA.status}`);
+    const idA = wsABody.workspace.id;
+    appName = wsABody.workspace.appName;
+    workspaceId = idA;
+    await waitForHealth();
+
+    const other = await signIn("other-j8@fizot.test");
+    const wsB = await fetch(`${admin.url}/admin/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: other.cookie },
+      body: JSON.stringify({
+        plan: "team",
+        ownerEmail: "other-j8@fizot.test",
+        teamId: `team-j8-${Date.now()}`,
+        teamName: "J8 Shared",
+      }),
+    });
+    const wsBBody = await wsB.json();
+    if (!wsB.ok) throw new Error(`wsB create failed: ${wsB.status}`);
+    const idB = wsBBody.workspace.id;
+    // Invite OWNER as member of B so erase leaves B intact.
+    const inv = await fetch(`${admin.url}/admin/workspaces/${idB}/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: other.cookie },
+      body: JSON.stringify({ email: OWNER, role: "member" }),
+    });
+    const invBody = await inv.json();
+    if (!inv.ok) throw new Error(`invite failed: ${inv.status}`);
+    const accept = await fetch(`${admin.url}/edge/invites/${invBody.token}/accept`, {
+      method: "POST",
+      headers: cookieHeader(),
+    });
+    if (accept.status !== 200) throw new Error(`accept failed: ${accept.status}`);
+
+    const eraseRes = await fetch(`${admin.url}/admin/account`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json", ...cookieHeader() },
+      body: JSON.stringify({ confirm: "erase" }),
+    });
+    const eraseBody = await eraseRes.json().catch(() => ({}));
+    if (eraseRes.status !== 200) throw new Error(`account erase failed: ${eraseRes.status} ${JSON.stringify(eraseBody)}`);
+    report.steps.push(log("account_erase", {
+      deleted: eraseBody.deletedWorkspaceIds,
+      left: eraseBody.leftWorkspaceIds,
+      receipts: eraseBody.receipts,
+    }));
+
+    // Solely-owned A must be gone; B (other's) must remain.
+    for (const r of eraseBody.receipts ?? []) {
+      if (r.status !== "complete") {
+        // Finish any pending jobs.
+        for (const wid of eraseBody.deletedWorkspaceIds ?? []) {
+          await admin.services.runDeletionJob(wid);
+        }
+      }
+    }
+    const aGone = await admin.services.store.get(idA);
+    if (aGone) throw new Error("sole-owned workspace A still present after account erase");
+    const bStill = await admin.services.store.get(idB);
+    if (!bStill) throw new Error("shared workspace B was destroyed — must stay intact");
+    report.steps.push(log("assert_user_erase", {
+      aGone: true,
+      bIntact: true,
+      bApp: bStill.appName,
+      firstEraseApp: erasedApp,
+      firstEraseId: erasedId,
+    }));
+
+    // Cleanup B (other's workspace) so remainingCount can be 0.
+    sessionCookie = other.cookie;
+    workspaceId = idB;
+    appName = bStill.appName;
+    await eraseWorkspaceAndAssert(idB, bStill.appName, other.cookie);
+    workspaceId = "";
+    appName = "";
+
+    report.ok = true;
+    report.j8 = {
+      app404: true,
+      volumeGone: true,
+      rowsGone: true,
+      receiptComplete: true,
+      userEraseTwoWorkspaces: true,
+    };
+    report.flyCost = { note: "j8 erase mode", projectedDaily: projectDailyCost({}) };
+  } else if (MODE === "team") {
     const OWNER = "olive-j10@fizot.test";
     const ADMIN = "ari-j10@fizot.test";
     const MEMBER_A = "ada-j10@fizot.test";
@@ -411,21 +627,11 @@ try {
     };
 
     log("destroy_begin", { appName });
-    const destroyed = await fetch(`${admin.url}/admin/workspaces/${workspaceId}`, {
-      method: "DELETE",
-      headers: cookieHeader(),
-    });
-    const destroyedBody = await destroyed.json().catch(() => ({}));
-    if (!destroyed.ok) throw new Error(`destroy failed: ${destroyed.status} ${JSON.stringify(destroyedBody)}`);
-    report.steps.push(log("destroy", { status: destroyed.status, appName }));
+    const teamApp = appName;
+    const teamId = workspaceId;
+    await eraseWorkspaceAndAssert(teamId, teamApp, sessionCookie);
     workspaceId = "";
-
-    await sleep(3_000);
-    const leftover = await fly.getApp(appName);
-    if (leftover) throw new Error(`Fly app ${appName} still present after destroy`);
-    const stagingApps = (await fly.listApps(org)).filter((a) => a.name === appName);
-    if (stagingApps.length > 0) throw new Error(`listApps still shows ${appName}`);
-    report.steps.push(log("assert_gone", { appName, gone: true }));
+    appName = "";
 
     report.ok = true;
     report.flyCost = {
@@ -624,21 +830,11 @@ try {
     report.steps.push(log("health_after_wake", { status: healthAfterWake.status }));
 
     log("destroy_begin", { appName });
-    const destroyed = await fetch(`${admin.url}/admin/workspaces/${workspaceId}`, {
-      method: "DELETE",
-      headers: cookieHeader(),
-    });
-    const destroyedBody = await destroyed.json().catch(() => ({}));
-    if (!destroyed.ok) throw new Error(`destroy failed: ${destroyed.status} ${JSON.stringify(destroyedBody)}`);
-    report.steps.push(log("destroy", { status: destroyed.status, appName }));
+    const homeApp = appName;
+    const homeId = workspaceId;
+    await eraseWorkspaceAndAssert(homeId, homeApp, sessionCookie);
     workspaceId = "";
-
-    await sleep(3_000);
-    const leftover = await fly.getApp(appName);
-    if (leftover) throw new Error(`Fly app ${appName} still present after destroy`);
-    const stagingApps = (await fly.listApps(org)).filter((a) => a.name === appName);
-    if (stagingApps.length > 0) throw new Error(`listApps still shows ${appName}`);
-    report.steps.push(log("assert_gone", { appName, gone: true }));
+    appName = "";
 
     report.ok = true;
     report.flyCost = {

@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-46 Workspace provisioning, deletion job and webhooks (P4.2)
+
+- Why we changed it: UK GDPR erasure depends on fail-loud, idempotent, provable workspace deletion. A silent failure is a legal breach.
+- How it works: Ownership changes only via explicit transfer (self-demote refused; exactly one owner). Workspace state machine `requested → creating → ready → sleeping|awake → deleting → deleted|failed` with Postgres transitions. Idempotent create by `requestId`; reconciler compares Postgres with Fly `fizot-cm-*` apps (orphans >1h reported, never auto-deleted here). `DELETE /admin/workspaces/:id` marks deleting and runs a job (machines → volume → app → secrets → rows → verify); retries with backoff; alerts at 12h; marks failed at 24h with hourly alerts; deletion receipt (workspace id hash, no PII) via `GET .../deletion`. User erase deletes solely-owned workspaces and leaves others via member-left. `POST /admin/webhooks/:provider` (public, signature-checked) with generic HMAC + Stripe `t=,v1=` and independent KAT; exactly-once dedupe. Fly `mode=erase` (J8). Daily gate: fakes only.
+- Why it is necessary: P4.2 / FZ-25.
+- Impact: No Fly spend on the daily gate. Manual Fly erase costs staging machines; auto-destroy; remainingCount must be 0. AD-E J8 is implemented: fly-staging-roundtrip mode=erase, fly_org=fizot, run 42109759178.
+- Rollback? Revert the PR.
+- Files / Patch IDs: PATCH-37. https://app.notion.com/p/40fdd43e0a9d8179883bca2f84ea977a
+- Related tasks: FZ-25 (P4.2). Patch: https://app.notion.com/p/40fdd43e0a9d8181a04cd441c6af89d4
+
 ## CL-45 Fix Fly staging cleanup org default (fizot)
 
 - Why we changed it: Scheduled cleanup run 42027599961 failed with Fly `GET /v1/apps?org_slug=fizot-staging` → 404 organization not found. The real org slug is `fizot`.

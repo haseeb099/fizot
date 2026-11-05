@@ -38,5 +38,5 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: AD-I tenant routing + roles/invites + TC36 (Postgres)
-        run: pnpm exec vitest run tests/fizot/admin/tenant-routing.postgres.test.ts tests/fizot/admin/tenant.test.ts tests/fizot/admin/roles.test.ts tests/fizot/admin/invites-members.test.ts tests/fizot/admin/tc36-route-auth.test.ts tests/fizot/admin/signer-kat.test.ts
+      - name: AD-I tenant routing + roles/invites + TC36 + lifecycle/deletion/webhooks (Postgres)
+        run: pnpm exec vitest run tests/fizot/admin/tenant-routing.postgres.test.ts tests/fizot/admin/tenant.test.ts tests/fizot/admin/roles.test.ts tests/fizot/admin/roles-transfer.test.ts tests/fizot/admin/invites-members.test.ts tests/fizot/admin/tc36-route-auth.test.ts tests/fizot/admin/signer-kat.test.ts tests/fizot/admin/lifecycle.test.ts tests/fizot/admin/lifecycle-deletion.postgres.test.ts tests/fizot/admin/webhook.test.ts tests/fizot/admin/deletion.test.ts tests/fizot/admin/deletion-worker.test.ts tests/fizot/admin/deletion-alerts.test.ts

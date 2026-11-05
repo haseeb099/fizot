@@ -36,6 +36,11 @@ export const ROUTE_REGISTRY: readonly RouteDef[] = [
   { id: "admin.createWorkspace", method: "POST", path: "/admin/workspaces", auth: "session", surface: "admin" },
   { id: "admin.listWorkspaces", method: "GET", path: "/admin/workspaces", auth: "session", surface: "admin" },
   { id: "admin.destroyWorkspace", method: "DELETE", path: "/admin/workspaces/:workspaceId", auth: "membership", minRole: "owner", surface: "admin" },
+  /** Membership while deleting; after rows are gone the handler serves the receipt to any session that knows the id (hash only, no PII). */
+  { id: "admin.deletionReceipt", method: "GET", path: "/admin/workspaces/:workspaceId/deletion", auth: "session", surface: "admin" },
+  { id: "admin.eraseAccount", method: "DELETE", path: "/admin/account", auth: "session", surface: "admin" },
+  /** Public allow-list: signature verified inside the handler (never skip). */
+  { id: "admin.webhook", method: "POST", path: "/admin/webhooks/:provider", auth: "public", surface: "admin" },
   { id: "admin.health", method: "GET", path: "/admin/workspaces/:workspaceId/health", auth: "membership", minRole: "member", surface: "admin" },
   { id: "admin.power", method: "GET", path: "/admin/workspaces/:workspaceId/power", auth: "membership", minRole: "member", surface: "admin" },
   { id: "admin.sleep", method: "POST", path: "/admin/workspaces/:workspaceId/sleep", auth: "membership", minRole: "admin", surface: "admin" },

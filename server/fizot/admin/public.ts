@@ -13,7 +13,51 @@ export { createAdminServices, describeFetchError } from "./workspaces.ts";
 export { adminRequestSignature, signAdminRequest, verifyAdminRequest, ADMIN_SIGN_SKEW_S, ADMIN_NONCE_TTL_MS, mintBootstrapSecret, mintNonce, bodyHash } from "./signer.ts";
 export { planFlags, assertPlanAllows, seatMaxForPlan } from "./plans.ts";
 export { redactForLog, safeLogLine } from "./redact.ts";
-export { mayChangeMemberRole, mayRemoveMember, mayInviteRole } from "./roles.ts";
+export { mayChangeMemberRole, mayRemoveMember, mayInviteRole, mayTransferOwnership } from "./roles.ts";
+export {
+  WORKSPACE_STATES,
+  mayTransition,
+  assertTransition,
+  isWorkspaceState,
+} from "./lifecycle.ts";
+export {
+  hashWorkspaceId,
+  requestDeletion,
+  createDeletionRunner,
+  eraseAccount,
+  countWorkspaceRefs,
+  DELETION_STEPS,
+  DELETION_ALERT_12H_MS,
+  DELETION_FAIL_24H_MS,
+  DELETION_LEASE_TTL_MS,
+} from "./deletion.ts";
+export {
+  createDeletionWorker,
+  shouldStartDeletionWorker,
+  DEFAULT_DELETION_WORKER_INTERVAL_MS,
+} from "./deletion-worker.ts";
+export {
+  createDeletionAlert,
+  resolveDeletionAlert,
+  alertChannelsConfigured,
+  assertAlertChannelsForProduction,
+  buildDeletionAlertPayload,
+  signAlertBody,
+  verifyAlertSignature,
+  openOrUpdateGithubIssue,
+} from "./alerts.ts";
+export { reconcileWorkspaces, ORPHAN_REPORT_AGE_MS } from "./reconcile.ts";
+export {
+  createMemoryWebhookEventStore,
+  createPostgresWebhookEventStore,
+  deliverWebhookEvent,
+  verifyHmacSha256,
+  verifyStripeSignature,
+  signGenericHmac,
+  signStripeHeader,
+  resolveWebhookSecret,
+  WEBHOOK_MAX_SKEW_SEC,
+} from "./webhooks.ts";
 export {
   createMemoryInviteStore,
   createPostgresInviteStore,

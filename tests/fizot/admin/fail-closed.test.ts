@@ -51,9 +51,11 @@ it("production mode without ADMIN_DATABASE_URL refuses to start", async () => {
   const prevNode = process.env.NODE_ENV;
   const prevFizot = process.env.FIZOT_ENV;
   const prevDb = process.env.ADMIN_DATABASE_URL;
+  const prevWebhook = process.env.FIZOT_ALERT_WEBHOOK_URL;
   delete process.env.ADMIN_DATABASE_URL;
   process.env.NODE_ENV = "production";
   delete process.env.FIZOT_ENV;
+  process.env.FIZOT_ALERT_WEBHOOK_URL = "https://alerts.example/hook";
   try {
     await expect(createAdminServer({ auth: new UnconfiguredAuthProvider() })).rejects.toThrow(/ADMIN_DATABASE_URL/);
   } finally {
@@ -62,6 +64,42 @@ it("production mode without ADMIN_DATABASE_URL refuses to start", async () => {
     else process.env.FIZOT_ENV = prevFizot;
     if (prevDb === undefined) delete process.env.ADMIN_DATABASE_URL;
     else process.env.ADMIN_DATABASE_URL = prevDb;
+    if (prevWebhook === undefined) delete process.env.FIZOT_ALERT_WEBHOOK_URL;
+    else process.env.FIZOT_ALERT_WEBHOOK_URL = prevWebhook;
+  }
+});
+
+it("production mode without an alert channel refuses to start", async () => {
+  const prevNode = process.env.NODE_ENV;
+  const prevFizot = process.env.FIZOT_ENV;
+  const prevWebhook = process.env.FIZOT_ALERT_WEBHOOK_URL;
+  const prevSecret = process.env.FIZOT_ALERT_WEBHOOK_SECRET;
+  const prevToken = process.env.GITHUB_TOKEN;
+  const prevRepo = process.env.GITHUB_REPOSITORY;
+  const prevAlertRepo = process.env.FIZOT_ALERT_GITHUB_REPO;
+  process.env.NODE_ENV = "production";
+  delete process.env.FIZOT_ENV;
+  delete process.env.FIZOT_ALERT_WEBHOOK_URL;
+  delete process.env.FIZOT_ALERT_WEBHOOK_SECRET;
+  delete process.env.GITHUB_TOKEN;
+  delete process.env.GITHUB_REPOSITORY;
+  delete process.env.FIZOT_ALERT_GITHUB_REPO;
+  try {
+    await expect(createAdminServer({ auth: new UnconfiguredAuthProvider() })).rejects.toThrow(/alert channel/);
+  } finally {
+    process.env.NODE_ENV = prevNode;
+    if (prevFizot === undefined) delete process.env.FIZOT_ENV;
+    else process.env.FIZOT_ENV = prevFizot;
+    if (prevWebhook === undefined) delete process.env.FIZOT_ALERT_WEBHOOK_URL;
+    else process.env.FIZOT_ALERT_WEBHOOK_URL = prevWebhook;
+    if (prevSecret === undefined) delete process.env.FIZOT_ALERT_WEBHOOK_SECRET;
+    else process.env.FIZOT_ALERT_WEBHOOK_SECRET = prevSecret;
+    if (prevToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = prevToken;
+    if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
+    else process.env.GITHUB_REPOSITORY = prevRepo;
+    if (prevAlertRepo === undefined) delete process.env.FIZOT_ALERT_GITHUB_REPO;
+    else process.env.FIZOT_ALERT_GITHUB_REPO = prevAlertRepo;
   }
 });
 
