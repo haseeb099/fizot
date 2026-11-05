@@ -257,22 +257,32 @@ export async function createPostgresTenantStore(
     revokedAt: r.revoked_at ? new Date(String(r.revoked_at)).toISOString() : null,
     rotatedFrom: r.rotated_from ? String(r.rotated_from) : null,
   });
-  const toWorkspace = (r: Record<string, unknown>): WorkspaceRecord => ({
-    id: String(r.id),
-    plan: r.plan as WorkspaceRecord["plan"],
-    appName: String(r.app_name),
-    network: String(r.network),
-    machineId: String(r.machine_id),
-    flyMachineId: String(r.fly_machine_id),
-    flyVolumeId: String(r.fly_volume_id),
-    publicUrl: String(r.public_url),
-    role: r.role as WorkspaceRecord["role"],
-    bootstrapSecret: String(r.bootstrap_secret),
-    createdAt: new Date(String(r.created_at)).toISOString(),
-    ...(r.owner_email ? { ownerEmail: String(r.owner_email) } : {}),
-    ...(r.team_id ? { teamId: String(r.team_id) } : {}),
-    ...(r.team_name ? { teamName: String(r.team_name) } : {}),
-  });
+  const toWorkspace = (r: Record<string, unknown>): WorkspaceRecord => {
+    const createdAt = new Date(String(r.created_at)).toISOString();
+    const stateRaw = String(r.state ?? "ready");
+    return {
+      id: String(r.id),
+      plan: r.plan as WorkspaceRecord["plan"],
+      appName: String(r.app_name),
+      network: String(r.network),
+      machineId: String(r.machine_id),
+      flyMachineId: String(r.fly_machine_id),
+      flyVolumeId: String(r.fly_volume_id),
+      publicUrl: String(r.public_url),
+      role: r.role as WorkspaceRecord["role"],
+      bootstrapSecret: String(r.bootstrap_secret),
+      createdAt,
+      requestId: String(r.request_id || r.id),
+      state: (["requested", "creating", "ready", "awake", "sleeping", "deleting", "deleted", "failed"].includes(stateRaw)
+        ? stateRaw
+        : "ready") as WorkspaceRecord["state"],
+      stateChangedAt: new Date(String(r.state_changed_at ?? r.created_at)).toISOString(),
+      stateReason: String(r.state_reason ?? "created"),
+      ...(r.owner_email ? { ownerEmail: String(r.owner_email) } : {}),
+      ...(r.team_id ? { teamId: String(r.team_id) } : {}),
+      ...(r.team_name ? { teamName: String(r.team_name) } : {}),
+    };
+  };
 
   const store: TenantStore & { close(): Promise<void> } = {
     async createAccount(email) {

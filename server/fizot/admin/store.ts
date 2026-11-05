@@ -263,7 +263,7 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
     lastAlertAt: r.last_alert_at ? new Date(String(r.last_alert_at)).toISOString() : null,
   });
 
-  return {
+  const api: WorkspaceStore & { close(): Promise<void> } = {
     async create(record) {
       const full = defaultLifecycle(record);
       await pool.query(
@@ -313,7 +313,7 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
       return result.rows.map(toRow);
     },
     async update(id, patch) {
-      const cur = await this.get(id);
+      const cur = await api.get(id);
       if (!cur) throw Object.assign(new Error("not_found"), { status: 404 });
       const next = { ...cur, ...patch, id: cur.id };
       await pool.query(
@@ -332,7 +332,7 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
       return next;
     },
     async transition(id, toState, reason, now = Date.now) {
-      const cur = await this.get(id);
+      const cur = await api.get(id);
       if (!cur) throw Object.assign(new Error("not_found"), { status: 404 });
       assertTransition(cur.state, toState, reason);
       const at = new Date(now()).toISOString();
@@ -341,7 +341,7 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
          VALUES ($1,$2,$3,$4,$5)`,
         [id, cur.state, toState, at, reason],
       );
-      return this.update(id, { state: toState, stateChangedAt: at, stateReason: reason });
+      return api.update(id, { state: toState, stateChangedAt: at, stateReason: reason });
     },
     async listTransitions(workspaceId) {
       const result = await pool.query(
@@ -392,4 +392,5 @@ export async function createPostgresWorkspaceStore(databaseUrl: string): Promise
       await pool.end();
     },
   };
+  return api;
 }

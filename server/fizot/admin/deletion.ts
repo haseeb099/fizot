@@ -265,9 +265,6 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
     if (receipt.status === "complete") return receipt;
 
     receipt = await maybeAlert(receipt);
-    if (receipt.status === "failed" && Date.now) {
-      // Still attempt progress after failure mark (fail-loud but keep trying).
-    }
 
     const workspace = await store.get(workspaceId);
     const appName = workspace?.appName
@@ -307,10 +304,11 @@ export function createDeletionRunner(options: DeletionRunnerOptions) {
       }
     }
 
-    if (DELETION_STEPS.every((s) => receipt.stepsDone.includes(s))) {
+    const done = receipt;
+    if (DELETION_STEPS.every((s) => done.stepsDone.includes(s))) {
       const completedAt = new Date(now()).toISOString();
       receipt = {
-        ...receipt,
+        ...done,
         status: "complete",
         completedAt,
         lastError: null,
