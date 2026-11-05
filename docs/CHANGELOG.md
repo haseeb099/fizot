@@ -11,7 +11,7 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 - Why we changed it: UK GDPR erasure depends on fail-loud, idempotent, provable workspace deletion. A silent failure is a legal breach.
 - How it works: Ownership changes only via explicit transfer (self-demote refused; exactly one owner). Workspace state machine `requested → creating → ready → sleeping|awake → deleting → deleted|failed` with Postgres transitions. Idempotent create by `requestId`; reconciler compares Postgres with Fly `fizot-cm-*` apps (orphans >1h reported, never auto-deleted here). `DELETE /admin/workspaces/:id` marks deleting and runs a job (machines → volume → app → secrets → rows → verify); retries with backoff; alerts at 12h; marks failed at 24h with hourly alerts; deletion receipt (workspace id hash, no PII) via `GET .../deletion`. User erase deletes solely-owned workspaces and leaves others via member-left. `POST /admin/webhooks/:provider` (public, signature-checked) with generic HMAC + Stripe `t=,v1=` and independent KAT; exactly-once dedupe. Fly `mode=erase` (J8). Daily gate: fakes only.
 - Why it is necessary: P4.2 / FZ-25.
-- Impact: No Fly spend on the daily gate. Manual Fly erase costs staging machines; auto-destroy; remainingCount must be 0. AD-E J8 stays planned until a green Fly erase run.
+- Impact: No Fly spend on the daily gate. Manual Fly erase costs staging machines; auto-destroy; remainingCount must be 0. AD-E J8 is implemented: fly-staging-roundtrip mode=erase, fly_org=fizot, run 42109759178.
 - Rollback? Revert the PR.
 - Files / Patch IDs: PATCH-37. https://app.notion.com/p/40fdd43e0a9d8179883bca2f84ea977a
 - Related tasks: FZ-25 (P4.2). Patch: https://app.notion.com/p/40fdd43e0a9d8181a04cd441c6af89d4
