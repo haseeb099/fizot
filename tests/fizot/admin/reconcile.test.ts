@@ -26,7 +26,7 @@ it("reconciler flags crash mid-creation (volume without machine) and reports orp
   // Force creating + strip machine to simulate crash between volume and machine.
   await store.update(ws.id, { flyMachineId: "", state: "creating", stateReason: "crash_sim" });
   // Remove machine from fake fly, keep volume+app.
-  for (const key of [...fly.machines.keys()]) {
+  for (const key of fly.machines.keys()) {
     if (key.startsWith(`${ws.appName}/`)) fly.machines.delete(key);
   }
 
