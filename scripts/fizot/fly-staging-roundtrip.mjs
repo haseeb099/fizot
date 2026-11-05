@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import {
   createAdminServer,
   createFlyMachinesClient,
+  FakeAuthProvider,
   adminRequestSignature,
   mintNonce,
   formatCostProjection,
@@ -66,12 +67,27 @@ const admin = await createAdminServer({
   flyRegion: region,
   machineImage: image,
   fly,
+  auth: new FakeAuthProvider(),
+  cookieSecure: false,
 });
 
 let workspaceId = "";
 let appName = "";
 let flyMachineId = "";
+let sessionCookie = "";
 const report = { steps: [], ok: false, negatives: {}, flyCost: null };
+
+function cookieHeader() {
+  if (!sessionCookie) throw new Error("session cookie missing; sign-in first");
+  return { cookie: sessionCookie };
+}
+
+function takeSessionCookie(res) {
+  const raw = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  const hit = raw.find((c) => c.startsWith("fizot_admin_session="));
+  if (!hit) throw new Error("fake-sign-in did not Set-Cookie fizot_admin_session");
+  return hit.split(";")[0];
+}
 
 async function logMachineState(reason) {
   if (!appName) return null;
@@ -100,10 +116,21 @@ async function logMachineState(reason) {
 }
 
 try {
+  log("sign_in_begin");
+  const signedIn = await fetch(`${admin.url}/edge/auth/fake-sign-in`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "staging-roundtrip@fizot.test" }),
+  });
+  const signedBody = await signedIn.json().catch(() => ({}));
+  if (!signedIn.ok) throw new Error(`sign-in failed: ${signedIn.status} ${JSON.stringify(signedBody)}`);
+  sessionCookie = takeSessionCookie(signedIn);
+  report.steps.push(log("sign_in", { status: signedIn.status, accountId: signedBody.accountId ?? null }));
+
   log("create_workspace_begin");
   const created = await fetch(`${admin.url}/admin/workspaces`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...cookieHeader() },
     body: JSON.stringify({ plan: "home", ownerEmail: "staging-roundtrip@fizot.test" }),
   });
   const createdBody = await created.json();
@@ -143,7 +170,9 @@ try {
     let health;
     let body = {};
     try {
-      health = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/health`);
+      health = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/health`, {
+        headers: cookieHeader(),
+      });
       body = await health.json().catch(() => ({}));
     } catch (error) {
       log("health_wait", { status: 0, error: describeFetchError(error) });
@@ -162,7 +191,7 @@ try {
 
   const pairing = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/pairing`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...cookieHeader() },
     body: JSON.stringify({ label: "staging-roundtrip", ttlSeconds: 120 }),
   });
   const pairingBody = await pairing.json().catch(() => ({}));
@@ -172,7 +201,9 @@ try {
   }
   report.steps.push(log("pairing", { status: pairing.status, hasLink: true }));
 
-  const power = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/power`);
+  const power = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/power`, {
+    headers: cookieHeader(),
+  });
   const powerBody = await power.json().catch(() => ({}));
   if (power.status !== 200) throw new Error(`power failed: ${power.status}`);
   report.steps.push(log("power", { status: power.status, state: powerBody.state ?? powerBody }));
@@ -250,7 +281,7 @@ try {
   log("sleep_begin", { note: "wait idle (just-woke), prepareSleep, Fly stop" });
   const sleepRes = await fetch(`${admin.url}/admin/workspaces/${workspaceId}/sleep`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...cookieHeader() },
     body: JSON.stringify({ idleMinutes: 1, waitMs: 5 * 60_000 }),
   });
   const sleepBody = await sleepRes.json().catch(() => ({}));
@@ -325,7 +356,10 @@ try {
   report.steps.push(log("health_after_wake", { status: healthAfterWake.status }));
 
   log("destroy_begin", { appName });
-  const destroyed = await fetch(`${admin.url}/admin/workspaces/${workspaceId}`, { method: "DELETE" });
+  const destroyed = await fetch(`${admin.url}/admin/workspaces/${workspaceId}`, {
+    method: "DELETE",
+    headers: cookieHeader(),
+  });
   const destroyedBody = await destroyed.json().catch(() => ({}));
   if (!destroyed.ok) throw new Error(`destroy failed: ${destroyed.status} ${JSON.stringify(destroyedBody)}`);
   report.steps.push(log("destroy", { status: destroyed.status, appName }));

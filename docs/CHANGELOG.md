@@ -6,6 +6,15 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-43 Accounts, sign-in and tenant routing (P4.1 part 1)
+
+- Why we changed it: A signed-in user must reach only their own workspaces. Cross-tenant leaks end the business, so isolation is built and proven before Team UI / invites / private chats.
+- How it works: Postgres (and memory) accounts, memberships (`owner|admin|member`) and sessions; `AuthProvider` + `FakeAuthProvider` + HttpOnly Secure SameSite=Lax session cookie with rotation and server-side revocation; Edge open uses membership then the signed cloud-home pairing contract; every Admin/Edge route is in `ROUTE_REGISTRY` and membership routes go through one `authorizeWorkspaceAccess` helper (unknown/forbidden → 404). Independent HMAC KAT via `scripts/fizot/independent-hmac-kat.mjs` (plain `node:crypto`). TC36 sweeps the registry; TC27 proves two-tenant isolation on fakes (daily) and Postgres (`admin-postgres.yml`, manual). No consumer self-signup; vendor sign-in deferred.
+- Why this was necessary: P4.1 / FZ-24 isolation core. Fixes the circular signer test noted at S2.x.
+- Impact (cost / risk / timeline): No Fly spend in the daily gate. Staging Fly round-trip now signs in with FakeAuth first. Part 2 (roles UI, J10, TC28, TC59, invites) out of scope.
+- Rollback? Revert the PR. Existing Fly machines unchanged.
+- Files / Patch IDs: PATCH-34. https://app.notion.com/p/40edd43e0a9d81b1aa68dcdd362e405a
+
 ## CL-42 True Fly sleep/stop probe and cost-guard price fix
 
 - Date: 2026-11-04
