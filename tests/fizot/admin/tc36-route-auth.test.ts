@@ -35,7 +35,7 @@ async function signIn(url: string, email: string): Promise<string> {
 /** Expected HTTP status for each auth level × cookie persona. */
 function expectedFor(route: { auth: string; minRole?: string; id: string }, persona: string): number {
   // Public webhook verifies its own signature — unsigned probes must never reach the handler success path.
-  if (route.id === "admin.webhook") return 401;
+  if (route.id === "admin.webhook" || route.id === "admin.creditGrant" || route.id === "admin.proxyKill") return 401;
   if (route.auth === "public") return 200;
   if (persona === "none") return 401;
   if (route.auth === "session") return 200;

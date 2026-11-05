@@ -35,7 +35,11 @@ import {
   type WebhookEventStore,
 } from "./webhooks.ts";
 import type { AdminServices } from "./workspaces.ts";
+import { timingSafeEqual } from "node:crypto";
 import { openWorkspaceSession } from "../edge/routing.ts";
+import type { CreditStore } from "../proxy/credit-store.ts";
+import { PLAN_INCLUDED_MICRO_GBP } from "../proxy/pricing.ts";
+import type { TokenStore } from "../proxy/tokens.ts";
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -87,6 +91,9 @@ export type RouteContext = {
   allowFakeSignIn: boolean;
   webhooks: WebhookEventStore;
   rawBody: Buffer;
+  credit: CreditStore;
+  proxyTokens: TokenStore;
+  serviceSecret: string | null;
 };
 
 export type AdminHandlerDeps = {
@@ -97,6 +104,9 @@ export type AdminHandlerDeps = {
   cookieSecure?: boolean;
   allowFakeSignIn?: boolean;
   webhooks?: WebhookEventStore;
+  credit: CreditStore;
+  proxyTokens: TokenStore;
+  serviceSecret?: string | null;
 };
 
 function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
@@ -199,6 +209,15 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         requestId: body.requestId,
       });
       await ctx.tenant.upsertMembership(ctx.session!.account.id, record.id, "owner");
+      const included = PLAN_INCLUDED_MICRO_GBP[body.plan];
+      await ctx.credit.ensureAccount(record.id, included);
+      await ctx.credit.grant({
+        workspaceId: record.id,
+        amountMicroGbp: included,
+        requestId: `included:${record.id}`,
+        kind: "grant",
+        meta: { source: "plan" },
+      });
       const { bootstrapSecret: _secret, ...publicRecord } = record;
       void _secret;
       send(ctx.res, 201, { ok: true, workspace: publicRecord });
@@ -520,7 +539,76 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       await ctx.invites.revokeInvite(inviteId!);
       send(ctx.res, 200, { ok: true, revoked: true });
     },
+    async "admin.credit"(ctx) {
+      const workspaceId = ctx.authz!.workspace.id;
+      const included = PLAN_INCLUDED_MICRO_GBP[ctx.authz!.workspace.plan];
+      await ctx.credit.ensureAccount(workspaceId, included);
+      const summary = await ctx.credit.summary(workspaceId);
+      send(ctx.res, 200, {
+        balanceMicroGbp: summary.balanceMicroGbp,
+        includedMicroGbp: summary.includedMicroGbp,
+        periodUsageMicroGbp: summary.periodUsageMicroGbp,
+        reservedMicroGbp: summary.reservedMicroGbp,
+        period: summary.period,
+      });
+    },
+    async "admin.creditGrant"(ctx) {
+      if (!serviceSecretOk(ctx.req, ctx.serviceSecret)) {
+        send(ctx.res, 401, { error: "unauthorized" });
+        return;
+      }
+      const workspaceId = ctx.params.workspaceId;
+      if (!workspaceId) {
+        send(ctx.res, 404, { error: "not_found" });
+        return;
+      }
+      const body = JSON.parse(ctx.rawBody.toString("utf8") || "{}") as { amountMicroGbp?: unknown; requestId?: unknown };
+      if (!Number.isInteger(body.amountMicroGbp) || typeof body.requestId !== "string" || !body.requestId) {
+        send(ctx.res, 400, { error: "invalid_grant" });
+        return;
+      }
+      await ctx.credit.ensureAccount(workspaceId, 0);
+      const row = await ctx.credit.grant({
+        workspaceId,
+        amountMicroGbp: body.amountMicroGbp as number,
+        requestId: body.requestId,
+        kind: "grant",
+        meta: { source: "service" },
+      });
+      const summary = await ctx.credit.summary(workspaceId);
+      send(ctx.res, 200, {
+        ok: true,
+        requestId: row.requestId,
+        amountMicroGbp: row.amountMicroGbp,
+        balanceMicroGbp: summary.balanceMicroGbp,
+      });
+    },
+    async "admin.proxyToken"(ctx) {
+      const minted = await Promise.resolve(ctx.proxyTokens.mint({
+        instanceId: ctx.authz!.workspace.id,
+        ttlSeconds: 3600,
+      }));
+      send(ctx.res, 200, { token: minted.token, expiresAt: minted.expiresAt });
+    },
+    async "admin.proxyKill"(ctx) {
+      if (!serviceSecretOk(ctx.req, ctx.serviceSecret)) {
+        send(ctx.res, 401, { error: "unauthorized" });
+        return;
+      }
+      const body = JSON.parse(ctx.rawBody.toString("utf8") || "{}") as { disabled?: unknown };
+      const disabled = body.disabled !== false;
+      await ctx.credit.setDisabled(disabled);
+      send(ctx.res, 200, { ok: true, disabled });
+    },
   };
+}
+
+function serviceSecretOk(req: IncomingMessage, expected: string | null): boolean {
+  const header = req.headers["x-fizot-admin-secret"];
+  if (!expected || typeof header !== "string") return false;
+  const left = Buffer.from(header);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 export const ADMIN_DISPATCH_TABLE: DispatchEntry[] = buildDispatchTable(
@@ -602,6 +690,9 @@ export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessag
         allowFakeSignIn,
         webhooks,
         rawBody,
+        credit: deps.credit,
+        proxyTokens: deps.proxyTokens,
+        serviceSecret: deps.serviceSecret ?? null,
       };
       await (entry.handler as (c: RouteContext) => Promise<void>)(ctx);
     } catch (error) {

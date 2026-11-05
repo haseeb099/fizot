@@ -3,8 +3,14 @@ import type { AddressInfo } from "node:net";
 
 export type MockXai = { url: string; close: () => Promise<void>; server: Server; calls: Array<{ path: string; auth: string }> };
 
+export type MockXaiOptions = {
+  /** When set, chat and responses return this status and do not bill a success. */
+  failStatus?: number;
+  failBody?: string;
+};
+
 /** Local stand-in for xAI: OpenAI-compatible chat completions and responses, streaming included. */
-export async function startMockXai(): Promise<MockXai> {
+export async function startMockXai(options: MockXaiOptions = {}): Promise<MockXai> {
   const calls: MockXai["calls"] = [];
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -14,10 +20,16 @@ export async function startMockXai(): Promise<MockXai> {
     let body: { stream?: boolean; model?: string } = {};
     try { body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as typeof body; } catch { /* empty */ }
 
+    if (options.failStatus && req.method === "POST") {
+      res.writeHead(options.failStatus, { "content-type": "application/json" });
+      res.end(options.failBody ?? JSON.stringify({ error: { message: "mock provider failure" } }));
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
       if (body.stream) {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(`data: ${JSON.stringify({ id: "chatcmpl-mock", object: "chat.completion.chunk", choices: [{ delta: { content: "hello" } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ usage: { prompt_tokens: 4, completion_tokens: 2 } })}\n\n`);
         res.write("data: [DONE]\n\n");
         res.end();
         return;

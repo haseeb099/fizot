@@ -7,6 +7,19 @@ export function redactLogLine(line: string): string {
   return line.replace(KEY, "[redacted]");
 }
 
-export function assertNoSecrets(line: string): void {
+/** Also strip exact secret values (provider keys) that the regex does not name. */
+export function redactSecrets(line: string, secrets: readonly string[] = []): string {
+  let out = redactLogLine(line);
+  for (const secret of secrets) {
+    if (secret.length < 8) continue;
+    out = out.split(secret).join("[redacted]");
+  }
+  return out;
+}
+
+export function assertNoSecrets(line: string, secrets: readonly string[] = []): void {
   if (KEY.test(line)) throw new Error("log line still contains a secret");
+  for (const secret of secrets) {
+    if (secret.length >= 8 && line.includes(secret)) throw new Error("log line still contains a secret");
+  }
 }

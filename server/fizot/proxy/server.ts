@@ -1,8 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { signAlertBody } from "../admin/alerts.ts";
 import type { AddressInfo } from "node:net";
 import { CapBook } from "./caps.ts";
+import type { CreditStore } from "./credit-store.ts";
 import { Ledger } from "./ledger.ts";
-import { redactLogLine } from "./redact.ts";
+import {
+  createRateLimiter,
+  DEFAULT_RATE_LIMIT_PER_MINUTE,
+  meterCompletion,
+  type SoftAlertEvent,
+} from "./meter.ts";
+import { TIER_PRICES, type TierPrice } from "./pricing.ts";
+import { redactLogLine, redactSecrets } from "./redact.ts";
 import { TokenStore } from "./tokens.ts";
 
 export type ProxyOptions = {
@@ -10,12 +19,35 @@ export type ProxyOptions = {
   upstreamKey?: string;
   log?: (line: string) => void;
   defaultCap?: number;
+  /** When set, chat completions use reserve-then-settle instead of the Spike B token cap. */
+  credit?: CreditStore;
+  prices?: readonly TierPrice[];
+  rateLimitPerMinute?: number;
+  onSoftAlert?: (event: SoftAlertEvent) => Promise<void>;
+  now?: () => number;
+  /** Share Admin's token store so a minted workspace token authorises here. */
+  tokens?: TokenStore;
 };
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return Buffer.concat(chunks);
+}
+
+async function postSoftAlert(event: SoftAlertEvent): Promise<void> {
+  const url = process.env.FIZOT_ALERT_WEBHOOK_URL?.trim();
+  if (!url) return;
+  const body = JSON.stringify(event);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "x-fizot-timestamp": timestamp,
+  };
+  const secret = process.env.FIZOT_ALERT_WEBHOOK_SECRET?.trim();
+  if (secret) headers["x-fizot-signature"] = signAlertBody(secret, timestamp, body);
+  const res = await fetch(url, { method: "POST", headers, body });
+  if (!res.ok) throw new Error(`credit_alert_failed:${res.status}`);
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
@@ -40,11 +72,22 @@ export type FizotProxy = {
 };
 
 export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy> {
-  const tokens = new TokenStore();
+  const tokens = options.tokens ?? new TokenStore();
   const ledger = new Ledger();
   const caps = new CapBook();
-  const log = (line: string) => options.log?.(redactLogLine(line));
+  const secrets = options.upstreamKey ? [options.upstreamKey] : [];
+  const log = (line: string) => options.log?.(redactSecrets(redactLogLine(line), secrets));
   const defaultCap = options.defaultCap ?? 1_000_000;
+  const limiter = options.credit
+    ? createRateLimiter(options.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE)
+    : null;
+  const hideKeys = (body: string) => {
+    let out = body;
+    for (const value of secrets) {
+      if (value.length >= 8) out = out.split(value).join("[redacted]");
+    }
+    return out;
+  };
 
   const server = createServer(async (req, res) => {
     try {
@@ -64,8 +107,18 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         const token = bearer(req);
-        const record = token ? tokens.authorize(token, undefined) : null;
+        const record = token ? await Promise.resolve(tokens.authorize(token, undefined)) : null;
         if (!record) return sendJson(res, 401, { error: { message: "invalid token" } });
+        if (options.credit) {
+          return sendJson(res, 200, {
+            object: "list",
+            data: (options.prices ?? TIER_PRICES).map((tier) => ({
+              object: "model",
+              id: tier.tier,
+              display_name: tier.displayName,
+            })),
+          });
+        }
         return sendJson(res, 200, {
           object: "list",
           data: [
@@ -76,13 +129,56 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
       }
       if (req.method === "POST" && (url.pathname === "/v1/chat/completions" || url.pathname === "/v1/responses")) {
         const token = bearer(req);
-        const record = token ? tokens.authorize(token, undefined) : null;
+        const record = token ? await Promise.resolve(tokens.authorize(token, undefined)) : null;
         if (!record) return sendJson(res, 401, { error: { message: "invalid token" } });
         const raw = await readBody(req);
         log(`proxy ${url.pathname} instance=${record.instanceId} bytes=${raw.byteLength}`);
         let parsed: { stream?: boolean; model?: string } = {};
         try { parsed = JSON.parse(raw.toString("utf8")) as typeof parsed; } catch { /* forward as-is */ }
         const requestId = String(req.headers["x-request-id"] ?? `${record.instanceId}-${Date.now()}`);
+        if (options.credit && limiter) {
+          let parsedBody: { stream?: boolean; model?: string; tier?: string; max_tokens?: number; max_completion_tokens?: number } = {};
+          try { parsedBody = JSON.parse(raw.toString("utf8")) as typeof parsedBody; } catch { /* priced from the raw size */ }
+          const tier = String(parsedBody.tier ?? parsedBody.model ?? "");
+          const outcome = await meterCompletion({
+            credit: options.credit,
+            workspaceId: record.instanceId,
+            requestId,
+            tier,
+            rawBody: raw,
+            parsed: parsedBody,
+            prices: options.prices,
+            now: options.now?.(),
+            rateLimiter: limiter,
+            onSoftAlert: options.onSoftAlert ?? postSoftAlert,
+            redactBody: hideKeys,
+            forward: async (providerBody) => {
+              const upstreamUrl = `${options.upstreamBase.replace(/\/+$/, "")}${url.pathname}`;
+              const upstream = await fetch(upstreamUrl, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  authorization: `Bearer ${options.upstreamKey ?? "mock-upstream-key"}`,
+                  "x-request-id": requestId,
+                },
+                body: new Uint8Array(providerBody),
+              });
+              const upstreamBody = Buffer.from(await upstream.arrayBuffer());
+              return {
+                status: upstream.status,
+                contentType: upstream.headers.get("content-type") ?? "application/json",
+                body: upstreamBody,
+              };
+            },
+          });
+          log(`proxy ${url.pathname} instance=${record.instanceId} status=${outcome.status} bytes=${raw.byteLength}`);
+          res.writeHead(outcome.status, {
+            "content-type": outcome.contentType,
+            ...outcome.headers,
+          });
+          res.end(outcome.body);
+          return;
+        }
         const usageTokens = 26;
         const used = ledger.usage(record.instanceId);
         const decision = caps.decide(record.instanceId, usageTokens, used);
@@ -116,8 +212,9 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
       }
       sendJson(res, 404, { error: { message: "not found" } });
     } catch (error) {
-      log(`error ${error instanceof Error ? error.message : String(error)}`);
-      sendJson(res, 500, { error: { message: "proxy error" } });
+      const message = error instanceof Error ? error.message : String(error);
+      log(`error ${redactSecrets(message, secrets)}`);
+      sendJson(res, 500, { error: { message: hideKeys(`proxy error ${message}`) } });
     }
   });
 

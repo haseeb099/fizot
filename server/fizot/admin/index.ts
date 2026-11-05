@@ -26,6 +26,8 @@ import {
   createPostgresTenantStore,
   type TenantStore,
 } from "./tenant.ts";
+import { createMemoryCreditStore, createPostgresCreditStore, type CreditStore } from "../proxy/credit-store.ts";
+import { TokenStore } from "../proxy/tokens.ts";
 import { createAdminServices, type AdminConfig } from "./workspaces.ts";
 
 export type { FlyClient, NonceStore, WorkspaceStore, AdminConfig, AuthProvider, TenantStore, InviteStore };
@@ -84,6 +86,9 @@ export type CreateAdminServerOptions = {
   deletionWorkerId?: string;
   alertFetch?: typeof fetch;
   now?: () => number;
+  credit?: CreditStore;
+  proxyTokens?: TokenStore;
+  serviceSecret?: string | null;
 };
 
 export function isProductionAdminEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -114,6 +119,8 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   invites: InviteStore;
   auth: AuthProvider;
   deletionWorker: DeletionWorker | null;
+  credit: CreditStore;
+  proxyTokens: TokenStore;
   close(): Promise<void>;
 }> {
   assertAlertChannelsForProduction();
@@ -134,6 +141,13 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     ?? (databaseUrl
       ? await createPostgresInviteStore(databaseUrl)
       : createMemoryInviteStore());
+  const ownCredit = !options.credit && Boolean(databaseUrl);
+  const credit = options.credit
+    ?? (databaseUrl ? await createPostgresCreditStore(databaseUrl) : createMemoryCreditStore());
+  const proxyTokens = options.proxyTokens ?? new TokenStore();
+  const serviceSecret = options.serviceSecret === undefined
+    ? (process.env.FIZOT_ADMIN_SERVICE_SECRET?.trim() || null)
+    : options.serviceSecret;
 
   const resolved = resolveAdminAuth({ auth: options.auth });
   const auth = resolved.auth;
@@ -171,6 +185,9 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     auth,
     cookieSecure,
     allowFakeSignIn,
+    credit,
+    proxyTokens,
+    serviceSecret,
   });
   const server = createServer((req, res) => {
     void handler(req, res);
@@ -200,9 +217,12 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     invites,
     auth,
     deletionWorker,
+    credit,
+    proxyTokens,
     async close() {
       deletionWorker?.stop();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      if (ownCredit) await credit.close();
       if (store && "close" in store && typeof store.close === "function") await store.close();
       if (tenant && "close" in tenant && typeof tenant.close === "function") await (tenant as { close(): Promise<void> }).close();
       if (invites && "close" in invites && typeof invites.close === "function") await (invites as { close(): Promise<void> }).close();

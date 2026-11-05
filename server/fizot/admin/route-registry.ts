@@ -52,6 +52,12 @@ export const ROUTE_REGISTRY: readonly RouteDef[] = [
   { id: "admin.createInvite", method: "POST", path: "/admin/workspaces/:workspaceId/invites", auth: "membership", minRole: "admin", surface: "admin" },
   { id: "admin.listInvites", method: "GET", path: "/admin/workspaces/:workspaceId/invites", auth: "membership", minRole: "admin", surface: "admin" },
   { id: "admin.revokeInvite", method: "DELETE", path: "/admin/workspaces/:workspaceId/invites/:inviteId", auth: "membership", minRole: "admin", surface: "admin" },
+  { id: "admin.credit", method: "GET", path: "/admin/workspaces/:workspaceId/credit", auth: "membership", minRole: "member", surface: "admin" },
+  /** Platform service secret, not a workspace role. Handler rejects a missing secret. */
+  { id: "admin.creditGrant", method: "POST", path: "/admin/workspaces/:workspaceId/credit/grants", auth: "public", surface: "admin" },
+  { id: "admin.proxyToken", method: "POST", path: "/admin/workspaces/:workspaceId/proxy-token", auth: "membership", minRole: "admin", surface: "admin" },
+  /** Platform service secret. Stops provider traffic on the shared credit store. */
+  { id: "admin.proxyKill", method: "POST", path: "/admin/proxy/kill", auth: "public", surface: "admin" },
 ] as const;
 
 export function publicRouteIds(): string[] {
