@@ -48,3 +48,6 @@ GN-I,Go or no-go,integration,"Every row in tests/matrix.csv has a pass, and ther
 GN-E,Go or no-go,e2e,J1 to J11 pass at desktop and phone width,"J1; J2; J3; J4; J5; J6; J7; J8; J9; J10; J11",G6,planned,H7.4
 PX-U,Fizot AI proxy,unit,"Tier price table, reserve/settle, idempotency, exactly 80% alert and 100% hard cap, key redaction, mock stream and provider 500 (CI 42129866259 static fizot/ vitest)",none,G5,pass,P4.3
 PX-I,Fizot AI proxy,integration,"Postgres append-only ledger and 50 parallel requests against a balance of 10 (admin-postgres.yml run 42129889814: 10 of 200, 40 of 402, settled 10)",none,G5,pass,P4.3
+BL-U,Fizot billing,unit,"State machine, VAT rounding, permutation convergence, unpublished-plan refusal, key redaction, margin gate",none,G5,implemented,P4.4
+BL-I,Fizot billing,integration,"Postgres webhook dedupe, included-credit grant idempotency, grace and suspension (admin-postgres.yml)",none,G5,implemented,P4.4
+BL-E,Fizot billing,e2e,"J9 Stripe test-mode checkout, dunning, recovery and cleanup",J9,G5,planned,P4.4

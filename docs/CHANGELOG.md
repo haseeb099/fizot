@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-48 Stripe billing, plans, VAT and failed-payment lifecycle (P4.4)
+
+- Why we changed it: A workspace was given its included credit at creation, so a signed-in user could open many workspaces and spend Fizot's inference budget. Billing bugs and tax mistakes then repeat on every invoice.
+- How it works: No included credit until `invoice.paid` (ledger `request_id` is the Stripe invoice id). The proxy returns 402 `subscription_required` until the subscription is active or trialing with a payment method. Plans and amounts live in `server/fizot/billing/plan-prices.ts` and stay unpublished, so checkout refuses them outside test mode. Owner checkout and portal URLs come from config. Stripe webhooks reuse the P4.2 `t=,v1=` receiver and ignore stale `created` times. The deletion worker tick moves `past_due` to a 7-day grace, then suspension, a notice 7 days before deletion, and the P4.2 deletion job after 30 days. Recovery before deletion returns to active. Team seat quantity follows the membership count. `scripts/fizot/margin-check.mjs` exits 1 when a published plan is under 40% at always-on with the included credit used. Stripe Tax does the VAT. J9 stays planned: repo secrets `STRIPE_TEST_API_KEY` and `STRIPE_TEST_WEBHOOK_SECRET` are absent.
+- Why it is necessary: P4.4 / FZ-27. Consumer flows stay deferred.
+- Impact: No Stripe or Fly spend on the daily gate. Placeholder plan prices are unverified and unpublished. Postgres checks run on `admin-postgres.yml`.
+- Rollback? Revert the PR.
+- Files / Patch IDs: PATCH-39. https://app.notion.com/p/410dd43e0a9d813ca447eb6e70e6049d
+- Related tasks: FZ-27 (P4.4). Patch: https://app.notion.com/p/410dd43e0a9d81e3aa5ffcc4c865169a
+
 ## CL-47 AI proxy credit ledger, tiers and metering (P4.3 part 1)
 
 - Why we changed it: Fizot pays the inference bill. A hard cap and an append-only ledger are what stop one workspace from creating an unbounded cost.

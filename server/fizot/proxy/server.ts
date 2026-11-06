@@ -27,6 +27,7 @@ export type ProxyOptions = {
   now?: () => number;
   /** Share Admin's token store so a minted workspace token authorises here. */
   tokens?: TokenStore;
+  subscriptionAllows?: (workspaceId: string) => Promise<boolean>;
 };
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -152,6 +153,7 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
             rateLimiter: limiter,
             onSoftAlert: options.onSoftAlert ?? postSoftAlert,
             redactBody: hideKeys,
+            subscriptionAllows: options.subscriptionAllows,
             forward: async (providerBody) => {
               const upstreamUrl = `${options.upstreamBase.replace(/\/+$/, "")}${url.pathname}`;
               const upstream = await fetch(upstreamUrl, {
