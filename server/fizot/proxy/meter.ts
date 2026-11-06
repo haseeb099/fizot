@@ -114,9 +114,14 @@ export async function meterCompletion(input: {
   }>;
   /** Strip provider keys from bodies. Must not blank a normal completion. */
   redactBody?: (body: string) => string;
+  /** When set, unpaid workspaces are refused before any provider call. */
+  subscriptionAllows?: (workspaceId: string) => Promise<boolean>;
 }): Promise<MeterOutcome> {
   const now = input.now ?? Date.now();
   const headers = { "x-request-id": input.requestId };
+  if (input.subscriptionAllows && !(await input.subscriptionAllows(input.workspaceId))) {
+    return jsonOutcome(402, { error: "subscription_required" }, headers);
+  }
   if (process.env.FIZOT_PROXY_DISABLED === "1" || await input.credit.disabled()) {
     return jsonOutcome(503, { error: "proxy_disabled" }, headers);
   }

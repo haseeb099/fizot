@@ -28,6 +28,16 @@ import {
 } from "./tenant.ts";
 import { createMemoryCreditStore, createPostgresCreditStore, type CreditStore } from "../proxy/credit-store.ts";
 import { TokenStore } from "../proxy/tokens.ts";
+import { createBillingService, type BillingService } from "../billing/apply.ts";
+import { createFakeEmailProvider, type EmailProvider } from "../billing/email.ts";
+import { billingTestMode } from "../billing/plan-prices.ts";
+import {
+  createFakeBillingProvider,
+  createStripeBillingProvider,
+  createUnconfiguredBillingProvider,
+  type BillingProvider,
+} from "../billing/provider.ts";
+import { createMemoryBillingStore, createPostgresBillingStore, type BillingStore } from "../billing/store.ts";
 import { createAdminServices, type AdminConfig } from "./workspaces.ts";
 
 export type { FlyClient, NonceStore, WorkspaceStore, AdminConfig, AuthProvider, TenantStore, InviteStore };
@@ -89,6 +99,9 @@ export type CreateAdminServerOptions = {
   credit?: CreditStore;
   proxyTokens?: TokenStore;
   serviceSecret?: string | null;
+  billingStore?: BillingStore;
+  billingProvider?: BillingProvider;
+  email?: EmailProvider;
 };
 
 export function isProductionAdminEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -121,6 +134,7 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
   deletionWorker: DeletionWorker | null;
   credit: CreditStore;
   proxyTokens: TokenStore;
+  billing: BillingService;
   close(): Promise<void>;
 }> {
   assertAlertChannelsForProduction();
@@ -162,6 +176,16 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
       : createFakeFlyClient());
   const deletionAlert = options.deletionAlert
     ?? resolveDeletionAlert({ fetchImpl: options.alertFetch, now: options.now });
+  const ownBilling = !options.billingStore;
+  const billingStore = options.billingStore
+    ?? (databaseUrl ? await createPostgresBillingStore(databaseUrl) : createMemoryBillingStore());
+  const billingProvider = options.billingProvider
+    ?? (billingTestMode()
+      ? createFakeBillingProvider()
+      : (process.env.STRIPE_API_KEY?.trim()
+        ? createStripeBillingProvider(process.env.STRIPE_API_KEY.trim())
+        : createUnconfiguredBillingProvider()));
+  const email = options.email ?? createFakeEmailProvider();
   const services = createAdminServices({
     adminUrl: options.adminUrl ?? process.env.FIZOT_ADMIN_URL ?? "https://admin.example.invalid",
     flyOrg,
@@ -178,6 +202,34 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     alertFetch: options.alertFetch,
     now: options.now,
   });
+  const billing = createBillingService({
+    store: billingStore,
+    credit,
+    provider: billingProvider,
+    email,
+    urls: {
+      successUrl: process.env.FIZOT_BILLING_SUCCESS_URL?.trim() || "https://admin.example.invalid/billing/success",
+      cancelUrl: process.env.FIZOT_BILLING_CANCEL_URL?.trim() || "https://admin.example.invalid/billing/cancel",
+      portalReturnUrl: process.env.FIZOT_BILLING_PORTAL_RETURN_URL?.trim() || "https://admin.example.invalid/billing",
+    },
+    ownerEmail: async (workspaceId) => {
+      const members = await tenant.listMembers(workspaceId);
+      return members.find((row) => row.membership.role === "owner")?.account.email ?? null;
+    },
+    onSuspend: async (workspaceId) => {
+      const workspace = await services.store.get(workspaceId);
+      if (!workspace?.flyMachineId) return;
+      await services.fly.suspendMachine(workspace.appName, workspace.flyMachineId).catch(() => undefined);
+    },
+    onResume: async (workspaceId) => {
+      const workspace = await services.store.get(workspaceId);
+      if (!workspace?.flyMachineId) return;
+      await services.fly.startMachine(workspace.appName, workspace.flyMachineId).catch(() => undefined);
+    },
+    onDelete: async (workspaceId) => {
+      await services.deletionRunner.requestDeletion(workspaceId, "billing_nonpayment");
+    },
+  });
   const handler = createAdminHandler({
     services,
     tenant,
@@ -188,6 +240,7 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     credit,
     proxyTokens,
     serviceSecret,
+    billing,
   });
   const server = createServer((req, res) => {
     void handler(req, res);
@@ -206,6 +259,7 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
       runner: services.deletionRunner,
       intervalMs: options.deletionWorkerIntervalMs,
       enabled: true,
+      onTick: () => billing.tick(options.now?.() ?? Date.now()).then(() => undefined),
     })
     : null;
 
@@ -219,9 +273,11 @@ export async function createAdminServer(options: CreateAdminServerOptions = {}):
     deletionWorker,
     credit,
     proxyTokens,
+    billing,
     async close() {
       deletionWorker?.stop();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      if (ownBilling) await billing.close();
       if (ownCredit) await credit.close();
       if (store && "close" in store && typeof store.close === "function") await store.close();
       if (tenant && "close" in tenant && typeof tenant.close === "function") await (tenant as { close(): Promise<void> }).close();

@@ -19,6 +19,8 @@ export function createDeletionWorker(input: {
   /** When false, do not start the timer (tests enable explicitly). */
   enabled?: boolean;
   onError?: (error: unknown) => void;
+  /** Billing lifecycle shares this tick. Failures stay off the deletion queue. */
+  onTick?: () => Promise<void>;
 }): DeletionWorker {
   const intervalMs = input.intervalMs ?? DEFAULT_DELETION_WORKER_INTERVAL_MS;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -33,6 +35,12 @@ export function createDeletionWorker(input: {
     } catch (error) {
       input.onError?.(error);
       console.error(`deletion_worker_error:${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      await input.onTick?.();
+    } catch (error) {
+      input.onError?.(error);
+      console.error(`billing_worker_error:${error instanceof Error ? error.message : String(error)}`);
     } finally {
       ticking = false;
     }

@@ -70,6 +70,8 @@ function assertInt(name: string, value: number): void {
 
 export type CreditStore = {
   ensureAccount(workspaceId: string, includedMicroGbp: number): Promise<void>;
+  /** Replace the 80% denominator. Does not write a ledger row. */
+  setIncluded(workspaceId: string, includedMicroGbp: number): Promise<void>;
   summary(workspaceId: string, now?: number): Promise<CreditSummary>;
   grant(input: {
     workspaceId: string;
@@ -146,6 +148,12 @@ export function createMemoryCreditStore(): CreditStore {
       assertInt("includedMicroGbp", includedMicroGbp);
       await lock(() => {
         if (!state.included.has(workspaceId)) state.included.set(workspaceId, includedMicroGbp);
+      });
+    },
+    async setIncluded(workspaceId, includedMicroGbp) {
+      assertInt("includedMicroGbp", includedMicroGbp);
+      await lock(() => {
+        state.included.set(workspaceId, includedMicroGbp);
       });
     },
     async summary(workspaceId, now = Date.now()) {
@@ -418,6 +426,15 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
       await pool.query(
         `INSERT INTO fizot_credit_accounts (workspace_id, included_micro_gbp)
          VALUES ($1, $2) ON CONFLICT (workspace_id) DO NOTHING`,
+        [workspaceId, includedMicroGbp],
+      );
+    },
+    async setIncluded(workspaceId, includedMicroGbp) {
+      assertInt("includedMicroGbp", includedMicroGbp);
+      await pool.query(
+        `INSERT INTO fizot_credit_accounts (workspace_id, included_micro_gbp)
+         VALUES ($1, $2)
+         ON CONFLICT (workspace_id) DO UPDATE SET included_micro_gbp = EXCLUDED.included_micro_gbp`,
         [workspaceId, includedMicroGbp],
       );
     },

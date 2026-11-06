@@ -38,7 +38,8 @@ import type { AdminServices } from "./workspaces.ts";
 import { timingSafeEqual } from "node:crypto";
 import { openWorkspaceSession } from "../edge/routing.ts";
 import type { CreditStore } from "../proxy/credit-store.ts";
-import { PLAN_INCLUDED_MICRO_GBP } from "../proxy/pricing.ts";
+import { billingTestMode } from "../billing/plan-prices.ts";
+import type { BillingService } from "../billing/apply.ts";
 import type { TokenStore } from "../proxy/tokens.ts";
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -94,6 +95,7 @@ export type RouteContext = {
   credit: CreditStore;
   proxyTokens: TokenStore;
   serviceSecret: string | null;
+  billing: BillingService;
 };
 
 export type AdminHandlerDeps = {
@@ -107,6 +109,7 @@ export type AdminHandlerDeps = {
   credit: CreditStore;
   proxyTokens: TokenStore;
   serviceSecret?: string | null;
+  billing: BillingService;
 };
 
 function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
@@ -182,6 +185,9 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         send(ctx.res, result.status, { error: result.error });
         return;
       }
+      const members = await ctx.tenant.listMembers(result.workspaceId);
+      const workspace = await ctx.services.store.get(result.workspaceId);
+      await ctx.billing.syncSeats(result.workspaceId, workspace?.plan ?? "", members.length);
       send(ctx.res, 200, { ok: true, workspaceId: result.workspaceId, role: result.role });
     },
     async "admin.createWorkspace"(ctx) {
@@ -209,15 +215,7 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         requestId: body.requestId,
       });
       await ctx.tenant.upsertMembership(ctx.session!.account.id, record.id, "owner");
-      const included = PLAN_INCLUDED_MICRO_GBP[body.plan];
-      await ctx.credit.ensureAccount(record.id, included);
-      await ctx.credit.grant({
-        workspaceId: record.id,
-        amountMicroGbp: included,
-        requestId: `included:${record.id}`,
-        kind: "grant",
-        meta: { source: "plan" },
-      });
+      await ctx.credit.ensureAccount(record.id, 0);
       const { bootstrapSecret: _secret, ...publicRecord } = record;
       void _secret;
       send(ctx.res, 201, { ok: true, workspace: publicRecord });
@@ -336,9 +334,9 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         });
         return;
       }
-      let payload: { id?: string; type?: string } = {};
+      let payload: { id?: string; type?: string; created?: number; data?: { object?: Record<string, unknown> } } = {};
       try {
-        payload = JSON.parse(raw || "{}") as { id?: string; type?: string };
+        payload = JSON.parse(raw || "{}") as typeof payload;
       } catch {
         send(ctx.res, 400, { error: "invalid_json" });
         return;
@@ -352,7 +350,18 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
         store: ctx.webhooks,
         provider,
         eventId,
-        handler: async () => ({ type: payload.type ?? "unknown", accepted: true }),
+        handler: async () => {
+          if (provider === "stripe" && payload.type && payload.data?.object && typeof payload.created === "number") {
+            const applied = await ctx.billing.applyEvent({
+              id: eventId,
+              type: payload.type,
+              created: payload.created,
+              data: { object: payload.data.object },
+            });
+            return { type: payload.type, accepted: true, status: applied.status, stale: applied.stale };
+          }
+          return { type: payload.type ?? "unknown", accepted: true };
+        },
       });
       if (!delivered.delivered) {
         send(ctx.res, 200, { ok: true, duplicate: true });
@@ -470,6 +479,8 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       }
       const email = target.account.email;
       await ctx.tenant.deleteMembership(accountId, ctx.authz!.workspace.id);
+      const membersLeft = await ctx.tenant.listMembers(ctx.authz!.workspace.id);
+      await ctx.billing.syncSeats(ctx.authz!.workspace.id, ctx.authz!.workspace.plan, membersLeft.length);
       const revoked = await ctx.tenant.revokeAllSessionsForAccount(accountId);
       let machine: { status: number; body: unknown } | null = null;
       if (ctx.authz!.workspace.role === "team") {
@@ -539,10 +550,30 @@ function buildHandlers(): Record<string, (ctx: RouteContext) => Promise<void>> {
       await ctx.invites.revokeInvite(inviteId!);
       send(ctx.res, 200, { ok: true, revoked: true });
     },
+    async "admin.billingCheckout"(ctx) {
+      const body = JSON.parse(ctx.rawBody.toString("utf8") || "{}") as { country?: string; vatId?: string };
+      const members = await ctx.tenant.listMembers(ctx.authz!.workspace.id);
+      const result = await ctx.billing.checkout({
+        workspaceId: ctx.authz!.workspace.id,
+        plan: ctx.authz!.workspace.plan,
+        email: ctx.authz!.account.email,
+        country: body.country,
+        vatId: body.vatId,
+        memberCount: members.length,
+        testMode: billingTestMode(),
+      });
+      send(ctx.res, result.status, result.body);
+    },
+    async "admin.billingPortal"(ctx) {
+      const result = await ctx.billing.portal({
+        workspaceId: ctx.authz!.workspace.id,
+        testMode: billingTestMode(),
+      });
+      send(ctx.res, result.status, result.body);
+    },
     async "admin.credit"(ctx) {
       const workspaceId = ctx.authz!.workspace.id;
-      const included = PLAN_INCLUDED_MICRO_GBP[ctx.authz!.workspace.plan];
-      await ctx.credit.ensureAccount(workspaceId, included);
+      await ctx.credit.ensureAccount(workspaceId, 0);
       const summary = await ctx.credit.summary(workspaceId);
       send(ctx.res, 200, {
         balanceMicroGbp: summary.balanceMicroGbp,
@@ -693,6 +724,7 @@ export function createAdminHandler(deps: AdminHandlerDeps): (req: IncomingMessag
         credit: deps.credit,
         proxyTokens: deps.proxyTokens,
         serviceSecret: deps.serviceSecret ?? null,
+        billing: deps.billing,
       };
       await (entry.handler as (c: RouteContext) => Promise<void>)(ctx);
     } catch (error) {
