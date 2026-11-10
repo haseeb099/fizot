@@ -41,4 +41,21 @@ Team quantity is the membership count. The owner is a seat. Invite accept and me
 
 ## J9
 
-`.github/workflows/billing-stripe-j9.yml` is manual. It needs repo secrets `STRIPE_TEST_API_KEY` and `STRIPE_TEST_WEBHOOK_SECRET`. Those secrets are not set. The job is not a substitute for them.
+`.github/workflows/billing-stripe-j9.yml` is manual. The driver is `scripts/fizot/billing-j9.mjs` (`server/fizot/billing/j9-driver.ts`). Credentials alone never exit 0.
+
+Required configuration:
+
+| Name | Kind | Rule |
+| --- | --- | --- |
+| `STRIPE_J9_MODE` | env | Must be exactly `test` |
+| `STRIPE_TEST_API_KEY` | secret | Must start with `sk_test_`; live keys are rejected |
+| `STRIPE_TEST_WEBHOOK_SECRET` | secret | Stripe webhook signing secret (`whsec_…`) |
+| `STRIPE_J9_PRICE_HOME` | variable | Real Stripe **test** Price id; not `price_unpublished_*` |
+| `STRIPE_J9_PRICE_TEAM` | variable | Optional; defaults to the home test Price |
+| `STRIPE_J9_TRANSPORT` | env | `live` (default in Actions) or `fake` (unit tests only) |
+
+Mandatory scenarios: `secure_startup`, `checkout`, `payment_and_credit`, `webhook_lifecycle`, `failed_payment_lifecycle`, `recovery`, `tax_and_seats`, `cleanup`. Any `FAIL`, `BLOCKED` or `NOT_RUN` prevents overall PASS.
+
+Webhook deliveries into the billing state machine are locally signed with the test webhook secret (fixture). Stripe API objects (customer, checkout session, subscription, tax calculation, cleanup) are real when `STRIPE_J9_TRANSPORT=live`. Grace, suspension and notice use the app's simulated clock, not a production clock.
+
+Create a recurring test Price in the Stripe Dashboard (GBP, tax behavior exclusive) and set `STRIPE_J9_PRICE_HOME` to that id before dispatching the workflow.

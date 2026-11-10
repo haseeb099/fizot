@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-49 Real Stripe J9 verification driver (P4.4 / FZ-27)
+
+- Why we changed it: The previous J9 script exited 0 when test secrets existed, which could not prove checkout, credit, dunning or recovery.
+- How it works: `server/fizot/billing/j9-driver.ts` runs eight mandatory scenarios against an isolated billing stack. Live transport talks to Stripe test mode only when `STRIPE_J9_MODE=test`, the key is `sk_test_…`, and `STRIPE_J9_PRICE_HOME` is a real test Price (not `price_unpublished_*`). Webhook signature checks and lifecycle ticks use locally signed fixtures and a simulated clock. Fake transport covers the same path in unit tests without network calls. Overall PASS requires every scenario to PASS; missing config is BLOCKED.
+- Why it is necessary: FZ-27 / P4.4 J9 evidence. Plan publication stays unpublished.
+- Impact: No Stripe spend on the daily gate. Manual workflow still needs secrets and a test Price variable. BL-E stays planned until a green credentialed run.
+- Rollback? Revert the PR.
+- Files / Patch IDs: PATCH-40.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-48 Stripe billing, plans, VAT and failed-payment lifecycle (P4.4)
 
 - Why we changed it: A workspace was given its included credit at creation, so a signed-in user could open many workspaces and spend Fizot's inference budget. Billing bugs and tax mistakes then repeat on every invoice.

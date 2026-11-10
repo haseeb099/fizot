@@ -1,4 +1,6 @@
 # J9 billing lifecycle against Stripe test mode. Not on the daily gate.
+# Credentials alone never pass: the driver exits non-zero unless every mandatory
+# scenario reports PASS. Requires an explicit test Price id (not unpublished placeholders).
 name: Fizot billing Stripe test mode (J9)
 on:
   workflow_dispatch:
@@ -23,6 +25,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Checkout, dunning, recovery, cleanup
         env:
+          STRIPE_J9_MODE: test
+          STRIPE_J9_TRANSPORT: live
           STRIPE_TEST_API_KEY: ${{ secrets.STRIPE_TEST_API_KEY }}
           STRIPE_TEST_WEBHOOK_SECRET: ${{ secrets.STRIPE_TEST_WEBHOOK_SECRET }}
+          STRIPE_J9_PRICE_HOME: ${{ vars.STRIPE_J9_PRICE_HOME }}
+          STRIPE_J9_PRICE_TEAM: ${{ vars.STRIPE_J9_PRICE_TEAM }}
+          FIZOT_BILLING_SUCCESS_URL: https://admin.example.invalid/billing/success
+          FIZOT_BILLING_CANCEL_URL: https://admin.example.invalid/billing/cancel
+          FIZOT_BILLING_PORTAL_RETURN_URL: https://admin.example.invalid/billing
         run: node --experimental-strip-types scripts/fizot/billing-j9.mjs
