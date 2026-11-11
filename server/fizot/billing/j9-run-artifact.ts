@@ -5,8 +5,15 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, renameSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import {
+  dunningCheckpointPayload,
+  parseDunningCheckpoint,
+  type J9DunningCheckpoint,
+} from "./j9-dunning-checkpoint.ts";
 
-export const J9_RUN_ARTIFACT_SCHEMA = 3 as const;
+export const J9_RUN_ARTIFACT_SCHEMA = 4 as const;
+export type { J9DunningCheckpoint, J9DunningPhase } from "./j9-dunning-checkpoint.ts";
+export { emptyDunningCheckpoint } from "./j9-dunning-checkpoint.ts";
 export const J9_ARTIFACT_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 export const J9_FIXED_ARTIFACT_RELATIVE = join("artifacts", "j9", "run.json");
 export const J9_FIXED_CAPTURE_RELATIVE = join("artifacts", "j9", "webhook-capture.json");
@@ -54,6 +61,8 @@ export type J9RunArtifact = {
     expectedPriceId: string;
     /** Filled after genuine Checkout completion. */
     subscriptionId: string | null;
+    /** Set after included credit is granted for this Checkout invoice (idempotent resume). */
+    creditInvoiceId: string | null;
   };
   clock: {
     clockId: string;
@@ -63,6 +72,8 @@ export type J9RunArtifact = {
     baselineInvoiceId: string | null;
     /** Stripe event ids observed at baseline (excluded from recovery evidence). */
     baselineEventIds: string[];
+    /** Authenticated Test Clock failure/recovery checkpoints. */
+    dunning: J9DunningCheckpoint;
   };
   resources: J9TrackedResources;
   transitions: J9LifecycleTransition[];
@@ -154,6 +165,7 @@ export function authenticatedPayload(artifact: Omit<J9RunArtifact, "artifactMac"
       sessionId: artifact.checkout.sessionId,
       expectedPriceId: artifact.checkout.expectedPriceId,
       subscriptionId: artifact.checkout.subscriptionId,
+      creditInvoiceId: artifact.checkout.creditInvoiceId,
     },
     clock: {
       clockId: artifact.clock.clockId,
@@ -162,6 +174,7 @@ export function authenticatedPayload(artifact: Omit<J9RunArtifact, "artifactMac"
       subscriptionId: artifact.clock.subscriptionId,
       baselineInvoiceId: artifact.clock.baselineInvoiceId,
       baselineEventIds: [...artifact.clock.baselineEventIds].sort(),
+      dunning: dunningCheckpointPayload(artifact.clock.dunning),
     },
     resources: {
       customers: [...artifact.resources.customers].sort(),
@@ -291,6 +304,12 @@ export function parseJ9RunArtifact(
     return { ok: false, reason: "artifact_clock_ids_invalid" };
   }
   if (!isStringArray(clock.baselineEventIds)) return { ok: false, reason: "artifact_baseline_events_invalid" };
+  const dunning = parseDunningCheckpoint(clock.dunning);
+  if (!dunning) return { ok: false, reason: "artifact_dunning_invalid" };
+  const creditInvoiceId = checkout.creditInvoiceId == null ? null : requireId(checkout.creditInvoiceId, "in_");
+  if (checkout.creditInvoiceId != null && !creditInvoiceId) {
+    return { ok: false, reason: "artifact_checkout_credit_invoice_invalid" };
+  }
   if (
     !isStringArray(resources.customers)
     || !isStringArray(resources.subscriptions)
@@ -312,7 +331,7 @@ export function parseJ9RunArtifact(
     priceTeam: obj.priceTeam,
     pauseCleanup: obj.pauseCleanup,
     retrySafe: obj.retrySafe,
-    checkout: { customerId, sessionId, expectedPriceId, subscriptionId: checkoutSub },
+    checkout: { customerId, sessionId, expectedPriceId, subscriptionId: checkoutSub, creditInvoiceId },
     clock: {
       clockId,
       frozenTime: clock.frozenTime,
@@ -320,6 +339,7 @@ export function parseJ9RunArtifact(
       subscriptionId: clock.subscriptionId == null ? null : requireId(clock.subscriptionId, "sub_"),
       baselineInvoiceId: clock.baselineInvoiceId == null ? null : requireId(clock.baselineInvoiceId, "in_"),
       baselineEventIds: clock.baselineEventIds,
+      dunning,
     },
     resources: {
       customers: resources.customers,
@@ -411,4 +431,21 @@ export function assertOwnedResource(
 
 export function emptyTrackedResources(): J9TrackedResources {
   return { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] };
+}
+
+/** Persist authenticated field updates without changing lifecycle stage. */
+export function persistArtifactUpdate(
+  hmacSecret: string,
+  artifactPath: string,
+  artifact: J9RunArtifact,
+  extras: Partial<Omit<J9RunArtifact, "artifactMac" | "updatedAt" | "transitions">>,
+): J9RunArtifact {
+  const next = sealArtifact(hmacSecret, {
+    ...artifact,
+    ...extras,
+    transitions: artifact.transitions,
+    updatedAt: new Date().toISOString(),
+  });
+  saveJ9RunArtifact(artifactPath, next);
+  return next;
 }

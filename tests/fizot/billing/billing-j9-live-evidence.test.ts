@@ -7,8 +7,10 @@ import { runJ9 } from "../../../server/fizot/billing/j9-driver.ts";
 import { assertCompletedCheckoutSession } from "../../../server/fizot/billing/j9-checkout-evidence.ts";
 import {
   createRunId,
+  emptyDunningCheckpoint,
   loadJ9RunArtifact,
   parseJ9RunArtifact,
+  persistArtifactUpdate,
   sealArtifact,
   J9_FIXED_ARTIFACT_RELATIVE,
   J9_FIXED_CAPTURE_RELATIVE,
@@ -16,6 +18,7 @@ import {
 import {
   advanceTestClockUntilReady,
   correlateCustomerEvents,
+  ensureTestClockFrozenAt,
   parseStripeEvent,
 } from "../../../server/fizot/billing/j9-test-clock.ts";
 import { createFakeStripeTransport, type FakeStripeTransport } from "../../../server/fizot/billing/j9-transport.ts";
@@ -23,7 +26,7 @@ import {
   verifyWebhookCapture,
   verifyWebhookCaptureSignatures,
 } from "../../../server/fizot/billing/j9-webhook-capture.ts";
-import { cleanupTrackedResources } from "../../../server/fizot/billing/j9-live-stages.ts";
+import { cleanupTrackedResources, runStripeTestClockDunning } from "../../../server/fizot/billing/j9-live-stages.ts";
 
 const secret = "whsec_test_j9_live_evidence";
 const hmacSecret = "j9_artifact_hmac_secret_for_unit_tests_only_32";
@@ -286,7 +289,7 @@ it("refuses duplicate resume of a completed run", async () => {
 it("rejects MAC tampering and substituted run payloads", () => {
   const runId = createRunId();
   const sealed = sealArtifact(hmacSecret, {
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: "live_j9_run",
     runId,
     stage: "awaiting_checkout",
@@ -296,7 +299,7 @@ it("rejects MAC tampering and substituted run payloads", () => {
     priceTeam: "price_j9_test_home",
     pauseCleanup: true,
     retrySafe: true,
-    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_j9_test_home", subscriptionId: null },
+    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_j9_test_home", subscriptionId: null, creditInvoiceId: null },
     clock: {
       clockId: "clock_a",
       frozenTime: 1,
@@ -304,6 +307,7 @@ it("rejects MAC tampering and substituted run payloads", () => {
       subscriptionId: "sub_a",
       baselineInvoiceId: "in_a",
       baselineEventIds: ["evt_base"],
+      dunning: emptyDunningCheckpoint(),
     },
     resources: {
       customers: ["cus_a", "cus_b"],
@@ -328,7 +332,7 @@ it("rejects MAC tampering and substituted run payloads", () => {
 it("keeps incomplete Checkout BLOCKED and rejects foreign sessions", () => {
   const runId = createRunId();
   const sealed = sealArtifact(hmacSecret, {
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: "live_j9_run",
     runId,
     stage: "awaiting_checkout",
@@ -338,7 +342,7 @@ it("keeps incomplete Checkout BLOCKED and rejects foreign sessions", () => {
     priceTeam: "price_home",
     pauseCleanup: true,
     retrySafe: true,
-    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_home", subscriptionId: null },
+    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_home", subscriptionId: null, creditInvoiceId: null },
     clock: {
       clockId: "clock_a",
       frozenTime: 1,
@@ -346,6 +350,7 @@ it("keeps incomplete Checkout BLOCKED and rejects foreign sessions", () => {
       subscriptionId: null,
       baselineInvoiceId: null,
       baselineEventIds: [],
+      dunning: emptyDunningCheckpoint(),
     },
     resources: {
       customers: ["cus_a", "cus_b"],
@@ -739,6 +744,175 @@ it("distinguishes Test Clock advancing versus ready", async () => {
     maxAttempts: 2,
   });
   expect(advancing.ok).toBe(false);
+});
+
+it("does not re-advance a Test Clock already at the target frozen_time", async () => {
+  const transport = createFakeStripeTransport();
+  const created = await transport.request("POST", "test_helpers/test_clocks", { frozen_time: "1000", name: "t" });
+  const first = await ensureTestClockFrozenAt({
+    transport,
+    clockId: String(created.id),
+    targetFrozenTime: 2000,
+    sleepMs: 0,
+    maxAttempts: 3,
+  });
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.skippedAdvance).toBe(false);
+  const second = await ensureTestClockFrozenAt({
+    transport,
+    clockId: String(created.id),
+    targetFrozenTime: 2000,
+    sleepMs: 0,
+    maxAttempts: 3,
+  });
+  expect(second.ok).toBe(true);
+  if (!second.ok) return;
+  expect(second.skippedAdvance).toBe(true);
+  expect(second.clock.frozen_time).toBe(2000);
+});
+
+it("resumes Test Clock dunning from authenticated checkpoints without repeating advances", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const prepared = await prepareAndCompleteCheckout(root, transport);
+  writeSignedCapture(captureFile(root), transport, {
+    runId: prepared.artifact.runId,
+    customerId: prepared.customerId,
+    subscriptionId: prepared.subscriptionId,
+    sessionId: prepared.sessionId,
+  });
+
+  const path = artifactFile(root);
+  const loaded = loadJ9RunArtifact(path, hmacSecret);
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) return;
+
+  const withSub = persistArtifactUpdate(hmacSecret, path, loaded.artifact, {
+    checkout: {
+      ...loaded.artifact.checkout,
+      subscriptionId: prepared.subscriptionId,
+    },
+    resources: {
+      ...loaded.artifact.resources,
+      subscriptions: loaded.artifact.resources.subscriptions.includes(prepared.subscriptionId)
+        ? loaded.artifact.resources.subscriptions
+        : [...loaded.artifact.resources.subscriptions, prepared.subscriptionId],
+    },
+  });
+
+  const mid = await runStripeTestClockDunning({
+    transport,
+    artifact: withSub,
+    hmacSecret,
+    artifactPath: path,
+    sleepMs: 0,
+  });
+  expect(mid.scenario.status).toBe("PASS");
+  expect(mid.artifact.clock.dunning.phase).toBe("recovered");
+  expect(mid.artifact.clock.dunning.failureInvoiceId).toBeTruthy();
+  expect(mid.artifact.clock.dunning.recoveryInvoiceId).toBeTruthy();
+  expect(mid.artifact.clock.dunning.recoveryInvoiceId).not.toBe(mid.artifact.clock.dunning.failureInvoiceId);
+  expect(mid.artifact.clock.dunning.recoveryInvoiceId).not.toBe(loaded.artifact.clock.baselineInvoiceId);
+
+  // Second call must skip side effects using recovered checkpoint.
+  const again = await runStripeTestClockDunning({
+    transport,
+    artifact: mid.artifact,
+    hmacSecret,
+    artifactPath: path,
+    sleepMs: 0,
+  });
+  expect(again.scenario.status).toBe("PASS");
+  expect(again.scenario.evidence).toContain("skipped_side_effects=true");
+  expect(again.artifact.clock.dunning.phase).toBe("recovered");
+});
+
+it("continues dunning after crash between failure confirmation and recovery advance", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const prepared = await prepareAndCompleteCheckout(root, transport);
+  const path = artifactFile(root);
+  const loaded = loadJ9RunArtifact(path, hmacSecret);
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) return;
+
+  // Drive to failure_confirmed via a full dunning run, then rewind phase to simulate crash before recovery advance.
+  const withSub = persistArtifactUpdate(hmacSecret, path, loaded.artifact, {
+    checkout: { ...loaded.artifact.checkout, subscriptionId: prepared.subscriptionId },
+    resources: {
+      ...loaded.artifact.resources,
+      subscriptions: [...loaded.artifact.resources.subscriptions, prepared.subscriptionId],
+    },
+  });
+  const full = await runStripeTestClockDunning({
+    transport,
+    artifact: withSub,
+    hmacSecret,
+    artifactPath: path,
+    sleepMs: 0,
+  });
+  expect(full.scenario.status).toBe("PASS");
+
+  const crashed = persistArtifactUpdate(hmacSecret, path, full.artifact, {
+    clock: {
+      ...full.artifact.clock,
+      dunning: {
+        ...full.artifact.clock.dunning,
+        phase: "failure_confirmed",
+        recoverTargetFrozenTime: null,
+        recoveryInvoiceId: null,
+        recoveryEventId: null,
+      },
+    },
+  });
+  const resumed = await runStripeTestClockDunning({
+    transport,
+    artifact: crashed,
+    hmacSecret,
+    artifactPath: path,
+    sleepMs: 0,
+  });
+  expect(resumed.scenario.status).toBe("PASS");
+  expect(resumed.artifact.clock.dunning.phase).toBe("recovered");
+  // Recovery must still exclude baseline.
+  expect(resumed.artifact.clock.dunning.recoveryInvoiceId).not.toBe(loaded.artifact.clock.baselineInvoiceId);
+});
+
+it("records checkout credit invoice checkpoint and keeps fake_unit separate from live acceptance", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const prepared = await prepareAndCompleteCheckout(root, transport);
+  writeSignedCapture(captureFile(root), transport, {
+    runId: prepared.artifact.runId,
+    customerId: prepared.customerId,
+    subscriptionId: prepared.subscriptionId,
+    sessionId: prepared.sessionId,
+  });
+  const resumed = await runJ9({
+    env: liveEnv(root, { STRIPE_J9_STAGE: "resume" }),
+    transport,
+    repoRoot: root,
+  });
+  expect(resumed.kind).toBe("live_j9");
+  expect(resumed.liveAcceptance).toBe(true);
+  const after = loadJ9RunArtifact(artifactFile(root), hmacSecret);
+  // Completed cleanup clears ids; credit checkpoint is observed during resume via scenario evidence.
+  expect(resumed.scenarios.find((row) => row.scenario === "subscription_payment_and_credit")?.evidence).toContain("credit_checkpoint=");
+
+  const fake = await runJ9({
+    env: {
+      STRIPE_J9_MODE: "test",
+      STRIPE_J9_TRANSPORT: "fake",
+      STRIPE_TEST_API_KEY: "sk_test_FAKE_KEY_DO_NOT_LEAK_OR_PRINT",
+      STRIPE_TEST_WEBHOOK_SECRET: secret,
+      STRIPE_J9_PRICE_HOME: "price_j9_test_home",
+    },
+    transport: createFakeStripeTransport(),
+  });
+  expect(fake.kind).toBe("fake_unit");
+  expect(fake.liveAcceptance).toBe(false);
+  void after;
 });
 
 it("tracks resources on mid-prepare failure for later cleanup", async () => {

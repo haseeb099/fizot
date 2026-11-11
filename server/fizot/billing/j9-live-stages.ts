@@ -11,18 +11,21 @@ import {
 import {
   appendTransition,
   createRunId,
+  emptyDunningCheckpoint,
   emptyTrackedResources,
   loadJ9RunArtifact,
+  persistArtifactUpdate,
   saveJ9RunArtifact,
   sealArtifact,
+  type J9DunningCheckpoint,
   type J9RunArtifact,
   type J9RunStage,
   type J9TrackedResources,
 } from "./j9-run-artifact.ts";
 import {
-  advanceTestClockUntilReady,
   correlateCustomerEvents,
   createTestClock,
+  ensureTestClockFrozenAt,
   listStripeEventsPaged,
   nextBillingFrozenTime,
   recurringIntervalFromPrice,
@@ -85,7 +88,7 @@ export async function prepareLiveJ9(input: {
     // Retain recorded resources for explicit cleanup; never auto-abandon mid-prepare.
     const at = new Date().toISOString();
     const artifact = sealArtifact(input.config.artifactHmacSecret, {
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: "live_j9_run",
       runId,
       stage,
@@ -100,6 +103,7 @@ export async function prepareLiveJ9(input: {
         sessionId: resources.checkoutSessions[0] ?? "cs_missing",
         expectedPriceId: input.config.priceHome,
         subscriptionId: null,
+        creditInvoiceId: null,
       },
       clock: {
         clockId: resources.testClocks[0] ?? "clock_missing",
@@ -108,6 +112,7 @@ export async function prepareLiveJ9(input: {
         subscriptionId: resources.subscriptions[0] ?? null,
         baselineInvoiceId: null,
         baselineEventIds: [],
+        dunning: emptyDunningCheckpoint(),
       },
       resources: {
         customers: [...resources.customers],
@@ -272,7 +277,7 @@ export async function prepareLiveJ9(input: {
 
     const at = new Date().toISOString();
     const artifact = sealArtifact(input.config.artifactHmacSecret, {
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: "live_j9_run",
       runId,
       stage: "awaiting_checkout",
@@ -287,6 +292,7 @@ export async function prepareLiveJ9(input: {
         sessionId,
         expectedPriceId: input.config.priceHome,
         subscriptionId: null,
+        creditInvoiceId: null,
       },
       clock: {
         clockId: clockCreated.clock.id,
@@ -295,6 +301,7 @@ export async function prepareLiveJ9(input: {
         subscriptionId: clockSubId,
         baselineInvoiceId,
         baselineEventIds,
+        dunning: emptyDunningCheckpoint(),
       },
       resources: {
         customers: [...resources.customers],
@@ -560,175 +567,306 @@ export async function resumeLiveCheckoutEvidence(input: {
   };
 }
 
+export type DunningRunResult = {
+  scenario: StageScenario;
+  artifact: J9RunArtifact;
+};
+
+function withDunning(
+  artifact: J9RunArtifact,
+  dunning: J9DunningCheckpoint,
+  frozenTime?: number,
+): J9RunArtifact["clock"] {
+  return {
+    ...artifact.clock,
+    frozenTime: frozenTime ?? artifact.clock.frozenTime,
+    dunning,
+  };
+}
+
+/**
+ * Stripe Test Clock failure→recovery with authenticated checkpoints.
+ * Reconciles live frozen_time/events before any irreversible advance.
+ */
 export async function runStripeTestClockDunning(input: {
   transport: J9StripeTransport;
   artifact: J9RunArtifact;
+  hmacSecret: string;
+  artifactPath: string;
   sleepMs?: number;
-}): Promise<StageScenario> {
-  const clockId = input.artifact.clock.clockId;
-  const customerId = input.artifact.clock.customerId;
-  const subscriptionId = input.artifact.clock.subscriptionId;
-  const baselineInvoiceId = input.artifact.clock.baselineInvoiceId;
-  if (!subscriptionId || !baselineInvoiceId) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "clock baseline missing", {
-      failureReason: "prepare did not record clock subscription/baseline invoice",
+}): Promise<DunningRunResult> {
+  let artifact = input.artifact;
+  const clockId = artifact.clock.clockId;
+  const customerId = artifact.clock.customerId;
+  const subscriptionId = artifact.clock.subscriptionId;
+  const baselineInvoiceId = artifact.clock.baselineInvoiceId;
+  const persist = (dunning: J9DunningCheckpoint, frozenTime?: number) => {
+    artifact = persistArtifactUpdate(input.hmacSecret, input.artifactPath, artifact, {
+      clock: withDunning(artifact, dunning, frozenTime),
     });
+  };
+  const blocked = (evidence: string, failureReason: string): DunningRunResult => ({
+    artifact,
+    scenario: scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", evidence, { failureReason }),
+  });
+  const failed = (evidence: string, failureReason: string): DunningRunResult => ({
+    artifact,
+    scenario: scenario("stripe_dunning_recovery", "FAIL", "stripe_api", evidence, { failureReason }),
+  });
+
+  if (!subscriptionId || !baselineInvoiceId) {
+    return blocked("clock baseline missing", "prepare did not record clock subscription/baseline invoice");
   }
 
   const retrieved = await retrieveTestClock(input.transport, clockId);
-  if (!retrieved.ok) {
-    return scenario("stripe_dunning_recovery", "FAIL", "stripe_api", retrieved.reason, { failureReason: retrieved.reason });
-  }
+  if (!retrieved.ok) return failed(retrieved.reason, retrieved.reason);
   if (retrieved.clock.status === "internal_failure") {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "test_clock_internal_failure", {
-      failureReason: "Stripe test clock entered internal_failure",
-    });
+    return blocked("test_clock_internal_failure", "Stripe test clock entered internal_failure");
+  }
+
+  // Already recovered on a prior resume — do not touch Stripe again.
+  if (artifact.clock.dunning.phase === "recovered") {
+    if (
+      !artifact.clock.dunning.failureInvoiceId
+      || artifact.clock.dunning.failureInvoiceId === baselineInvoiceId
+      || !artifact.clock.dunning.recoveryInvoiceId
+      || artifact.clock.dunning.recoveryInvoiceId === baselineInvoiceId
+      || artifact.clock.dunning.recoveryInvoiceId === artifact.clock.dunning.failureInvoiceId
+    ) {
+      return blocked("recovered_checkpoint_invalid", "Recovered checkpoint missing distinct failure/recovery invoices");
+    }
+    return {
+      artifact,
+      scenario: scenario(
+        "stripe_dunning_recovery",
+        "PASS",
+        "stripe_api",
+        `clock=${clockId} stripe_time=${retrieved.clock.frozen_time} failed_invoice=${artifact.clock.dunning.failureInvoiceId} recovery_invoice=${artifact.clock.dunning.recoveryInvoiceId} checkpoint=recovered skipped_side_effects=true baseline_excluded=true`,
+      ),
+    };
   }
 
   const subscription = await input.transport.request("GET", `subscriptions/${subscriptionId}`, null);
   const price = (subscription.items as { data?: Array<{ price?: Record<string, unknown> }> } | undefined)?.data?.[0]?.price;
   if (!price) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "subscription price missing", {
-      failureReason: "cannot determine recurring interval for clock advance",
-    });
+    return blocked("subscription price missing", "cannot determine recurring interval for clock advance");
   }
   const recurring = recurringIntervalFromPrice(price);
   if (!recurring) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "price not recurring", {
-      failureReason: "Test Clock advance requires a recurring Price",
-    });
+    return blocked("price not recurring", "Test Clock advance requires a recurring Price");
   }
 
-  const preFailureFrozen = retrieved.clock.frozen_time;
-  await input.transport.request("POST", "payment_methods/pm_card_chargeCustomerFail/attach", { customer: customerId });
-  await input.transport.request("POST", `customers/${customerId}`, {
-    "invoice_settings[default_payment_method]": "pm_card_chargeCustomerFail",
-  });
-
-  const target = nextBillingFrozenTime(preFailureFrozen, recurring);
-  const advanced = await advanceTestClockUntilReady({
-    transport: input.transport,
-    clockId,
-    targetFrozenTime: target,
+  const poll = {
     sleepMs: input.sleepMs ?? 0,
     maxAttempts: input.sleepMs && input.sleepMs > 0 ? 40 : 3,
-  });
-  if (!advanced.ok) {
-    const blocked = advanced.reason.includes("internal_failure") || advanced.reason.includes("timeout");
-    return scenario("stripe_dunning_recovery", blocked ? "BLOCKED" : "FAIL", "stripe_api", advanced.reason, {
-      failureReason: advanced.reason,
-    });
+  };
+  let dunning: J9DunningCheckpoint = { ...artifact.clock.dunning };
+  const baselineFrozen = artifact.clock.frozenTime;
+
+  // First failure target is derived from prepare baseline frozen_time only.
+  if (dunning.failTargetFrozenTime == null) {
+    dunning = {
+      ...dunning,
+      failTargetFrozenTime: nextBillingFrozenTime(baselineFrozen, recurring),
+    };
+    persist(dunning);
   }
 
-  const failedList = await listStripeEventsPaged({ transport: input.transport, type: "invoice.payment_failed" });
-  if (!failedList.ok) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", failedList.reason, {
-      failureReason: failedList.reason,
-    });
-  }
-  if (failedList.truncated) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "events_list_truncated", {
-      failureReason: "Stripe Events pagination truncated; cannot honestly confirm failure evidence",
-    });
-  }
-  const failedMatch = correlateCustomerEvents(failedList.events, {
-    customerId,
-    subscriptionId,
-    types: ["invoice.payment_failed"],
-    excludeEventIds: input.artifact.clock.baselineEventIds,
-    excludeInvoiceIds: [baselineInvoiceId],
-    createdAfterSec: preFailureFrozen,
-  });
-  if (failedMatch.missingTypes.length > 0 || failedMatch.matched.length < 1) {
-    return scenario(
-      "stripe_dunning_recovery",
-      "BLOCKED",
-      "stripe_api",
-      `clock=${clockId} missing=invoice.payment_failed rejected=${failedMatch.rejected.length}`,
-      {
-        failureReason: "Absent post-baseline Stripe-generated payment failure for the clock subscription",
-      },
-    );
-  }
-  const failureEvent = failedMatch.matched[0]!;
-  const failureInvoiceId = typeof failureEvent.data.object.id === "string" ? failureEvent.data.object.id : null;
-  if (!failureInvoiceId || failureInvoiceId === baselineInvoiceId) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "failure invoice not distinct from baseline", {
-      failureReason: "payment_failed must reference a post-baseline invoice",
-    });
+  // If Stripe already advanced past the failure target without a checkpoint, adopt that state.
+  if (
+    retrieved.clock.frozen_time >= (dunning.failTargetFrozenTime ?? Number.POSITIVE_INFINITY)
+    && (dunning.phase === "baseline" || dunning.phase === "fail_pm_set" || dunning.phase === "failure_advance_committed")
+  ) {
+    dunning = { ...dunning, phase: "failure_advanced" };
+    persist(dunning, retrieved.clock.frozen_time);
   }
 
-  await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: customerId });
-  await input.transport.request("POST", `customers/${customerId}`, {
-    "invoice_settings[default_payment_method]": "pm_card_visa",
-  });
-  const recoverTarget = nextBillingFrozenTime(advanced.clock.frozen_time, recurring);
-  const recoveredClock = await advanceTestClockUntilReady({
-    transport: input.transport,
-    clockId,
-    targetFrozenTime: recoverTarget,
-    sleepMs: input.sleepMs ?? 0,
-    maxAttempts: input.sleepMs && input.sleepMs > 0 ? 40 : 3,
-  });
-  if (!recoveredClock.ok) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", recoveredClock.reason, {
-      failureReason: `recovery clock advance: ${recoveredClock.reason}`,
+  if (dunning.phase === "baseline") {
+    await input.transport.request("POST", "payment_methods/pm_card_chargeCustomerFail/attach", { customer: customerId });
+    await input.transport.request("POST", `customers/${customerId}`, {
+      "invoice_settings[default_payment_method]": "pm_card_chargeCustomerFail",
     });
+    dunning = { ...dunning, phase: "fail_pm_set" };
+    persist(dunning);
   }
 
-  const paidList = await listStripeEventsPaged({ transport: input.transport, type: "invoice.paid" });
-  if (!paidList.ok) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", paidList.reason, {
-      failureReason: paidList.reason,
-    });
-  }
-  if (paidList.truncated) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "events_list_truncated", {
-      failureReason: "Stripe Events pagination truncated; cannot honestly confirm recovery evidence",
-    });
-  }
-  const paidMatch = correlateCustomerEvents(paidList.events, {
-    customerId,
-    subscriptionId,
-    types: ["invoice.paid"],
-    excludeEventIds: [...input.artifact.clock.baselineEventIds, failureEvent.id],
-    excludeInvoiceIds: [baselineInvoiceId, failureInvoiceId],
-    createdAfterSec: failureEvent.created,
-  });
-  if (paidMatch.matched.length < 1) {
-    // Also accept recovered subscription status from Stripe if a distinct paid invoice exists on the subscription.
-    const refreshed = await input.transport.request("GET", `subscriptions/${subscriptionId}`, {
-      "expand[]": "latest_invoice",
-    });
-    const latestId = invoiceIdFromSubscription(refreshed);
-    if (!latestId || latestId === baselineInvoiceId || latestId === failureInvoiceId || refreshed.status !== "active") {
-      return scenario(
-        "stripe_dunning_recovery",
-        "BLOCKED",
-        "stripe_api",
-        `clock=${clockId} recovery_not_confirmed`,
-        { failureReason: "Recovery not confirmed by a post-failure invoice.paid distinct from baseline" },
-      );
+  if (
+    dunning.phase === "fail_pm_set"
+    || dunning.phase === "failure_advance_committed"
+    || dunning.phase === "failure_advanced"
+  ) {
+    const failTarget = dunning.failTargetFrozenTime!;
+    if (dunning.phase === "fail_pm_set") {
+      dunning = { ...dunning, phase: "failure_advance_committed" };
+      persist(dunning);
     }
-    let latestInvoice: Record<string, unknown>;
-    if (refreshed.latest_invoice && typeof refreshed.latest_invoice === "object") {
-      latestInvoice = refreshed.latest_invoice as Record<string, unknown>;
-    } else {
-      latestInvoice = await input.transport.request("GET", `invoices/${latestId}`, null);
+    const advanced = await ensureTestClockFrozenAt({
+      transport: input.transport,
+      clockId,
+      targetFrozenTime: failTarget,
+      ...poll,
+    });
+    if (!advanced.ok) {
+      const isBlocked = advanced.reason.includes("internal_failure") || advanced.reason.includes("timeout");
+      return isBlocked ? blocked(advanced.reason, advanced.reason) : failed(advanced.reason, advanced.reason);
     }
-    const recoveryPaid = assertPaidInvoice(latestInvoice, { customerId, subscriptionId });
-    if (!recoveryPaid.ok) {
-      return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", recoveryPaid.reason, {
-        failureReason: recoveryPaid.reason,
+    dunning = { ...dunning, phase: "failure_advanced" };
+    persist(dunning, advanced.clock.frozen_time);
+  }
+
+  if (dunning.phase === "failure_advanced" || dunning.phase === "failure_confirmed") {
+    if (!dunning.failureInvoiceId || !dunning.failureEventId) {
+      const failedList = await listStripeEventsPaged({ transport: input.transport, type: "invoice.payment_failed" });
+      if (!failedList.ok) return blocked(failedList.reason, failedList.reason);
+      if (failedList.truncated) {
+        return blocked("events_list_truncated", "Stripe Events pagination truncated; cannot honestly confirm failure evidence");
+      }
+      const failedMatch = correlateCustomerEvents(failedList.events, {
+        customerId,
+        subscriptionId,
+        types: ["invoice.payment_failed"],
+        excludeEventIds: artifact.clock.baselineEventIds,
+        excludeInvoiceIds: [baselineInvoiceId],
+        createdAfterSec: baselineFrozen,
       });
+      if (failedMatch.matched.length < 1) {
+        return blocked(
+          `clock=${clockId} missing=invoice.payment_failed`,
+          "Absent post-baseline Stripe-generated payment failure for the clock subscription",
+        );
+      }
+      const failureEvent = failedMatch.matched[0]!;
+      const failureInvoiceId = typeof failureEvent.data.object.id === "string" ? failureEvent.data.object.id : null;
+      if (!failureInvoiceId || failureInvoiceId === baselineInvoiceId) {
+        return blocked("failure invoice not distinct from baseline", "payment_failed must reference a post-baseline invoice");
+      }
+      dunning = {
+        ...dunning,
+        phase: "failure_confirmed",
+        failureInvoiceId,
+        failureEventId: failureEvent.id,
+      };
+      persist(dunning);
+    } else if (dunning.phase === "failure_advanced") {
+      dunning = { ...dunning, phase: "failure_confirmed" };
+      persist(dunning);
     }
   }
 
-  return scenario(
-    "stripe_dunning_recovery",
-    "PASS",
-    "stripe_api",
-    `clock=${clockId} stripe_time=${recoveredClock.clock.frozen_time} failed_invoice=${failureInvoiceId} baseline_excluded=true label=stripe_test_clock_not_app_worker_clock`,
-  );
+  if (dunning.phase === "failure_confirmed") {
+    await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: customerId });
+    await input.transport.request("POST", `customers/${customerId}`, {
+      "invoice_settings[default_payment_method]": "pm_card_visa",
+    });
+    const live = await retrieveTestClock(input.transport, clockId);
+    if (!live.ok) return failed(live.reason, live.reason);
+    dunning = {
+      ...dunning,
+      phase: "recover_pm_set",
+      recoverTargetFrozenTime: dunning.recoverTargetFrozenTime ?? nextBillingFrozenTime(live.clock.frozen_time, recurring),
+    };
+    persist(dunning, live.clock.frozen_time);
+  }
+
+  if (
+    dunning.phase === "recover_pm_set"
+    || dunning.phase === "recovery_advance_committed"
+    || dunning.phase === "recovery_advanced"
+  ) {
+    const recoverTarget = dunning.recoverTargetFrozenTime;
+    if (recoverTarget == null) {
+      return blocked("recovery_target_missing", "Cannot establish recovery advance target from checkpoint or Stripe state");
+    }
+    if (dunning.phase === "recover_pm_set") {
+      dunning = { ...dunning, phase: "recovery_advance_committed" };
+      persist(dunning);
+    }
+    const recoveredClock = await ensureTestClockFrozenAt({
+      transport: input.transport,
+      clockId,
+      targetFrozenTime: recoverTarget,
+      ...poll,
+    });
+    if (!recoveredClock.ok) {
+      return blocked(recoveredClock.reason, `recovery clock advance: ${recoveredClock.reason}`);
+    }
+    dunning = { ...dunning, phase: "recovery_advanced" };
+    persist(dunning, recoveredClock.clock.frozen_time);
+  }
+
+  if (dunning.phase === "recovery_advanced" || dunning.phase === "recovered") {
+    const failureInvoiceId = dunning.failureInvoiceId;
+    const failureEventId = dunning.failureEventId;
+    if (!failureInvoiceId || !failureEventId || failureInvoiceId === baselineInvoiceId) {
+      return blocked("failure_checkpoint_missing", "Cannot confirm recovery without distinct failure invoice checkpoint");
+    }
+
+    let recoveryInvoiceId = dunning.recoveryInvoiceId;
+    let recoveryEventId = dunning.recoveryEventId;
+    if (!recoveryInvoiceId) {
+      const paidList = await listStripeEventsPaged({ transport: input.transport, type: "invoice.paid" });
+      if (!paidList.ok) return blocked(paidList.reason, paidList.reason);
+      if (paidList.truncated) {
+        return blocked("events_list_truncated", "Stripe Events pagination truncated; cannot honestly confirm recovery evidence");
+      }
+      const paidMatch = correlateCustomerEvents(paidList.events, {
+        customerId,
+        subscriptionId,
+        types: ["invoice.paid"],
+        excludeEventIds: [...artifact.clock.baselineEventIds, failureEventId],
+        excludeInvoiceIds: [baselineInvoiceId, failureInvoiceId],
+        createdAfterSec: dunning.failTargetFrozenTime ?? baselineFrozen,
+      });
+      if (paidMatch.matched.length >= 1) {
+        const recoveryEvent = paidMatch.matched[0]!;
+        const invoiceId = typeof recoveryEvent.data.object.id === "string" ? recoveryEvent.data.object.id : null;
+        if (!invoiceId || invoiceId === baselineInvoiceId || invoiceId === failureInvoiceId) {
+          return blocked("recovery_invoice_not_distinct", "Recovery must not reuse baseline or failure invoice");
+        }
+        recoveryInvoiceId = invoiceId;
+        recoveryEventId = recoveryEvent.id;
+      } else {
+        const refreshed = await input.transport.request("GET", `subscriptions/${subscriptionId}`, {
+          "expand[]": "latest_invoice",
+        });
+        const latestId = invoiceIdFromSubscription(refreshed);
+        if (!latestId || latestId === baselineInvoiceId || latestId === failureInvoiceId || refreshed.status !== "active") {
+          return blocked(
+            `clock=${clockId} recovery_not_confirmed`,
+            "Recovery not confirmed by a post-failure invoice.paid distinct from baseline",
+          );
+        }
+        let latestInvoice: Record<string, unknown>;
+        if (refreshed.latest_invoice && typeof refreshed.latest_invoice === "object") {
+          latestInvoice = refreshed.latest_invoice as Record<string, unknown>;
+        } else {
+          latestInvoice = await input.transport.request("GET", `invoices/${latestId}`, null);
+        }
+        const recoveryPaid = assertPaidInvoice(latestInvoice, { customerId, subscriptionId });
+        if (!recoveryPaid.ok) return blocked(recoveryPaid.reason, recoveryPaid.reason);
+        recoveryInvoiceId = recoveryPaid.invoiceId;
+      }
+    }
+
+    dunning = {
+      ...dunning,
+      phase: "recovered",
+      recoveryInvoiceId,
+      recoveryEventId: recoveryEventId ?? dunning.recoveryEventId,
+    };
+    persist(dunning);
+  }
+
+  const finalClock = await retrieveTestClock(input.transport, clockId);
+  const stripeTime = finalClock.ok ? finalClock.clock.frozen_time : artifact.clock.frozenTime;
+  return {
+    artifact,
+    scenario: scenario(
+      "stripe_dunning_recovery",
+      "PASS",
+      "stripe_api",
+      `clock=${clockId} stripe_time=${stripeTime} failed_invoice=${artifact.clock.dunning.failureInvoiceId} recovery_invoice=${artifact.clock.dunning.recoveryInvoiceId} phase=${artifact.clock.dunning.phase} baseline_excluded=true label=stripe_test_clock_not_app_worker_clock`,
+    ),
+  };
 }
 

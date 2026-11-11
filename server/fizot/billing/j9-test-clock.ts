@@ -70,13 +70,39 @@ export async function retrieveTestClock(
  * Advance then poll until status is ready (Stripe docs). internal_failure and
  * timeouts are BLOCKED/FAIL inputs for the caller — never treated as success.
  */
-export async function advanceTestClockUntilReady(options: AdvancePollOptions): Promise<AdvancePollResult> {
+export type EnsureClockResult =
+  | { ok: true; clock: TestClockObject; skippedAdvance: boolean }
+  | { ok: false; reason: string; status?: string };
+
+/**
+ * Bring a Test Clock to target frozen_time without repeating Stripe advances.
+ * If frozen_time is already >= target, only polls for ready — never POSTs advance.
+ */
+export async function ensureTestClockFrozenAt(options: AdvancePollOptions): Promise<EnsureClockResult> {
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const maxAttempts = options.maxAttempts ?? 40;
   const sleepMs = options.sleepMs ?? 0;
-  await options.transport.request("POST", `test_helpers/test_clocks/${options.clockId}/advance`, {
-    frozen_time: String(options.targetFrozenTime),
-  });
+
+  const initial = await retrieveTestClock(options.transport, options.clockId);
+  if (!initial.ok) return { ok: false, reason: initial.reason };
+  if (initial.clock.status === "internal_failure") {
+    return { ok: false, reason: "test_clock_internal_failure", status: "internal_failure" };
+  }
+
+  let skippedAdvance = false;
+  if (initial.clock.frozen_time >= options.targetFrozenTime) {
+    skippedAdvance = true;
+  } else if (initial.clock.status === "advancing") {
+    // A prior advance is in flight — poll only; do not POST another advance.
+    skippedAdvance = true;
+  } else if (initial.clock.status === "ready") {
+    await options.transport.request("POST", `test_helpers/test_clocks/${options.clockId}/advance`, {
+      frozen_time: String(options.targetFrozenTime),
+    });
+  } else {
+    return { ok: false, reason: `test_clock_status=${initial.clock.status}`, status: initial.clock.status };
+  }
+
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const retrieved = await retrieveTestClock(options.transport, options.clockId);
     if (!retrieved.ok) return { ok: false, reason: retrieved.reason };
@@ -84,7 +110,7 @@ export async function advanceTestClockUntilReady(options: AdvancePollOptions): P
       return { ok: false, reason: "test_clock_internal_failure", status: "internal_failure" };
     }
     if (retrieved.clock.status === "ready" && retrieved.clock.frozen_time >= options.targetFrozenTime) {
-      return { ok: true, clock: retrieved.clock };
+      return { ok: true, clock: retrieved.clock, skippedAdvance };
     }
     if (retrieved.clock.status !== "ready" && retrieved.clock.status !== "advancing") {
       return { ok: false, reason: `test_clock_status=${retrieved.clock.status}`, status: retrieved.clock.status };
@@ -92,6 +118,12 @@ export async function advanceTestClockUntilReady(options: AdvancePollOptions): P
     if (sleepMs > 0) await sleep(sleepMs);
   }
   return { ok: false, reason: "test_clock_advance_timeout" };
+}
+
+export async function advanceTestClockUntilReady(options: AdvancePollOptions): Promise<AdvancePollResult> {
+  const ensured = await ensureTestClockFrozenAt(options);
+  if (!ensured.ok) return { ok: false, reason: ensured.reason, status: ensured.status };
+  return { ok: true, clock: ensured.clock };
 }
 
 export type RecurringInterval = { interval: "day" | "week" | "month" | "year"; intervalCount: number };

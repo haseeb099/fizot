@@ -302,6 +302,7 @@ export async function cleanupTrackedResources(input: {
           sessionId: "cs_missing",
           expectedPriceId: input.artifact.priceHome,
           subscriptionId: null,
+          creditInvoiceId: null,
         },
         clock: {
           clockId: "clock_missing",
@@ -310,6 +311,15 @@ export async function cleanupTrackedResources(input: {
           subscriptionId: null,
           baselineInvoiceId: null,
           baselineEventIds: [],
+          dunning: {
+            phase: "baseline",
+            failTargetFrozenTime: null,
+            recoverTargetFrozenTime: null,
+            failureInvoiceId: null,
+            failureEventId: null,
+            recoveryInvoiceId: null,
+            recoveryEventId: null,
+          },
         },
         resources: emptyTrackedResources(),
       },

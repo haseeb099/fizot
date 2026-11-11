@@ -54,7 +54,11 @@ Acceptance kinds:
 
 Hosted Checkout completion is **manual**. Stripe’s supported testing path is a browser/Dashboard Checkout with test cards; fragile browser automation is not used.
 
-Artifact paths are **fixed**: `artifacts/j9/run.json` and `artifacts/j9/webhook-capture.json`. Workflow inputs are never shell paths. Integrity uses `STRIPE_J9_ARTIFACT_HMAC_SECRET` (never written into the artifact). Schema v3 binds runId, stage, transitions, workspace, prices, resource ids, retrySafe and expiry into the MAC. Stripe credentials, webhook secrets and test-card details must never appear in artifacts.
+Artifact paths are **fixed**: `artifacts/j9/run.json` and `artifacts/j9/webhook-capture.json`. Workflow inputs are never shell paths. Integrity uses `STRIPE_J9_ARTIFACT_HMAC_SECRET` (never written into the artifact). Schema v4 binds runId, stage, transitions, workspace, prices, resource ids, retrySafe, Checkout `creditInvoiceId`, Test Clock `dunning` checkpoints and expiry into the MAC. Stripe credentials, webhook secrets and test-card details must never appear in artifacts.
+
+**Test Clock resume checkpoints**
+
+Dunning persists authenticated phases (`baseline` → `fail_pm_set` → `failure_advance_committed` → `failure_advanced` → `failure_confirmed` → `recover_pm_set` → `recovery_advance_committed` → `recovery_advanced` → `recovered`) with fail/recover targets and distinct failure/recovery invoice ids. Before any advance, resume reconciles `frozen_time` from Stripe: if already at/past the target, it polls only and never POSTs `advance` again. Baseline invoices/events never count as recovery. If Stripe state cannot be established, the scenario stays BLOCKED and resources are retained.
 
 **Lifecycle stages (authenticated transitions)**
 
