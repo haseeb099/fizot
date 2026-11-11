@@ -4,8 +4,14 @@ import { createMemoryCreditStore } from "../proxy/credit-store.ts";
 import { createBillingService, type StripeEvent } from "./apply.ts";
 import { createFakeEmailProvider } from "./email.ts";
 import { resolveJ9Config, redactSecrets, type J9Config } from "./j9-config.ts";
-import { classifyCleanupError, type CleanupResource } from "./j9-errors.ts";
 import { assertPaidInvoice, invoiceIdFromSubscription, stripeQuantity } from "./j9-invoice.ts";
+import {
+  cleanupAbandonedRun,
+  cleanupTrackedResources,
+  prepareLiveJ9,
+  resumeLiveCheckoutEvidence,
+  runStripeTestClockDunning,
+} from "./j9-live-stages.ts";
 import {
   createFakeStripeTransport,
   createLiveStripeTransport,
@@ -16,6 +22,7 @@ import { createFakeBillingProvider } from "./provider.ts";
 import { DAY_MS, GRACE_WINDOW_MS, DELETE_AFTER_SUSPEND_MS, NOTICE_BEFORE_DELETE_MS, emptyRecord } from "./record.ts";
 import { createMemoryBillingStore } from "./store.ts";
 import { vatGate } from "./plan-prices.ts";
+import type { J9RunArtifact, J9TrackedResources } from "./j9-run-artifact.ts";
 
 export type J9ScenarioStatus = "PASS" | "FAIL" | "BLOCKED" | "NOT_RUN";
 export type J9EventSource =
@@ -23,7 +30,8 @@ export type J9EventSource =
   | "locally_signed_fixture"
   | "simulated_clock"
   | "config"
-  | "none";
+  | "none"
+  | "stripe_cli_capture";
 export type J9Kind = "fake_unit" | "live_j9";
 
 export type J9ScenarioResult = {
@@ -42,7 +50,10 @@ export type J9Report = {
   overall: "PASS" | "FAIL" | "BLOCKED";
   exitCode: number;
   scenarios: J9ScenarioResult[];
-  resources: { customers: string[]; subscriptions: string[]; checkoutSessions: string[] };
+  resources: J9TrackedResources;
+  artifactPath?: string | null;
+  runId?: string | null;
+  checkoutUrl?: string | null;
 };
 
 const SHARED_MANDATORY = [
@@ -71,6 +82,9 @@ export function finish(input: {
   kind: J9Kind;
   scenarios: J9ScenarioResult[];
   resources: J9Report["resources"];
+  artifactPath?: string | null;
+  runId?: string | null;
+  checkoutUrl?: string | null;
 }): J9Report {
   const required = mandatoryFor(input.kind);
   const byName = new Map(input.scenarios.map((row) => [row.scenario, row]));
@@ -96,8 +110,20 @@ export function finish(input: {
     overall,
     exitCode,
     scenarios,
-    resources: input.resources,
+    resources: {
+      customers: input.resources.customers,
+      subscriptions: input.resources.subscriptions,
+      checkoutSessions: input.resources.checkoutSessions,
+      testClocks: input.resources.testClocks ?? [],
+    },
+    artifactPath: input.artifactPath ?? null,
+    runId: input.runId ?? null,
+    checkoutUrl: input.checkoutUrl ?? null,
   };
+}
+
+function emptyResources(): J9TrackedResources {
+  return { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] };
 }
 
 function asEvent(id: string, type: string, created: number, object: Record<string, unknown>): StripeEvent {
@@ -129,7 +155,7 @@ export type J9DriverDeps = {
 export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
   const log = deps.log ?? (() => {});
   const scenarios: J9ScenarioResult[] = [];
-  const resources = { customers: [] as string[], subscriptions: [] as string[], checkoutSessions: [] as string[] };
+  const resources = emptyResources();
   const resolved = resolveJ9Config(deps.env);
   const kind: J9Kind = (resolved.ok ? resolved.config.transport : "live") === "fake" ? "fake_unit" : "live_j9";
 
@@ -143,7 +169,8 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
   }
 
   const config = resolved.config;
-  if (config.transport === "live" && deps.transport && isFakeTransport(deps.transport)) {
+  if (config.transport === "live" && deps.transport && isFakeTransport(deps.transport) && config.stage === "full") {
+    // Stage prepare/resume/cleanup unit tests inject a fake transport under live config on purpose.
     scenarios.push(scenario("secure_startup", "FAIL", "config", "live config with fake transport injected", {
       failureReason: "refusing fake transport under live J9 config",
     }));
@@ -161,12 +188,82 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
       ? createFakeStripeTransport()
       : createLiveStripeTransport(config.apiKey, deps.fetchImpl));
 
-  scenarios.push(scenario(
-    "secure_startup",
-    "PASS",
-    "config",
-    `kind=${kind} mode=test transport=${config.transport} key_prefix=sk_test_ price=configured`,
-  ));
+  if (config.stage === "cleanup") {
+    const abandoned = await cleanupAbandonedRun({ config, transport });
+    return finish({
+      kind,
+      scenarios: [
+        scenario("secure_startup", "PASS", "config", `stage=cleanup confirm=${config.cleanupConfirm}`),
+        ...abandoned.scenarios,
+      ],
+      resources: abandoned.resources,
+      artifactPath: config.artifactPath,
+      runId: config.cleanupConfirm,
+    });
+  }
+
+  if (config.stage === "prepare") {
+    const prepared = await prepareLiveJ9({ config, transport });
+    for (const row of prepared.scenarios) scenarios.push(row);
+    for (const name of mandatoryFor(kind)) {
+      if (scenarios.some((row) => row.scenario === name)) continue;
+      scenarios.push(scenario(name, "NOT_RUN", "none", "awaiting_resume_after_manual_checkout"));
+    }
+    scenarios.push(await cleanupTrackedResources({
+      transport,
+      resources: prepared.resources,
+      secrets,
+      pauseCleanup: prepared.artifact.pauseCleanup,
+    }));
+    if (prepared.checkoutUrl) safeLog(`j9_prepare checkout_url=${prepared.checkoutUrl} artifact=${config.artifactPath ?? ""}`);
+    return finish({
+      kind: "live_j9",
+      scenarios,
+      resources: prepared.resources,
+      artifactPath: config.artifactPath,
+      runId: prepared.artifact.runId,
+      checkoutUrl: prepared.checkoutUrl,
+    });
+  }
+
+  let liveArtifact: J9RunArtifact | null = null;
+  let resumeCheckoutSub: string | null = null;
+  let webhookFromCapture = false;
+
+  if (config.stage === "resume") {
+    const resumed = await resumeLiveCheckoutEvidence({ config, transport });
+    if (!resumed.ok) {
+      for (const row of resumed.scenarios) scenarios.push(row);
+      for (const name of mandatoryFor(kind)) {
+        if (scenarios.some((row) => row.scenario === name)) continue;
+        scenarios.push(scenario(name, "NOT_RUN", "none", "blocked by resume"));
+      }
+      scenarios.push(await cleanupTrackedResources({
+        transport,
+        resources: emptyResources(),
+        secrets,
+        pauseCleanup: true,
+      }));
+      return finish({
+        kind: "live_j9",
+        scenarios,
+        resources: emptyResources(),
+        artifactPath: config.artifactPath,
+      });
+    }
+    for (const row of resumed.evidence.scenarios) scenarios.push(row);
+    Object.assign(resources, resumed.evidence.resources);
+    liveArtifact = resumed.evidence.artifact;
+    resumeCheckoutSub = resumed.evidence.checkoutSubscriptionId;
+    webhookFromCapture = resumed.evidence.webhookCaptureOk;
+  } else {
+    scenarios.push(scenario(
+      "secure_startup",
+      "PASS",
+      "config",
+      `kind=${kind} mode=test transport=${config.transport} stage=${config.stage} key_prefix=sk_test_ price=configured`,
+    ));
+  }
 
   const credit = createMemoryCreditStore();
   const store = createMemoryBillingStore();
@@ -186,7 +283,7 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     onDelete: async (id) => { deletes.push(id); },
   });
   const webhookStore = createMemoryWebhookEventStore();
-  const workspaceId = `ws_j9_${Date.now().toString(36)}`;
+  const workspaceId = liveArtifact?.workspaceId ?? `ws_j9_${Date.now().toString(36)}`;
   let clock = Date.UTC(2026, 0, 1, 0, 0, 0);
   const nextCreatedSec = () => {
     clock += 1000;
@@ -207,14 +304,25 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
   };
 
   try {
-    scenarios.push(await runCheckoutSessionCreated(config, transport, resources, workspaceId, billing));
-    scenarios.push(await runCheckoutCompleted(kind, transport, resources));
+    if (config.stage !== "resume") {
+      scenarios.push(await runCheckoutSessionCreated(config, transport, resources, workspaceId, billing));
+      scenarios.push(await runCheckoutCompleted(kind, transport, resources));
+    } else if (resumeCheckoutSub && liveArtifact) {
+      const record = (await billing.store.get(workspaceId)) ?? emptyRecord(workspaceId);
+      record.stripeCustomerId = liveArtifact.checkout.customerId;
+      record.plan = "home";
+      record.country = "GB";
+      await billing.store.save(record);
+    }
+
     scenarios.push(await runSubscriptionPaymentAndCredit({
       config, transport, resources, workspaceId, credit, billing, applySignedFixture, createdSec: nextCreatedSec, safeLog,
     }));
-    scenarios.push(await runWebhookLifecycle({
-      config, workspaceId, billing, credit, createdSec: nextCreatedSec,
-    }));
+    if (!(config.stage === "resume" && webhookFromCapture)) {
+      scenarios.push(await runWebhookLifecycle({
+        config, workspaceId, billing, credit, createdSec: nextCreatedSec, kind,
+      }));
+    }
     scenarios.push(await runSimulatedFailedPayment({
       workspaceId, billing, applySignedFixture, createdSec: nextCreatedSec, email, deletes,
       now: () => clock,
@@ -226,7 +334,7 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     scenarios.push(await runSimulatedRecovery({
       workspaceId, billing, applySignedFixture, createdSec: nextCreatedSec, credit, resumes,
     }));
-    scenarios.push(runStripeDunning(kind));
+    scenarios.push(await runStripeDunning({ kind, transport, artifact: liveArtifact, sleepMs: config.transport === "live" ? 250 : 0 }));
     scenarios.push(await runTaxAndSeats({ config, transport, resources }));
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error), secrets);
@@ -236,11 +344,22 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
       scenarios.push(scenario(name, "FAIL", "none", "aborted", { failureReason: message }));
     }
   } finally {
-    scenarios.push(await runCleanup(transport, resources, secrets));
+    scenarios.push(await cleanupTrackedResources({
+      transport,
+      resources,
+      secrets,
+      pauseCleanup: false,
+    }));
     await billing.close();
   }
 
-  return finish({ kind, scenarios, resources });
+  return finish({
+    kind,
+    scenarios,
+    resources,
+    artifactPath: config.artifactPath,
+    runId: liveArtifact?.runId ?? null,
+  });
 }
 
 async function runCheckoutSessionCreated(
@@ -282,6 +401,7 @@ async function runCheckoutSessionCreated(
     "subscription_data[metadata][workspace_id]": workspaceId,
     "subscription_data[metadata][plan]": "home",
   });
+  // Full single-shot runs do not use a durable run artifact; staged live runs stamp fizot_j9_run_id in prepare.
   const sessionId = String(session.id ?? "");
   if (!sessionId || !session.url) {
     return scenario("checkout_session_created", "FAIL", "stripe_api", "checkout session incomplete", {
@@ -449,6 +569,7 @@ async function runWebhookLifecycle(input: {
   billing: ReturnType<typeof createBillingService>;
   credit: ReturnType<typeof createMemoryCreditStore>;
   createdSec: () => number;
+  kind: J9Kind;
 }): Promise<J9ScenarioResult> {
   const bad = asEvent("evt_bad_sig", "customer.updated", input.createdSec(), {
     id: "cus_ignore",
@@ -486,6 +607,17 @@ async function runWebhookLifecycle(input: {
     return scenario("webhook_lifecycle", "FAIL", "locally_signed_fixture", "credit changed", {
       failureReason: `before=${before.balanceMicroGbp} after=${after.balanceMicroGbp}`,
     });
+  }
+  if (input.kind === "live_j9") {
+    return scenario(
+      "webhook_lifecycle",
+      "BLOCKED",
+      "locally_signed_fixture",
+      "fixture_checks_ok stripe_signed_delivery_missing",
+      {
+        failureReason: "Local fixtures are not Stripe-originated delivery. Provide STRIPE_J9_WEBHOOK_CAPTURE_PATH from Stripe CLI for this run, or keep BLOCKED",
+      },
+    );
   }
   return scenario(
     "webhook_lifecycle",
@@ -594,8 +726,13 @@ async function runSimulatedRecovery(input: {
   );
 }
 
-function runStripeDunning(kind: J9Kind): J9ScenarioResult {
-  if (kind === "fake_unit") {
+async function runStripeDunning(input: {
+  kind: J9Kind;
+  transport: J9StripeTransport;
+  artifact: J9RunArtifact | null;
+  sleepMs: number;
+}): Promise<J9ScenarioResult> {
+  if (input.kind === "fake_unit") {
     return scenario(
       "stripe_dunning_recovery",
       "NOT_RUN",
@@ -603,8 +740,15 @@ function runStripeDunning(kind: J9Kind): J9ScenarioResult {
       "not required for fake_unit acceptance; real Stripe Test Clock dunning remains a live_j9 requirement",
     );
   }
-  return scenario("stripe_dunning_recovery", "BLOCKED", "none", "Stripe Test Clock dunning not automated", {
-    failureReason: "Create a test clock, attach the customer, advance through payment_failed and recovery, then assert Stripe-originated events; keep BLOCKED until that procedure is wired",
+  if (!input.artifact?.clock.subscriptionId) {
+    return scenario("stripe_dunning_recovery", "BLOCKED", "none", "live stage artifact with Test Clock subscription required", {
+      failureReason: "Run STRIPE_J9_STAGE=prepare then resume after Checkout; Test Clock dunning is not available on single-shot full live runs without an artifact",
+    });
+  }
+  return runStripeTestClockDunning({
+    transport: input.transport,
+    artifact: input.artifact,
+    sleepMs: input.sleepMs,
   });
 }
 
@@ -676,78 +820,17 @@ async function runTaxAndSeats(input: {
   );
 }
 
-function recordCleanupFailure(
-  remaining: string[],
-  resource: CleanupResource,
-  id: string,
-  error: unknown,
-  secrets: string[],
-): void {
-  const classified = classifyCleanupError(resource, error);
-  if (classified.action === "tolerate") return;
-  const detail = redactSecrets(error instanceof Error ? error.message : String(error), secrets).slice(0, 80);
-  remaining.push(`${resource}:${id}:${classified.reason}:${detail}`);
-}
-
-async function runCleanup(
-  transport: J9StripeTransport,
-  resources: J9Report["resources"],
-  secrets: string[],
-): Promise<J9ScenarioResult> {
-  const remaining: string[] = [];
-
-  for (const sessionId of [...resources.checkoutSessions].reverse()) {
-    try {
-      const session = await transport.request("GET", `checkout/sessions/${sessionId}`, null);
-      if (session.status === "open") {
-        try {
-          await transport.request("POST", `checkout/sessions/${sessionId}/expire`, null);
-        } catch (error) {
-          recordCleanupFailure(remaining, "checkout_session", sessionId, error, secrets);
-        }
-      }
-      // complete/expired sessions need no expire; they are already closed.
-    } catch (error) {
-      recordCleanupFailure(remaining, "checkout_session", sessionId, error, secrets);
-    }
-  }
-  for (const sub of [...resources.subscriptions].reverse()) {
-    try {
-      await transport.request("DELETE", `subscriptions/${sub}`, { invoice_now: "false", prorate: "true" });
-    } catch (error) {
-      recordCleanupFailure(remaining, "subscription", sub, error, secrets);
-    }
-  }
-  for (const customer of [...resources.customers].reverse()) {
-    try {
-      await transport.request("DELETE", `customers/${customer}`, null);
-    } catch (error) {
-      recordCleanupFailure(remaining, "customer", customer, error, secrets);
-    }
-  }
-  if (remaining.length > 0) {
-    return scenario("cleanup", "FAIL", "stripe_api", `remaining=${remaining.length}`, {
-      failureReason: remaining.join("; "),
-      cleanup: "partial",
-    });
-  }
-  return scenario(
-    "cleanup",
-    "PASS",
-    "stripe_api",
-    `closed_sessions=${resources.checkoutSessions.length} subscriptions=${resources.subscriptions.length} customers=${resources.customers.length}`,
-    { cleanup: "complete" },
-  );
-}
-
 export function formatJ9Report(report: J9Report): string {
   return [
     `j9_kind=${report.kind} live_acceptance=${report.liveAcceptance} overall=${report.overall} exit=${report.exitCode}`,
+    report.runId ? `j9_run_id=${report.runId}` : null,
+    report.artifactPath ? `j9_artifact=${report.artifactPath}` : null,
+    report.checkoutUrl ? `j9_checkout_url=${report.checkoutUrl}` : null,
     ...report.scenarios.map((row) => {
       const fail = row.failureReason ? ` failure=${JSON.stringify(row.failureReason)}` : "";
       const cleanup = row.cleanup ? ` cleanup=${row.cleanup}` : "";
       return `j9_scenario name=${row.scenario} status=${row.status} source=${row.source} evidence=${JSON.stringify(row.evidence)}${fail}${cleanup}`;
     }),
-    `j9_resources customers=${report.resources.customers.length} subscriptions=${report.resources.subscriptions.length} checkout_sessions=${report.resources.checkoutSessions.length}`,
-  ].join("\n");
+    `j9_resources customers=${report.resources.customers.length} subscriptions=${report.resources.subscriptions.length} checkout_sessions=${report.resources.checkoutSessions.length} test_clocks=${report.resources.testClocks.length}`,
+  ].filter((line): line is string => Boolean(line)).join("\n");
 }

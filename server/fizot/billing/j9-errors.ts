@@ -16,10 +16,18 @@ export class J9StripeError extends Error {
   }
 }
 
-export type CleanupResource = "checkout_session" | "subscription" | "customer";
+export type CleanupResource = "checkout_session" | "subscription" | "customer" | "test_clock";
 
 export type CleanupErrorClass =
-  | { action: "tolerate"; reason: "resource_missing" | "session_already_closed" | "subscription_already_canceled" | "customer_already_deleted" }
+  | {
+    action: "tolerate";
+    reason:
+      | "resource_missing"
+      | "session_already_closed"
+      | "subscription_already_canceled"
+      | "customer_already_deleted"
+      | "test_clock_already_deleted";
+  }
   | { action: "fail"; reason: string };
 
 /** Parse a Stripe error JSON body into typed fields. Never treats free text as success. */
@@ -65,6 +73,9 @@ export function classifyCleanupError(resource: CleanupResource, error: unknown):
   }
   if (resource === "customer" && error.code === "resource_already_deleted") {
     return { action: "tolerate", reason: "customer_already_deleted" };
+  }
+  if (resource === "test_clock" && (error.code === "resource_already_deleted" || error.code === "resource_missing")) {
+    return { action: "tolerate", reason: "test_clock_already_deleted" };
   }
   if (error.status === 404 || error.code === "resource_missing") {
     return { action: "tolerate", reason: "resource_missing" };

@@ -1,10 +1,37 @@
 # J9 billing lifecycle against Stripe test mode. Not on the daily gate.
 # Transport must stay live. Fake-unit PASS is not live acceptance.
-# Credentials alone never pass. Hosted Checkout completion and Test Clock dunning
-# remain required for live_acceptance=true.
+# Hosted Checkout completion is manual (prepare → browser → resume).
+# Stripe CLI signed webhook capture is required for live webhook evidence.
+# Do not expose a public production webhook endpoint from this workflow.
 name: Fizot billing Stripe test mode (J9)
 on:
   workflow_dispatch:
+    inputs:
+      stage:
+        description: "full | prepare | resume | cleanup"
+        required: true
+        default: prepare
+        type: choice
+        options:
+          - prepare
+          - resume
+          - cleanup
+          - full
+      artifact_path:
+        description: "Path for the non-secret run artifact JSON"
+        required: true
+        default: artifacts/j9/run.json
+        type: string
+      webhook_capture_path:
+        description: "Optional Stripe CLI signed capture JSON (resume)"
+        required: false
+        default: ""
+        type: string
+      cleanup_confirm:
+        description: "Must equal artifact runId when stage=cleanup"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -13,7 +40,7 @@ jobs:
   j9:
     name: Stripe test-mode billing lifecycle
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -24,10 +51,14 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Checkout, dunning, recovery, cleanup
+      - name: Run J9 stage
         env:
           STRIPE_J9_MODE: test
           STRIPE_J9_TRANSPORT: live
+          STRIPE_J9_STAGE: ${{ inputs.stage }}
+          STRIPE_J9_ARTIFACT_PATH: ${{ inputs.artifact_path }}
+          STRIPE_J9_WEBHOOK_CAPTURE_PATH: ${{ inputs.webhook_capture_path }}
+          STRIPE_J9_CLEANUP_CONFIRM: ${{ inputs.cleanup_confirm }}
           STRIPE_TEST_API_KEY: ${{ secrets.STRIPE_TEST_API_KEY }}
           STRIPE_TEST_WEBHOOK_SECRET: ${{ secrets.STRIPE_TEST_WEBHOOK_SECRET }}
           STRIPE_J9_PRICE_HOME: ${{ vars.STRIPE_J9_PRICE_HOME }}
@@ -35,4 +66,11 @@ jobs:
           FIZOT_BILLING_SUCCESS_URL: https://admin.example.invalid/billing/success
           FIZOT_BILLING_CANCEL_URL: https://admin.example.invalid/billing/cancel
           FIZOT_BILLING_PORTAL_RETURN_URL: https://admin.example.invalid/billing
-        run: node --experimental-strip-types scripts/fizot/billing-j9.mjs
+        run: node --experimental-strip-types scripts/fizot/billing-j9.mjs --stage=${{ inputs.stage }} --artifact=${{ inputs.artifact_path }}
+      - name: Upload non-secret J9 artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: j9-run-artifact
+          path: ${{ inputs.artifact_path }}
+          if-no-files-found: ignore

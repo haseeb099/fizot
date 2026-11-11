@@ -3,6 +3,8 @@
  * and an explicitly configured test Price id. Live keys and unpublished
  * placeholder Price ids are refused.
  */
+export type J9Stage = "full" | "prepare" | "resume" | "cleanup";
+
 export type J9Config = {
   apiKey: string;
   webhookSecret: string;
@@ -12,6 +14,10 @@ export type J9Config = {
   cancelUrl: string;
   portalReturnUrl: string;
   transport: "live" | "fake";
+  stage: J9Stage;
+  artifactPath: string | null;
+  webhookCapturePath: string | null;
+  cleanupConfirm: string | null;
 };
 
 export type J9ConfigError = {
@@ -41,10 +47,29 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv): J9ConfigResult {
   const priceHome = (env.STRIPE_J9_PRICE_HOME ?? "").trim();
   const priceTeam = (env.STRIPE_J9_PRICE_TEAM ?? priceHome).trim();
   const transport = (env.STRIPE_J9_TRANSPORT ?? "live").trim().toLowerCase() === "fake" ? "fake" : "live";
+  const stageRaw = (env.STRIPE_J9_STAGE ?? "full").trim().toLowerCase();
+  const stage: J9Stage =
+    stageRaw === "prepare" || stageRaw === "resume" || stageRaw === "cleanup" || stageRaw === "full"
+      ? stageRaw
+      : "full";
+  if (stageRaw && stageRaw !== stage) {
+    return {
+      ok: false,
+      status: "FAIL",
+      reason: "STRIPE_J9_STAGE must be full|prepare|resume|cleanup",
+      missing: [],
+    };
+  }
+  const artifactPath = (env.STRIPE_J9_ARTIFACT_PATH ?? "").trim() || null;
+  const webhookCapturePath = (env.STRIPE_J9_WEBHOOK_CAPTURE_PATH ?? "").trim() || null;
+  const cleanupConfirm = (env.STRIPE_J9_CLEANUP_CONFIRM ?? "").trim() || null;
   const missing: string[] = [];
   if (!apiKey) missing.push("STRIPE_TEST_API_KEY");
   if (!webhookSecret) missing.push("STRIPE_TEST_WEBHOOK_SECRET");
   if (!priceHome) missing.push("STRIPE_J9_PRICE_HOME");
+  if ((stage === "resume" || stage === "cleanup") && !artifactPath) missing.push("STRIPE_J9_ARTIFACT_PATH");
+  if (stage === "prepare" && transport === "live" && !artifactPath) missing.push("STRIPE_J9_ARTIFACT_PATH");
+  if (stage === "cleanup" && !cleanupConfirm) missing.push("STRIPE_J9_CLEANUP_CONFIRM");
   if (missing.length > 0) {
     return { ok: false, status: "BLOCKED", reason: `missing_secret ${missing.join(" ")}`, missing };
   }
@@ -89,6 +114,10 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv): J9ConfigResult {
       cancelUrl: env.FIZOT_BILLING_CANCEL_URL?.trim() || "https://admin.example.invalid/billing/cancel",
       portalReturnUrl: env.FIZOT_BILLING_PORTAL_RETURN_URL?.trim() || "https://admin.example.invalid/billing",
       transport,
+      stage,
+      artifactPath,
+      webhookCapturePath,
+      cleanupConfirm,
     },
   };
 }
