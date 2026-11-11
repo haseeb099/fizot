@@ -170,9 +170,11 @@ it("treats retry deletes of already-removed resources as successful cleanup", as
   const transport = createFakeStripeTransport();
   const report = await runJ9({ env: baseEnv, transport });
   expect(report.scenarios.find((row) => row.scenario === "cleanup")?.status).toBe("PASS");
-  // Second delete is resource_missing and must be tolerated.
-  await expect(transport.request("DELETE", `subscriptions/${transport.subscriptions[0]!}`, null)).rejects.toBeInstanceOf(J9StripeError);
-  await expect(transport.request("DELETE", `customers/${transport.customers[0]!}`, null)).rejects.toBeInstanceOf(J9StripeError);
+  // Second delete of ids already cleaned by the run must be tolerated as resource_missing.
+  const subId = report.resources.subscriptions[0]!;
+  const customerId = report.resources.customers[0]!;
+  await expect(transport.request("DELETE", `subscriptions/${subId}`, null)).rejects.toBeInstanceOf(J9StripeError);
+  await expect(transport.request("DELETE", `customers/${customerId}`, null)).rejects.toBeInstanceOf(J9StripeError);
   expect(classifyCleanupError(
     "subscription",
     new J9StripeError({ status: 404, code: "resource_missing", message: "gone" }),

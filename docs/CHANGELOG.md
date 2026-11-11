@@ -6,6 +6,56 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-56 J9 ambiguous Test Clock advance + credit evidence label (P4.4 / FZ-27)
+
+- Why we changed it: Resume of `*_advance_committed` could silently re-POST `/advance` when Stripe was still ready below target, and harness credit checks overstated durable exactly-once grants.
+- How it works: Committed checkpoints reconcile only (`allowAdvance: false`). Ready-below-target → `advance_outcome_ambiguous` BLOCKED with resources retained. Fresh advances POST only in the turn that records the committed intent. Credit scenario evidence is labelled `isolated_in_memory_billing_logic`.
+- Why it is necessary: Ambiguous advance outcomes need operator review, not silent replay; credit claims must match the in-memory test store.
+- Impact: No live Stripe dispatch. Live acceptance still blocked until secrets/Price/Checkout/capture exist.
+- Rollback? Revert the CL-56 commit on `fz-27-j9-live-evidence` / PR #24.
+- Files / Patch IDs: PATCH-47.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-55 J9 Test Clock authenticated checkpoints for safe resume (P4.4 / FZ-27)
+
+- Why we changed it: Resume could repeat Test Clock advances, payment-method flips and credit grants after a crash mid-dunning, and could confuse baseline invoices with recovery.
+- How it works: Schema v4 stores authenticated `clock.dunning` phases and Checkout `creditInvoiceId`. `ensureTestClockFrozenAt` never POSTs advance when frozen_time already meets the target. Dunning reconciles checkpoints against live Stripe state before irreversible steps; recovered checkpoints skip side effects. Fake-unit remains distinct from live acceptance.
+- Why it is necessary: Make prepare/resume restartable without unsupported or duplicate Stripe Test Clock operations.
+- Impact: No live Stripe dispatch. Live acceptance still blocked until secrets/Price/Checkout/capture exist.
+- Rollback? Revert the CL-55 commit(s) on `fz-27-j9-live-evidence` / PR #24.
+- Files / Patch IDs: PATCH-46.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-54 J9 retry lifecycle, webhook origin and cleanup ownership (P4.4 / FZ-27)
+
+- Why we changed it: Independent review of `d23530d93` found resume auto-destroyed resources while evidence was still BLOCKED, capture provenance treated as proof, Checkout/Test Clock cleanup ownership too weak, and Actions handoff could reload a stale prepare artifact.
+- How it works: Schema v3 artifacts store authenticated lifecycle transitions (`awaiting_checkout` → `awaiting_evidence` / `retryable_failure` → `completed` / `abandoned` / `cleanup_partial`). Incomplete resume retains resources. Webhook checks separate signature vs Stripe Event API origin and require explicit run metadata plus same-journey Checkout/invoice linkage. Cleanup pre-verifies live ownership before deletes. Actions use `artifact_run_id` for the latest uploaded artifact; expired runs allow confirmed cleanup only.
+- Why it is necessary: Keep retryable live evidence honest without silent resource loss or false ownership.
+- Impact: No live Stripe dispatch. Live acceptance still blocked until secrets, Price, Checkout and capture exist.
+- Rollback? Revert the CL-54 commit on `fz-27-j9-live-evidence` / PR #24.
+- Files / Patch IDs: PATCH-45.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-53 J9 live evidence review fixes: independent HMAC, handoff, correlation (P4.4 / FZ-27)
+
+- Why we changed it: PR #24 review found artifact MACs keyed from in-file material, Actions resume without artifact download, webhook freshness from untrusted body timestamps, Test Clock recovery accepting baseline `invoice.paid`, and resume risk of crediting a second unrelated subscription.
+- How it works: Schema v2 artifacts use `STRIPE_J9_ARTIFACT_HMAC_SECRET` (never written to disk). Actions resume/cleanup download `j9-run-artifact` / `j9-webhook-capture` by digits-only run id into fixed `artifacts/j9/` paths. Webhook verify uses Stripe-Signature `t=` and a required correlated event set. Dunning excludes baseline invoice/events and requires post-failure recovery. Resume credits only the completed Checkout subscription; mid-prepare failures persist `cleanup_partial` with retained resources.
+- Why it is necessary: Keep false live PASS impossible and make the prepare/resume handoff operable and authenticatable.
+- Impact: No live Stripe dispatch in this change. Live acceptance stays blocked until secrets, Price, manual Checkout and capture exist.
+- Rollback? Revert the review-fix commit on `fz-27-j9-live-evidence` / PR #24.
+- Files / Patch IDs: PATCH-44.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-52 J9 live evidence path: prepare/resume, Test Clocks, signed capture (P4.4 / FZ-27)
+
+- Why we changed it: After PR #23 the harness existed, but live J9 could not honestly prove Checkout completion, Stripe Test Clock dunning, or Stripe-originated webhook delivery.
+- How it works: Two-stage live driver (`prepare` → manual Checkout → `resume`) persists a sealed non-secret run artifact. Test Clock create/advance/poll correlates Stripe Events for failure and recovery. Optional Stripe CLI signed webhook capture satisfies live webhook evidence without a public endpoint. Abandoned runs clean up only artifact-owned resources after `STRIPE_J9_CLEANUP_CONFIRM=<runId>`.
+- Why it is necessary: Complete J9 / BL-E evidence while keeping false PASS impossible.
+- Impact: No credentialed Stripe calls in this change. Live acceptance remains blocked until secrets, Price, manual Checkout and capture exist.
+- Rollback? Revert the PR on `fz-27-j9-live-evidence`.
+- Files / Patch IDs: PATCH-43.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-51 J9 invoice and cleanup fail-closed hardening (P4.4 / FZ-27)
 
 - Why we changed it: Paid-invoice checks still accepted missing `livemode`/`paid`, and cleanup suppressed errors by matching free-text substrings.
