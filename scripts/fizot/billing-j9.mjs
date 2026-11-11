@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 /**
- * J9 Stripe test-mode driver. Refuses to run when the repo secrets are absent.
- * Manual workflow only. Does not invent a subscription.
+ * J9 Stripe test-mode driver. Credentials alone never exit 0.
+ * Requires STRIPE_J9_MODE=test, test API key, webhook secret, and STRIPE_J9_PRICE_HOME.
  */
-const key = process.env.STRIPE_TEST_API_KEY?.trim() ?? "";
-const secret = process.env.STRIPE_TEST_WEBHOOK_SECRET?.trim() ?? "";
-const missing = [
-  ...(key ? [] : ["STRIPE_TEST_API_KEY"]),
-  ...(secret ? [] : ["STRIPE_TEST_WEBHOOK_SECRET"]),
-];
-if (missing.length > 0) {
-  console.error(`missing_secret ${missing.join(" ")}`);
-  process.exit(2);
-}
-console.error("stripe_test_secrets_present");
-process.exit(0);
+import { formatJ9Report, runJ9 } from "../../server/fizot/billing/j9-driver.ts";
+
+const report = await runJ9({
+  env: process.env,
+  log: (line) => console.error(line),
+});
+console.log(formatJ9Report(report));
+process.exit(report.exitCode);

@@ -6,6 +6,36 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-51 J9 invoice and cleanup fail-closed hardening (P4.4 / FZ-27)
+
+- Why we changed it: Paid-invoice checks still accepted missing `livemode`/`paid`, and cleanup suppressed errors by matching free-text substrings.
+- How it works: `assertPaidInvoice` requires explicit `livemode===false` and `paid===true` plus matching Stripe ids. Cleanup classifies typed `J9StripeError` codes only; 500/429/network and misleading messages fail. Docs restate that fake_unit PASS is not live acceptance and that Checkout completion / Test Clocks remain BLOCKED.
+- Why it is necessary: Final verification hardening on PR #23 before any merge or live Stripe run.
+- Impact: No live Stripe calls in this change. Live J9 acceptance stays blocked.
+- Rollback? Revert the commit on `fz-27-j9-stripe-verification`.
+- Files / Patch IDs: PATCH-42.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-50 J9 harness review fixes (P4.4 / FZ-27)
+
+- Why we changed it: PR #23 could treat a fabricated invoice, an open Checkout Session, or local seat state as live Stripe evidence.
+- How it works: Checkout creation and completion are separate scenarios. Paid invoices must come from Stripe with `status=paid` (no fabricated fallback). Seat quantity is re-read from Stripe only. Simulated dunning stays labelled as fixtures; live Test Clock dunning is BLOCKED. Cleanup expires open Sessions. Reports distinguish `fake_unit` from `live_j9` and set `live_acceptance` only for a complete live run.
+- Why it is necessary: Review findings F1–F7 on PR #23.
+- Impact: Live Actions J9 stays BLOCKED until hosted Checkout completion and Test Clocks are available. Fake unit tests can still PASS with `live_acceptance=false`.
+- Rollback? Revert the commit on `fz-27-j9-stripe-verification`.
+- Files / Patch IDs: PATCH-41.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-49 Real Stripe J9 verification driver (P4.4 / FZ-27)
+
+- Why we changed it: The previous J9 script exited 0 when test secrets existed, which could not prove checkout, credit, dunning or recovery.
+- How it works: `server/fizot/billing/j9-driver.ts` runs eight mandatory scenarios against an isolated billing stack. Live transport talks to Stripe test mode only when `STRIPE_J9_MODE=test`, the key is `sk_test_…`, and `STRIPE_J9_PRICE_HOME` is a real test Price (not `price_unpublished_*`). Webhook signature checks and lifecycle ticks use locally signed fixtures and a simulated clock. Fake transport covers the same path in unit tests without network calls. Overall PASS requires every scenario to PASS; missing config is BLOCKED.
+- Why it is necessary: FZ-27 / P4.4 J9 evidence. Plan publication stays unpublished.
+- Impact: No Stripe spend on the daily gate. Manual workflow still needs secrets and a test Price variable. BL-E stays planned until a green credentialed run.
+- Rollback? Revert the PR.
+- Files / Patch IDs: PATCH-40.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-48 Stripe billing, plans, VAT and failed-payment lifecycle (P4.4)
 
 - Why we changed it: A workspace was given its included credit at creation, so a signed-in user could open many workspaces and spend Fizot's inference budget. Billing bugs and tax mistakes then repeat on every invoice.
