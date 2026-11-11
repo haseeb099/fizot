@@ -270,6 +270,19 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
         const data = events.filter((event) => (type ? event.type === type : true));
         return { object: "list", data: data.map((event) => ({ ...event })), has_more: false };
       }
+      if (method === "GET" && /^events\/[^/]+$/.test(path)) {
+        const id = path.split("/")[1]!;
+        const event = events.find((row) => row.id === id);
+        if (!event) {
+          throw new J9StripeError({
+            status: 404,
+            code: "resource_missing",
+            stripeType: "invalid_request_error",
+            message: "stripe_404:event_missing",
+          });
+        }
+        return { ...event };
+      }
       if (method === "GET" && /^prices\/[^/]+$/.test(path)) {
         const id = path.split("/")[1]!;
         return prices.get(id) ?? {

@@ -8,6 +8,7 @@ import { assertPaidInvoice, invoiceIdFromSubscription, stripeQuantity } from "./
 import {
   cleanupAbandonedRun,
   cleanupTrackedResources,
+  persistRetainedLifecycle,
   prepareLiveJ9,
   resumeLiveCheckoutEvidence,
   runStripeTestClockDunning,
@@ -72,6 +73,14 @@ const LIVE_ONLY_MANDATORY = ["stripe_dunning_recovery"] as const;
 
 function mandatoryFor(kind: J9Kind): readonly string[] {
   return kind === "live_j9" ? [...SHARED_MANDATORY, ...LIVE_ONLY_MANDATORY] : SHARED_MANDATORY;
+}
+
+function verificationIncomplete(scenarios: J9ScenarioResult[], kind: J9Kind): boolean {
+  const required = mandatoryFor(kind).filter((name) => name !== "cleanup");
+  return required.some((name) => {
+    const row = scenarios.find((item) => item.scenario === name);
+    return !row || row.status !== "PASS";
+  });
 }
 
 function scenario(name: string, status: J9ScenarioStatus, source: J9EventSource, evidence: string, extra: Partial<J9ScenarioResult> = {}): J9ScenarioResult {
@@ -372,15 +381,48 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
       scenarios.push(scenario(name, "FAIL", "none", "aborted", { failureReason: message }));
     }
   } finally {
-    scenarios.push(await cleanupTrackedResources({
-      transport,
-      resources,
-      secrets,
-      pauseCleanup: false,
-      artifact: liveArtifact,
-      hmacSecret: config.artifactHmacSecret,
-      artifactPath: config.artifactPath,
-    }));
+    const stagedLiveResume = kind === "live_j9" && config.stage === "resume";
+    const incomplete = stagedLiveResume && verificationIncomplete(scenarios, kind);
+    if (incomplete && liveArtifact) {
+      const hasFail = scenarios.some((row) =>
+        mandatoryFor(kind).includes(row.scenario) && row.scenario !== "cleanup" && row.status === "FAIL",
+      );
+      const retained = persistRetainedLifecycle({
+        hmacSecret: config.artifactHmacSecret,
+        artifactPath: config.artifactPath,
+        artifact: liveArtifact,
+        to: hasFail ? "retryable_failure" : "awaiting_evidence",
+        reason: hasFail ? "resume_incomplete_fail_retain" : "resume_incomplete_blocked_retain",
+        resources,
+      });
+      liveArtifact = retained;
+      scenarios.push(await cleanupTrackedResources({
+        transport,
+        resources,
+        secrets,
+        pauseCleanup: true,
+        artifact: retained,
+        hmacSecret: config.artifactHmacSecret,
+        artifactPath: config.artifactPath,
+        retainReason: `stage=${retained.stage} retry_safe=${retained.retrySafe} resources_retained_for_retry`,
+      }));
+    } else if (incomplete && config.stage === "resume") {
+      scenarios.push(scenario("cleanup", "BLOCKED", "config", "incomplete_resume_without_artifact", {
+        failureReason: "Cannot auto-delete; recover the latest uploaded j9-run-artifact and run confirmed cleanup",
+        cleanup: "retained",
+      }));
+    } else {
+      scenarios.push(await cleanupTrackedResources({
+        transport,
+        resources,
+        secrets,
+        pauseCleanup: false,
+        artifact: liveArtifact,
+        hmacSecret: config.artifactHmacSecret,
+        artifactPath: config.artifactPath,
+        markCompleted: kind === "live_j9" && config.stage === "resume",
+      }));
+    }
     await billing.close();
   }
 

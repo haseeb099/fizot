@@ -6,17 +6,26 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, renameSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
-export const J9_RUN_ARTIFACT_SCHEMA = 2 as const;
+export const J9_RUN_ARTIFACT_SCHEMA = 3 as const;
 export const J9_ARTIFACT_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 export const J9_FIXED_ARTIFACT_RELATIVE = join("artifacts", "j9", "run.json");
 export const J9_FIXED_CAPTURE_RELATIVE = join("artifacts", "j9", "webhook-capture.json");
 
+/** Authenticated lifecycle stages for staged live J9. */
 export type J9RunStage =
   | "awaiting_checkout"
-  | "ready_to_resume"
-  | "completed"
+  | "awaiting_evidence"
+  | "retryable_failure"
   | "cleanup_partial"
+  | "completed"
   | "abandoned";
+
+export type J9LifecycleTransition = {
+  at: string;
+  from: J9RunStage | "none";
+  to: J9RunStage;
+  reason: string;
+};
 
 export type J9TrackedResources = {
   customers: string[];
@@ -37,6 +46,8 @@ export type J9RunArtifact = {
   priceHome: string;
   priceTeam: string;
   pauseCleanup: boolean;
+  /** True when another resume may continue without recreating Stripe resources. */
+  retrySafe: boolean;
   checkout: {
     customerId: string;
     sessionId: string;
@@ -54,6 +65,7 @@ export type J9RunArtifact = {
     baselineEventIds: string[];
   };
   resources: J9TrackedResources;
+  transitions: J9LifecycleTransition[];
   /** HMAC-SHA256 hex over the authenticated payload. Never derived from artifact-only material. */
   artifactMac: string;
 };
@@ -62,12 +74,50 @@ export type ArtifactValidation =
   | { ok: true; artifact: J9RunArtifact }
   | { ok: false; reason: string };
 
+export type ParseArtifactOptions = {
+  /** Cleanup of expired runs still verifies MAC but ignores expiry. */
+  allowExpired?: boolean;
+};
+
+const STAGES: ReadonlySet<J9RunStage> = new Set([
+  "awaiting_checkout",
+  "awaiting_evidence",
+  "retryable_failure",
+  "cleanup_partial",
+  "completed",
+  "abandoned",
+]);
+
 function requireId(value: unknown, prefix: string): string | null {
   return typeof value === "string" && value.startsWith(prefix) ? value : null;
 }
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isStage(value: unknown): value is J9RunStage {
+  return typeof value === "string" && STAGES.has(value as J9RunStage);
+}
+
+function parseTransitions(raw: unknown): J9LifecycleTransition[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: J9LifecycleTransition[] = [];
+  for (const row of raw) {
+    if (row == null || typeof row !== "object" || Array.isArray(row)) return null;
+    const item = row as Record<string, unknown>;
+    if (typeof item.at !== "string" || !Number.isFinite(Date.parse(item.at))) return null;
+    if (item.from !== "none" && !isStage(item.from)) return null;
+    if (!isStage(item.to)) return null;
+    if (typeof item.reason !== "string" || !item.reason || item.reason.length > 200) return null;
+    out.push({
+      at: item.at,
+      from: item.from as J9LifecycleTransition["from"],
+      to: item.to,
+      reason: item.reason,
+    });
+  }
+  return out;
 }
 
 export function createRunId(): string {
@@ -98,6 +148,7 @@ export function authenticatedPayload(artifact: Omit<J9RunArtifact, "artifactMac"
     priceHome: artifact.priceHome,
     priceTeam: artifact.priceTeam,
     pauseCleanup: artifact.pauseCleanup,
+    retrySafe: artifact.retrySafe,
     checkout: {
       customerId: artifact.checkout.customerId,
       sessionId: artifact.checkout.sessionId,
@@ -118,6 +169,12 @@ export function authenticatedPayload(artifact: Omit<J9RunArtifact, "artifactMac"
       checkoutSessions: [...artifact.resources.checkoutSessions].sort(),
       testClocks: [...artifact.resources.testClocks].sort(),
     },
+    transitions: artifact.transitions.map((row) => ({
+      at: row.at,
+      from: row.from,
+      to: row.to,
+      reason: row.reason,
+    })),
   };
   return JSON.stringify(body);
 }
@@ -148,6 +205,26 @@ export function sealArtifact(
   };
 }
 
+export function appendTransition(
+  hmacSecret: string,
+  artifact: J9RunArtifact,
+  to: J9RunStage,
+  reason: string,
+  extras: Partial<Omit<J9RunArtifact, "artifactMac" | "stage" | "transitions" | "updatedAt">> = {},
+): J9RunArtifact {
+  const at = new Date().toISOString();
+  return sealArtifact(hmacSecret, {
+    ...artifact,
+    ...extras,
+    stage: to,
+    transitions: [
+      ...artifact.transitions,
+      { at, from: artifact.stage, to, reason: reason.slice(0, 200) },
+    ],
+    updatedAt: at,
+  });
+}
+
 export function verifyArtifactMac(hmacSecret: string, artifact: J9RunArtifact): boolean {
   const { artifactMac, ...rest } = artifact;
   const expected = computeArtifactMac(hmacSecret, rest);
@@ -160,7 +237,12 @@ export function verifyArtifactMac(hmacSecret: string, artifact: J9RunArtifact): 
   }
 }
 
-export function parseJ9RunArtifact(raw: unknown, hmacSecret: string, nowMs = Date.now()): ArtifactValidation {
+export function parseJ9RunArtifact(
+  raw: unknown,
+  hmacSecret: string,
+  nowMs = Date.now(),
+  options: ParseArtifactOptions = {},
+): ArtifactValidation {
   const secretOk = assertArtifactHmacSecret(hmacSecret);
   if (!secretOk.ok) return { ok: false, reason: secretOk.reason };
   if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -173,16 +255,7 @@ export function parseJ9RunArtifact(raw: unknown, hmacSecret: string, nowMs = Dat
   if (obj.kind !== "live_j9_run") return { ok: false, reason: "artifact_kind_invalid" };
   const runId = typeof obj.runId === "string" && obj.runId.startsWith("j9run_") ? obj.runId : null;
   if (!runId) return { ok: false, reason: "artifact_run_id_invalid" };
-  const stage = obj.stage;
-  if (
-    stage !== "awaiting_checkout"
-    && stage !== "ready_to_resume"
-    && stage !== "completed"
-    && stage !== "cleanup_partial"
-    && stage !== "abandoned"
-  ) {
-    return { ok: false, reason: "artifact_stage_invalid" };
-  }
+  if (!isStage(obj.stage)) return { ok: false, reason: "artifact_stage_invalid" };
   if (typeof obj.artifactMac !== "string" || obj.artifactMac.length !== 64) {
     return { ok: false, reason: "artifact_mac_invalid" };
   }
@@ -199,6 +272,9 @@ export function parseJ9RunArtifact(raw: unknown, hmacSecret: string, nowMs = Dat
     return { ok: false, reason: "artifact_timestamps_invalid" };
   }
   if (typeof obj.pauseCleanup !== "boolean") return { ok: false, reason: "artifact_pause_cleanup_invalid" };
+  if (typeof obj.retrySafe !== "boolean") return { ok: false, reason: "artifact_retry_safe_invalid" };
+  const transitions = parseTransitions(obj.transitions);
+  if (!transitions) return { ok: false, reason: "artifact_transitions_invalid" };
   const checkout = obj.checkout as Record<string, unknown> | undefined;
   const clock = obj.clock as Record<string, unknown> | undefined;
   const resources = obj.resources as Record<string, unknown> | undefined;
@@ -227,7 +303,7 @@ export function parseJ9RunArtifact(raw: unknown, hmacSecret: string, nowMs = Dat
     schemaVersion: J9_RUN_ARTIFACT_SCHEMA,
     kind: "live_j9_run",
     runId,
-    stage,
+    stage: obj.stage,
     createdAt: obj.createdAt,
     updatedAt: obj.updatedAt,
     expiresAt: obj.expiresAt,
@@ -235,6 +311,7 @@ export function parseJ9RunArtifact(raw: unknown, hmacSecret: string, nowMs = Dat
     priceHome: obj.priceHome,
     priceTeam: obj.priceTeam,
     pauseCleanup: obj.pauseCleanup,
+    retrySafe: obj.retrySafe,
     checkout: { customerId, sessionId, expectedPriceId, subscriptionId: checkoutSub },
     clock: {
       clockId,
@@ -250,6 +327,7 @@ export function parseJ9RunArtifact(raw: unknown, hmacSecret: string, nowMs = Dat
       checkoutSessions: resources.checkoutSessions,
       testClocks: resources.testClocks,
     },
+    transitions,
     artifactMac: obj.artifactMac,
   };
   if (artifact.clock.subscriptionId === null && clock.subscriptionId != null) {
@@ -262,7 +340,8 @@ export function parseJ9RunArtifact(raw: unknown, hmacSecret: string, nowMs = Dat
     return { ok: false, reason: "artifact_mac_mismatch" };
   }
   const expiresMs = Date.parse(artifact.expiresAt);
-  if (!Number.isFinite(expiresMs) || expiresMs < nowMs) {
+  if (!Number.isFinite(expiresMs)) return { ok: false, reason: "artifact_expires_invalid" };
+  if (!options.allowExpired && expiresMs < nowMs) {
     return { ok: false, reason: "artifact_expired" };
   }
   if (artifact.checkout.customerId !== "cus_missing" && !artifact.resources.customers.includes(artifact.checkout.customerId)) {
@@ -290,7 +369,12 @@ export function resolveSafeJ9Path(repoRoot: string, relativeFixed: string): { ok
   return { ok: true, path: full };
 }
 
-export function loadJ9RunArtifact(path: string, hmacSecret: string, nowMs = Date.now()): ArtifactValidation {
+export function loadJ9RunArtifact(
+  path: string,
+  hmacSecret: string,
+  nowMs = Date.now(),
+  options: ParseArtifactOptions = {},
+): ArtifactValidation {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -303,7 +387,7 @@ export function loadJ9RunArtifact(path: string, hmacSecret: string, nowMs = Date
   } catch {
     return { ok: false, reason: "artifact_json_invalid" };
   }
-  return parseJ9RunArtifact(parsed, hmacSecret, nowMs);
+  return parseJ9RunArtifact(parsed, hmacSecret, nowMs, options);
 }
 
 /** Atomic replace with restricted mode. */
@@ -323,4 +407,8 @@ export function assertOwnedResource(
     return { ok: false, reason: `foreign_${kind}_id` };
   }
   return { ok: true };
+}
+
+export function emptyTrackedResources(): J9TrackedResources {
+  return { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] };
 }

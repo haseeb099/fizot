@@ -54,22 +54,36 @@ Acceptance kinds:
 
 Hosted Checkout completion is **manual**. Stripe’s supported testing path is a browser/Dashboard Checkout with test cards; fragile browser automation is not used.
 
-Artifact paths are **fixed**: `artifacts/j9/run.json` and `artifacts/j9/webhook-capture.json`. Workflow inputs are never shell paths. Integrity uses `STRIPE_J9_ARTIFACT_HMAC_SECRET` (never written into the artifact). Schema v2 binds runId, stage, workspace, prices, resource ids, lifecycle and expiry into the MAC. Stripe credentials, webhook secrets and test-card details must never appear in artifacts.
+Artifact paths are **fixed**: `artifacts/j9/run.json` and `artifacts/j9/webhook-capture.json`. Workflow inputs are never shell paths. Integrity uses `STRIPE_J9_ARTIFACT_HMAC_SECRET` (never written into the artifact). Schema v3 binds runId, stage, transitions, workspace, prices, resource ids, retrySafe and expiry into the MAC. Stripe credentials, webhook secrets and test-card details must never appear in artifacts.
+
+**Lifecycle stages (authenticated transitions)**
+
+| Stage | Meaning |
+| --- | --- |
+| `awaiting_checkout` | Prepare wrote open Session; resources retained |
+| `awaiting_evidence` | Checkout complete; webhook/dunning/other evidence still incomplete; retryable |
+| `retryable_failure` | Verification FAIL but resources retained for retry |
+| `cleanup_partial` | Cleanup attempted; some resources remain; not abandoned |
+| `completed` | Full verification PASS and auto-cleanup succeeded |
+| `abandoned` | Confirmed cleanup emptied tracked resources |
+
+Incomplete resume **never** auto-deletes. Auto-cleanup runs only after every mandatory scenario (except cleanup) is PASS. Confirmed `stage=cleanup` is separate.
 
 **Actions resume of the same run**
 
-1. Dispatch `billing-stripe-j9.yml` with `stage=prepare`. Note `github.run_id` from the Actions run URL and the printed `runId` (`j9run_…`).
-2. Download the uploaded `j9-run-artifact` (contains only `artifacts/j9/run.json`). Open the printed Checkout URL and pay with a Stripe **test** card.
-3. Capture signed Stripe CLI deliveries into `artifacts/j9/webhook-capture.json` (schema v2, required types `checkout.session.completed` + `invoice.paid`, correlated to this `runId` / customer / subscription). Upload that file as artifact name `j9-webhook-capture` from a helper run (or place it locally before resume).
-4. Dispatch `stage=resume` with `prepare_run_id=<prepare github.run_id>` and `capture_run_id=<helper run that uploaded j9-webhook-capture>`. The workflow downloads those named artifacts into the fixed paths, then verifies MAC + expiry before trusting fields.
-5. Abandoned / partial cleanup: `stage=cleanup`, same `prepare_run_id`, `cleanup_confirm=<runId>`. Ownership is re-checked live against Stripe metadata before delete.
+1. Dispatch `billing-stripe-j9.yml` with `stage=prepare`. Note `github.run_id` and printed `runId` (`j9run_…`).
+2. Open Checkout URL; pay with a Stripe **test** card.
+3. Capture signed Stripe CLI deliveries into `artifacts/j9/webhook-capture.json` (required types + explicit `fizot_j9_run_id`). Upload as `j9-webhook-capture`.
+4. First resume: `artifact_run_id=<prepare github.run_id>` (+ `capture_run_id`). Downloads latest artifact into fixed paths; verifies MAC.
+5. If resume is BLOCKED/FAIL, the resume run uploads the **updated** artifact. Next resume/cleanup must use `artifact_run_id=<that resume run id>` — never re-use a stale prepare artifact after lifecycle advanced.
+6. Confirmed cleanup (including MAC-valid expired artifacts): `stage=cleanup`, `artifact_run_id=<latest upload run>`, `cleanup_confirm=<runId>`.
 
 **Local stages**
 
-1. **prepare** (`STRIPE_J9_STAGE=prepare`): Test Clock + clock baseline subscription (paid invoice + baseline event ids) + separate Checkout customer/Session. Writes sealed artifact. Cleanup **paused** (`cleanup=retained`). Mid-prepare failures persist `cleanup_partial` with recorded resources. Overall BLOCKED awaiting Checkout.
-2. Operator completes Checkout; optional Stripe CLI capture to the fixed capture path.
-3. **resume**: loads/verifies artifact MAC, refuses expired/substituted runs, requires Session `status=complete` + `payment_status=paid` for the **same** Checkout subscription (not a second unrelated sub), then credit + simulated app lifecycle + Test Clock failure/recovery (baseline excluded) + tax/seats + cleanup.
-4. **cleanup** + `STRIPE_J9_CLEANUP_CONFIRM=<runId>`: deletes only artifact-owned resources after live ownership checks. Partial cleanup keeps `cleanup_partial` (never marks `abandoned` while resources may remain).
+1. **prepare**: Test Clock + baseline subscription + Checkout Session. Stage `awaiting_checkout`. Mid-prepare failures → `cleanup_partial`.
+2. Operator completes Checkout; optional capture file.
+3. **resume**: no duplicate customers/clocks/subs; credits Checkout subscription only; persists latest stage before exit; retains on incomplete evidence.
+4. **cleanup** + confirm: pre-verifies live ownership for every id, then deletes. Unprovable ownership is refused and reported.
 
 Required configuration:
 
@@ -83,8 +97,9 @@ Required configuration:
 | `STRIPE_J9_PRICE_TEAM` | variable | Optional; defaults to the home test Price |
 | `STRIPE_J9_TRANSPORT` | env | Actions must use `live`. `fake` is unit tests only |
 | `STRIPE_J9_STAGE` | env | `full` \| `prepare` \| `resume` \| `cleanup` |
-| `STRIPE_J9_PREPARE_RUN_ID` | env | Digits-only GitHub Actions run id for resume/cleanup handoff |
-| `STRIPE_J9_CLEANUP_CONFIRM` | env | Must equal artifact `runId` for abandoned cleanup |
+| `STRIPE_J9_ARTIFACT_RUN_ID` | env | Digits-only GitHub Actions run id that uploaded the **latest** `j9-run-artifact` |
+| `STRIPE_J9_PREPARE_RUN_ID` | env | Deprecated alias for `STRIPE_J9_ARTIFACT_RUN_ID` |
+| `STRIPE_J9_CLEANUP_CONFIRM` | env | Must equal artifact `runId` for abandoned/expired confirmed cleanup |
 
 Shared scenarios: `secure_startup`, `checkout_session_created`, `checkout_completed`, `subscription_payment_and_credit`, `webhook_lifecycle`, `simulated_failed_payment_lifecycle`, `simulated_recovery`, `tax_and_seats`, `cleanup`. Live also requires `stripe_dunning_recovery`. Any required `FAIL`, `BLOCKED` or `NOT_RUN` prevents overall PASS and sets `live_acceptance=false`. Fake-unit PASS never becomes live acceptance.
 
@@ -94,7 +109,7 @@ Shared scenarios: `secure_startup`, `checkout_session_created`, `checkout_comple
 - Paid invoices require `object=invoice`, `in_…`, `livemode===false`, `paid===true`, `status=paid`, matching `cus_` / `sub_`. No fabricated invoices.
 - Seat quantity is re-read from Stripe subscription items only.
 - Simulated grace/suspension/recovery uses the **Fizot app worker clock** and remains labelled simulated. Stripe Test Clock `frozen_time` is separate evidence for `stripe_dunning_recovery`.
-- Webhook capture schema v2: verify Stripe-Signature using header `t=` (never the event body `created`). Require the correlated event set for this run/customer/subscription. Reject replay, unrelated events, altered bodies and malformed signatures. A valid signature on an unrelated event does not satisfy J9; signature alone never proves Stripe business state.
+- Webhook capture schema v2: `provenance` is an operator claim only. Verify Stripe-Signature using header `t=` (never body `created`). Require explicit `fizot_j9_run_id` (missing metadata ≠ ownership). Correlate `checkout.session.completed` + `invoice.paid` to the same Checkout journey. Separately retrieve each `evt_…` from the Stripe Events API (`livemode=false`) for Stripe-origin verification. Signature PASS without origin stays BLOCKED for live acceptance.
 - Test Clock: record baseline invoice + event ids → attach `pm_card_chargeCustomerFail` → advance → poll until `status=ready` → correlate post-baseline `invoice.payment_failed` for the clock customer/subscription/period → restore `pm_card_visa` → advance → require a distinct recovery invoice/`invoice.paid` (baseline excluded). Missing associations or event evidence stay BLOCKED (no wildcards). Pagination limits are reported honestly.
 - Cleanup expires open Sessions, then deletes subscriptions, customers and test clocks tracked by the artifact after live ownership checks. Foreign resource ids are refused. Partial cleanup never reports `cleanup=complete` and does not mark `abandoned` while resources may remain. Paused prepare / mid-prepare `cleanup_partial` runs must use the confirmed cleanup stage.
 

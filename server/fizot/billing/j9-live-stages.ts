@@ -10,12 +10,15 @@ import {
   assertSubscriptionPrice,
 } from "./j9-checkout-evidence.ts";
 import {
+  appendTransition,
   assertOwnedResource,
   createRunId,
+  emptyTrackedResources,
   loadJ9RunArtifact,
   saveJ9RunArtifact,
   sealArtifact,
   type J9RunArtifact,
+  type J9RunStage,
   type J9TrackedResources,
 } from "./j9-run-artifact.ts";
 import {
@@ -52,7 +55,7 @@ function scenario(
 }
 
 function emptyResources(): J9TrackedResources {
-  return { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] };
+  return emptyTrackedResources();
 }
 
 async function verifyLiveOwnership(
@@ -61,6 +64,7 @@ async function verifyLiveOwnership(
   resource: CleanupResource,
   id: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // Artifact membership alone never authorizes deletion — live Stripe association is required.
   const owned = assertOwnedResource(
     artifact,
     resource === "checkout_session"
@@ -81,11 +85,14 @@ async function verifyLiveOwnership(
     if (resource === "subscription") {
       const sub = await transport.request("GET", `subscriptions/${id}`, null);
       const customerId = typeof sub.customer === "string" ? sub.customer : "";
-      if (!artifact.resources.customers.includes(customerId)) {
+      if (!customerId || !artifact.resources.customers.includes(customerId)) {
         return { ok: false, reason: "subscription_customer_not_tracked" };
       }
       const metadata = sub.metadata as Record<string, unknown> | undefined;
-      if (metadata?.fizot_j9_run_id !== artifact.runId) {
+      if (typeof metadata?.fizot_j9_run_id !== "string") {
+        return { ok: false, reason: "subscription_run_metadata_missing" };
+      }
+      if (metadata.fizot_j9_run_id !== artifact.runId) {
         return { ok: false, reason: "subscription_run_metadata_mismatch" };
       }
       if (sub.livemode !== false) return { ok: false, reason: "subscription_livemode_invalid" };
@@ -94,21 +101,74 @@ async function verifyLiveOwnership(
     if (resource === "checkout_session") {
       const session = await transport.request("GET", `checkout/sessions/${id}`, null);
       if (session.livemode !== false) return { ok: false, reason: "session_livemode_invalid" };
+      const customerId = typeof session.customer === "string" ? session.customer : "";
+      if (!customerId || customerId !== artifact.checkout.customerId) {
+        return { ok: false, reason: "session_customer_mismatch" };
+      }
+      if (!artifact.resources.customers.includes(customerId)) {
+        return { ok: false, reason: "session_customer_untracked" };
+      }
       const metadata = session.metadata as Record<string, unknown> | undefined;
-      if (metadata?.fizot_j9_run_id && metadata.fizot_j9_run_id !== artifact.runId) {
+      if (typeof metadata?.fizot_j9_run_id !== "string") {
+        return { ok: false, reason: "session_run_metadata_missing" };
+      }
+      if (metadata.fizot_j9_run_id !== artifact.runId) {
         return { ok: false, reason: "session_run_metadata_mismatch" };
+      }
+      if (session.subscription != null) {
+        const subId = typeof session.subscription === "string" ? session.subscription : null;
+        if (!subId || !artifact.resources.subscriptions.includes(subId)) {
+          // Open sessions may lack a subscription; completed ones must be tracked.
+          if (session.status === "complete") {
+            return { ok: false, reason: "session_subscription_untracked" };
+          }
+        }
       }
       return { ok: true };
     }
     if (resource === "test_clock") {
+      if (id !== artifact.clock.clockId) {
+        return { ok: false, reason: "clock_id_not_artifact_clock" };
+      }
       const clock = await retrieveTestClock(transport, id);
       if (!clock.ok) return { ok: false, reason: clock.reason };
+      if (clock.clock.livemode !== false) return { ok: false, reason: "clock_livemode_invalid" };
+      const clockCustomerId = artifact.clock.customerId;
+      if (!clockCustomerId.startsWith("cus_") || clockCustomerId === "cus_missing") {
+        return { ok: false, reason: "clock_customer_missing" };
+      }
+      const customer = await transport.request("GET", `customers/${clockCustomerId}`, null);
+      const customerOk = assertCustomerBelongsToRun(customer, {
+        customerId: clockCustomerId,
+        runId: artifact.runId,
+      });
+      if (!customerOk.ok) return customerOk;
+      if (customer.test_clock !== id) {
+        return { ok: false, reason: "clock_customer_not_attached" };
+      }
       return { ok: true };
     }
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message.slice(0, 80) : "ownership_verify_failed" };
   }
   return { ok: false, reason: "ownership_unhandled" };
+}
+
+export function persistRetainedLifecycle(input: {
+  hmacSecret: string;
+  artifactPath: string;
+  artifact: J9RunArtifact;
+  to: Extract<J9RunStage, "awaiting_evidence" | "retryable_failure" | "cleanup_partial">;
+  reason: string;
+  resources?: J9TrackedResources;
+}): J9RunArtifact {
+  const next = appendTransition(input.hmacSecret, input.artifact, input.to, input.reason, {
+    pauseCleanup: true,
+    retrySafe: input.to !== "cleanup_partial" ? true : input.artifact.retrySafe,
+    resources: input.resources ?? input.artifact.resources,
+  });
+  saveJ9RunArtifact(input.artifactPath, next);
+  return next;
 }
 
 export type PrepareResult = {
@@ -137,10 +197,11 @@ export async function prepareLiveJ9(input: {
     `kind=live_j9 stage=prepare mode=test transport=live run=${runId}`,
   ));
 
-  const persistPartial = (stage: J9RunArtifact["stage"]) => {
+  const persistPartial = (stage: Extract<J9RunStage, "cleanup_partial">) => {
     // Retain recorded resources for explicit cleanup; never auto-abandon mid-prepare.
+    const at = new Date().toISOString();
     const artifact = sealArtifact(input.config.artifactHmacSecret, {
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: "live_j9_run",
       runId,
       stage,
@@ -149,6 +210,7 @@ export async function prepareLiveJ9(input: {
       priceHome: input.config.priceHome,
       priceTeam: input.config.priceTeam,
       pauseCleanup: true,
+      retrySafe: false,
       checkout: {
         customerId: resources.customers.find((id) => id) ?? "cus_missing",
         sessionId: resources.checkoutSessions[0] ?? "cs_missing",
@@ -169,6 +231,7 @@ export async function prepareLiveJ9(input: {
         checkoutSessions: [...resources.checkoutSessions],
         testClocks: [...resources.testClocks],
       },
+      transitions: [{ at, from: "none", to: stage, reason: "prepare_partial_failure" }],
     });
     saveJ9RunArtifact(input.config.artifactPath, artifact);
     return artifact;
@@ -323,8 +386,9 @@ export async function prepareLiveJ9(input: {
       },
     ));
 
+    const at = new Date().toISOString();
     const artifact = sealArtifact(input.config.artifactHmacSecret, {
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: "live_j9_run",
       runId,
       stage: "awaiting_checkout",
@@ -333,6 +397,7 @@ export async function prepareLiveJ9(input: {
       priceHome: input.config.priceHome,
       priceTeam: input.config.priceTeam,
       pauseCleanup: true,
+      retrySafe: true,
       checkout: {
         customerId: checkoutCustomerId,
         sessionId,
@@ -353,6 +418,7 @@ export async function prepareLiveJ9(input: {
         checkoutSessions: [...resources.checkoutSessions],
         testClocks: [...resources.testClocks],
       },
+      transitions: [{ at, from: "none", to: "awaiting_checkout", reason: "prepare_open_checkout" }],
     });
     saveJ9RunArtifact(input.config.artifactPath, artifact);
     return { artifact, checkoutUrl, scenarios, resources };
@@ -404,14 +470,25 @@ export async function resumeLiveCheckoutEvidence(input: {
       })],
     };
   }
-  if (artifact.stage === "completed") {
+  if (artifact.stage === "completed" || artifact.stage === "abandoned") {
     return {
       ok: false,
-      reason: "artifact_already_completed",
+      reason: "artifact_already_terminal",
       artifact,
       resources: artifact.resources,
-      scenarios: [scenario("secure_startup", "FAIL", "config", "refuse duplicate resume of completed run", {
-        failureReason: "artifact_already_completed",
+      scenarios: [scenario("secure_startup", "FAIL", "config", "refuse resume of completed/abandoned run", {
+        failureReason: "artifact_already_terminal",
+      })],
+    };
+  }
+  if (artifact.stage === "cleanup_partial" && !artifact.retrySafe) {
+    return {
+      ok: false,
+      reason: "artifact_not_retry_safe",
+      artifact,
+      resources: artifact.resources,
+      scenarios: [scenario("secure_startup", "FAIL", "config", "run is not retry-safe; use confirmed cleanup", {
+        failureReason: "artifact_not_retry_safe",
       })],
     };
   }
@@ -529,46 +606,58 @@ export async function resumeLiveCheckoutEvidence(input: {
       failureReason: "Place a Stripe CLI signed capture at artifacts/j9/webhook-capture.json for this runId",
     }));
   } else {
-    const verified = verifyWebhookCapture({
+    const verified = await verifyWebhookCapture({
       capture: captureLoaded.capture,
       expectedRunId: artifact.runId,
       expectedCustomerId: completed.customerId,
       expectedSubscriptionId: completed.subscriptionId,
+      expectedSessionId: completed.sessionId,
       webhookSecret: input.config.webhookSecret,
+      transport: input.transport,
     });
     if (!verified.ok) {
-      webhookScenarios.push(scenario("webhook_lifecycle", "FAIL", "stripe_cli_capture", verified.reason, {
-        failureReason: verified.reason,
-      }));
+      webhookScenarios.push(scenario(
+        "webhook_lifecycle",
+        verified.blocked ? "BLOCKED" : "FAIL",
+        "stripe_cli_capture",
+        `${verified.reason}; signature=${verified.checks.signatureVerified} stripe_origin=${verified.checks.stripeOriginVerified} provenance_claim_only=true`,
+        { failureReason: verified.reason },
+      ));
     } else {
       webhookCaptureOk = true;
       webhookScenarios.push(scenario(
         "webhook_lifecycle",
         "PASS",
         "stripe_cli_capture",
-        `signed_deliveries=${verified.accepted.length} coverage=${verified.coverage.join(",")} run=${artifact.runId} label=header_t_verified_not_body_created`,
+        `signed_deliveries=${verified.accepted.length} coverage=${verified.coverage.join(",")} run=${artifact.runId} signature=true stripe_origin=true provenance_claim_only=true`,
       ));
     }
   }
 
-  const updated = sealArtifact(input.config.artifactHmacSecret, {
-    ...artifact,
-    stage: "ready_to_resume",
-    pauseCleanup: false,
-    checkout: {
-      ...artifact.checkout,
-      subscriptionId: completed.subscriptionId,
+  // Persist Checkout subscription linkage immediately so a blocked later stage still
+  // uploads the latest artifact (never silently fall back to an older prepare file).
+  const updated = appendTransition(
+    input.config.artifactHmacSecret,
+    artifact,
+    webhookCaptureOk ? "awaiting_evidence" : "awaiting_evidence",
+    webhookCaptureOk ? "checkout_complete_continue_evidence" : "checkout_complete_awaiting_webhook_or_dunning",
+    {
+      pauseCleanup: true,
+      retrySafe: true,
+      checkout: {
+        ...artifact.checkout,
+        subscriptionId: completed.subscriptionId,
+      },
+      resources,
     },
-    resources,
-    updatedAt: new Date().toISOString(),
-  });
+  );
   saveJ9RunArtifact(input.config.artifactPath, updated);
 
   return {
     ok: true,
     evidence: {
       scenarios: [
-        scenario("secure_startup", "PASS", "config", `kind=live_j9 stage=resume run=${artifact.runId}`),
+        scenario("secure_startup", "PASS", "config", `kind=live_j9 stage=resume run=${artifact.runId} retry_safe=${updated.retrySafe}`),
         scenario("checkout_session_created", "PASS", "stripe_api", `session=${artifact.checkout.sessionId} resumed`),
         scenario(
           "checkout_completed",
@@ -767,15 +856,18 @@ export async function cleanupTrackedResources(input: {
   artifact?: J9RunArtifact | null;
   hmacSecret?: string;
   artifactPath?: string;
+  /** After full verification PASS, mark stage completed instead of abandoned. */
+  markCompleted?: boolean;
+  retainReason?: string;
 }): Promise<StageScenario> {
   if (input.pauseCleanup) {
     return scenario(
       "cleanup",
       "BLOCKED",
       "stripe_api",
-      "pauseCleanup=true awaiting_manual_checkout",
+      input.retainReason ?? "pauseCleanup=true resources_retained",
       {
-        failureReason: "Resources retained for manual Checkout; run stage=cleanup with STRIPE_J9_CLEANUP_CONFIRM=<runId>",
+        failureReason: "Resources retained for retry or manual Checkout; run stage=cleanup with STRIPE_J9_CLEANUP_CONFIRM=<runId> when ready",
         cleanup: "retained",
       },
     );
@@ -797,14 +889,59 @@ export async function cleanupTrackedResources(input: {
     remaining.push(`${resource}:${id}:${classified.reason}:${detail}`);
   };
 
-  for (const sessionId of [...input.resources.checkoutSessions].reverse()) {
-    if (input.artifact) {
+  // Pre-verify every resource before any destructive call so later deletes cannot
+  // invalidate earlier ownership evidence (e.g. clock customer lookup after customer delete).
+  const authorized = {
+    checkoutSessions: [] as string[],
+    subscriptions: [] as string[],
+    customers: [] as string[],
+    testClocks: [] as string[],
+  };
+  if (input.artifact) {
+    for (const sessionId of input.resources.checkoutSessions) {
       const ownership = await verifyLiveOwnership(input.transport, input.artifact, "checkout_session", sessionId);
-      if (!ownership.ok) {
-        remaining.push(`checkout_session:${sessionId}:ownership:${ownership.reason}`);
-        continue;
-      }
+      if (!ownership.ok) remaining.push(`checkout_session:${sessionId}:ownership:${ownership.reason}`);
+      else authorized.checkoutSessions.push(sessionId);
     }
+    for (const sub of input.resources.subscriptions) {
+      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "subscription", sub);
+      if (!ownership.ok) remaining.push(`subscription:${sub}:ownership:${ownership.reason}`);
+      else authorized.subscriptions.push(sub);
+    }
+    for (const customer of input.resources.customers) {
+      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "customer", customer);
+      if (!ownership.ok) remaining.push(`customer:${customer}:ownership:${ownership.reason}`);
+      else authorized.customers.push(customer);
+    }
+    for (const clockId of input.resources.testClocks) {
+      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "test_clock", clockId);
+      if (!ownership.ok) remaining.push(`test_clock:${clockId}:ownership:${ownership.reason}`);
+      else authorized.testClocks.push(clockId);
+    }
+    if (remaining.length > 0) {
+      if (input.hmacSecret && input.artifactPath) {
+        const partial = appendTransition(
+          input.hmacSecret,
+          input.artifact,
+          "cleanup_partial",
+          `cleanup_ownership_refused=${remaining.length}`,
+          { pauseCleanup: false, retrySafe: false },
+        );
+        saveJ9RunArtifact(input.artifactPath, partial);
+      }
+      return scenario("cleanup", "FAIL", "stripe_api", `remaining=${remaining.length}`, {
+        failureReason: `${remaining.join("; ")}; refused destructive action for unprovable ownership; retry stage=cleanup with STRIPE_J9_CLEANUP_CONFIRM=<runId>`,
+        cleanup: "partial",
+      });
+    }
+  } else {
+    authorized.checkoutSessions = [...input.resources.checkoutSessions];
+    authorized.subscriptions = [...input.resources.subscriptions];
+    authorized.customers = [...input.resources.customers];
+    authorized.testClocks = [...input.resources.testClocks];
+  }
+
+  for (const sessionId of [...authorized.checkoutSessions].reverse()) {
     try {
       const session = await input.transport.request("GET", `checkout/sessions/${sessionId}`, null);
       if (session.status === "open") {
@@ -818,85 +955,74 @@ export async function cleanupTrackedResources(input: {
       recordFailure("checkout_session", sessionId, error);
     }
   }
-  for (const sub of [...input.resources.subscriptions].reverse()) {
-    if (input.artifact) {
-      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "subscription", sub);
-      if (!ownership.ok) {
-        remaining.push(`subscription:${sub}:ownership:${ownership.reason}`);
-        continue;
-      }
-    }
+  for (const sub of [...authorized.subscriptions].reverse()) {
     try {
       await input.transport.request("DELETE", `subscriptions/${sub}`, { invoice_now: "false", prorate: "true" });
     } catch (error) {
       recordFailure("subscription", sub, error);
     }
   }
-  for (const customer of [...input.resources.customers].reverse()) {
-    if (input.artifact) {
-      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "customer", customer);
-      if (!ownership.ok) {
-        remaining.push(`customer:${customer}:ownership:${ownership.reason}`);
-        continue;
-      }
-    }
-    try {
-      await input.transport.request("DELETE", `customers/${customer}`, null);
-    } catch (error) {
-      recordFailure("customer", customer, error);
-    }
-  }
-  for (const clockId of [...input.resources.testClocks].reverse()) {
-    if (input.artifact) {
-      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "test_clock", clockId);
-      if (!ownership.ok) {
-        remaining.push(`test_clock:${clockId}:ownership:${ownership.reason}`);
-        continue;
-      }
-    }
+  // Delete Test Clocks before customers: Stripe clocks own attached customers.
+  for (const clockId of [...authorized.testClocks].reverse()) {
     try {
       await input.transport.request("DELETE", `test_helpers/test_clocks/${clockId}`, null);
     } catch (error) {
       recordFailure("test_clock", clockId, error);
     }
   }
+  for (const customer of [...authorized.customers].reverse()) {
+    try {
+      await input.transport.request("DELETE", `customers/${customer}`, null);
+    } catch (error) {
+      recordFailure("customer", customer, error);
+    }
+  }
   if (remaining.length > 0) {
     if (input.artifact && input.hmacSecret && input.artifactPath) {
-      const partial = sealArtifact(input.hmacSecret, {
-        ...input.artifact,
-        stage: "cleanup_partial",
-        pauseCleanup: false,
-        updatedAt: new Date().toISOString(),
-      });
+      const partial = appendTransition(
+        input.hmacSecret,
+        input.artifact,
+        "cleanup_partial",
+        `cleanup_remaining=${remaining.length}`,
+        {
+          pauseCleanup: false,
+          retrySafe: false,
+        },
+      );
       saveJ9RunArtifact(input.artifactPath, partial);
     }
     return scenario("cleanup", "FAIL", "stripe_api", `remaining=${remaining.length}`, {
-      failureReason: `${remaining.join("; ")}; retry stage=cleanup with the same confirm once ownership is restored`,
+      failureReason: `${remaining.join("; ")}; manual cleanup may be required for ownership-refused ids; retry stage=cleanup with STRIPE_J9_CLEANUP_CONFIRM=<runId>`,
       cleanup: "partial",
     });
   }
   if (input.artifact && input.hmacSecret && input.artifactPath) {
-    const done = sealArtifact(input.hmacSecret, {
-      ...input.artifact,
-      stage: "abandoned",
-      pauseCleanup: false,
-      checkout: {
-        customerId: "cus_missing",
-        sessionId: "cs_missing",
-        expectedPriceId: input.artifact.priceHome,
-        subscriptionId: null,
+    const terminalStage: J9RunStage = input.markCompleted ? "completed" : "abandoned";
+    const done = appendTransition(
+      input.hmacSecret,
+      input.artifact,
+      terminalStage,
+      input.markCompleted ? "auto_cleanup_after_full_verification" : "confirmed_abandoned_cleanup",
+      {
+        pauseCleanup: false,
+        retrySafe: false,
+        checkout: {
+          customerId: "cus_missing",
+          sessionId: "cs_missing",
+          expectedPriceId: input.artifact.priceHome,
+          subscriptionId: null,
+        },
+        clock: {
+          clockId: "clock_missing",
+          frozenTime: input.artifact.clock.frozenTime,
+          customerId: "cus_missing",
+          subscriptionId: null,
+          baselineInvoiceId: null,
+          baselineEventIds: [],
+        },
+        resources: emptyResources(),
       },
-      clock: {
-        clockId: "clock_missing",
-        frozenTime: input.artifact.clock.frozenTime,
-        customerId: "cus_missing",
-        subscriptionId: null,
-        baselineInvoiceId: null,
-        baselineEventIds: [],
-      },
-      resources: emptyResources(),
-      updatedAt: new Date().toISOString(),
-    });
+    );
     saveJ9RunArtifact(input.artifactPath, done);
   }
   return scenario(
@@ -912,7 +1038,10 @@ export async function cleanupAbandonedRun(input: {
   config: J9Config;
   transport: J9StripeTransport;
 }): Promise<{ scenarios: StageScenario[]; resources: J9TrackedResources; artifact: J9RunArtifact | null }> {
-  const loaded = loadJ9RunArtifact(input.config.artifactPath, input.config.artifactHmacSecret);
+  // Expired artifacts may still strand resources; allow MAC-verified expired load for confirmed cleanup only.
+  const loaded = loadJ9RunArtifact(input.config.artifactPath, input.config.artifactHmacSecret, Date.now(), {
+    allowExpired: true,
+  });
   if (!loaded.ok) {
     return {
       artifact: null,
@@ -941,6 +1070,7 @@ export async function cleanupAbandonedRun(input: {
     artifact: loaded.artifact,
     hmacSecret: input.config.artifactHmacSecret,
     artifactPath: input.config.artifactPath,
+    markCompleted: false,
   });
   return { scenarios: [cleanup], resources: loaded.artifact.resources, artifact: loaded.artifact };
 }

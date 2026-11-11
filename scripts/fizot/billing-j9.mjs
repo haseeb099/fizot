@@ -14,13 +14,18 @@ function argValue(name) {
 
 const stage = argValue("stage") ?? process.env.STRIPE_J9_STAGE ?? "full";
 const confirm = argValue("confirm") ?? process.env.STRIPE_J9_CLEANUP_CONFIRM ?? "";
-const prepareRunId = argValue("prepare-run-id") ?? process.env.STRIPE_J9_PREPARE_RUN_ID ?? "";
+const artifactRunId =
+  argValue("artifact-run-id")
+  ?? process.env.STRIPE_J9_ARTIFACT_RUN_ID
+  ?? argValue("prepare-run-id")
+  ?? process.env.STRIPE_J9_PREPARE_RUN_ID
+  ?? "";
 
 const env = {
   ...process.env,
   STRIPE_J9_STAGE: stage,
   ...(confirm ? { STRIPE_J9_CLEANUP_CONFIRM: confirm } : {}),
-  ...(prepareRunId ? { STRIPE_J9_PREPARE_RUN_ID: prepareRunId } : {}),
+  ...(artifactRunId ? { STRIPE_J9_ARTIFACT_RUN_ID: artifactRunId } : {}),
 };
 
 const report = await runJ9({
@@ -32,6 +37,6 @@ if (report.checkoutUrl) {
   console.error(`j9_operator Open this Checkout URL with a Stripe test card, then resume the SAME run:\n${report.checkoutUrl}`);
 }
 if (report.runId) {
-  console.error(`j9_operator runId=${report.runId} (use as cleanup confirm; store GitHub prepare run id for Actions resume)`);
+  console.error(`j9_operator runId=${report.runId} (cleanup confirm). For Actions retries use the GitHub run that uploaded the LATEST j9-run-artifact as artifact_run_id.`);
 }
 process.exit(report.exitCode);

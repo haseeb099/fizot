@@ -27,8 +27,11 @@ export type J9Config = {
   artifactPath: string;
   webhookCapturePath: string;
   cleanupConfirm: string | null;
-  /** GitHub Actions run id of the prepare workflow (digits only). */
-  prepareRunId: string | null;
+  /**
+   * GitHub Actions run id that uploaded the *latest* j9-run-artifact (digits).
+   * After a blocked resume this must be the resume run, not the original prepare.
+   */
+  artifactRunId: string | null;
 };
 
 export type J9ConfigError = {
@@ -73,10 +76,10 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv, repoRoot = process.cwd()
     };
   }
   const cleanupConfirm = (env.STRIPE_J9_CLEANUP_CONFIRM ?? "").trim() || null;
-  const prepareRunIdRaw = (env.STRIPE_J9_PREPARE_RUN_ID ?? "").trim();
-  const prepareRunId = prepareRunIdRaw && /^\d+$/.test(prepareRunIdRaw) ? prepareRunIdRaw : null;
-  if (prepareRunIdRaw && !prepareRunId) {
-    return { ok: false, status: "FAIL", reason: "STRIPE_J9_PREPARE_RUN_ID must be digits only", missing: [] };
+  const artifactRunIdRaw = (env.STRIPE_J9_ARTIFACT_RUN_ID ?? env.STRIPE_J9_PREPARE_RUN_ID ?? "").trim();
+  const artifactRunId = artifactRunIdRaw && /^\d+$/.test(artifactRunIdRaw) ? artifactRunIdRaw : null;
+  if (artifactRunIdRaw && !artifactRunId) {
+    return { ok: false, status: "FAIL", reason: "STRIPE_J9_ARTIFACT_RUN_ID must be digits only", missing: [] };
   }
 
   const artifactResolved = resolveSafeJ9Path(repoRoot, J9_FIXED_ARTIFACT_RELATIVE);
@@ -150,7 +153,7 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv, repoRoot = process.cwd()
       artifactPath: artifactResolved.path,
       webhookCapturePath: captureResolved.path,
       cleanupConfirm,
-      prepareRunId,
+      artifactRunId,
     },
   };
 }

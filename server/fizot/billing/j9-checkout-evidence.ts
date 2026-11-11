@@ -49,7 +49,8 @@ export function assertCompletedCheckoutSession(
   }
   const metadata = session.metadata as Record<string, unknown> | undefined;
   const runMeta = typeof metadata?.fizot_j9_run_id === "string" ? metadata.fizot_j9_run_id : null;
-  if (runMeta && runMeta !== artifact.runId) {
+  if (!runMeta) return { ok: false, reason: "checkout_run_metadata_missing" };
+  if (runMeta !== artifact.runId) {
     return { ok: false, reason: "checkout_run_metadata_mismatch" };
   }
   if (session.status !== "complete" || session.payment_status !== "paid") {
