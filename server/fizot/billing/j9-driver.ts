@@ -4,14 +4,26 @@ import { createMemoryCreditStore } from "../proxy/credit-store.ts";
 import { createBillingService, type StripeEvent } from "./apply.ts";
 import { createFakeEmailProvider } from "./email.ts";
 import { resolveJ9Config, redactSecrets, type J9Config } from "./j9-config.ts";
-import { createFakeStripeTransport, createLiveStripeTransport, type J9StripeTransport } from "./j9-transport.ts";
+import { assertPaidInvoice, invoiceIdFromSubscription, stripeQuantity } from "./j9-invoice.ts";
+import {
+  createFakeStripeTransport,
+  createLiveStripeTransport,
+  type FakeStripeTransport,
+  type J9StripeTransport,
+} from "./j9-transport.ts";
 import { createFakeBillingProvider } from "./provider.ts";
-import { DAY_MS, GRACE_WINDOW_MS, DELETE_AFTER_SUSPEND_MS, NOTICE_BEFORE_DELETE_MS } from "./record.ts";
+import { DAY_MS, GRACE_WINDOW_MS, DELETE_AFTER_SUSPEND_MS, NOTICE_BEFORE_DELETE_MS, emptyRecord } from "./record.ts";
 import { createMemoryBillingStore } from "./store.ts";
 import { vatGate } from "./plan-prices.ts";
 
 export type J9ScenarioStatus = "PASS" | "FAIL" | "BLOCKED" | "NOT_RUN";
-export type J9EventSource = "stripe_api" | "locally_signed_fixture" | "simulated_clock" | "config" | "none";
+export type J9EventSource =
+  | "stripe_api"
+  | "locally_signed_fixture"
+  | "simulated_clock"
+  | "config"
+  | "none";
+export type J9Kind = "fake_unit" | "live_j9";
 
 export type J9ScenarioResult = {
   scenario: string;
@@ -23,35 +35,68 @@ export type J9ScenarioResult = {
 };
 
 export type J9Report = {
+  kind: J9Kind;
+  /** True only for a complete live Stripe J9 acceptance run. */
+  liveAcceptance: boolean;
   overall: "PASS" | "FAIL" | "BLOCKED";
   exitCode: number;
   scenarios: J9ScenarioResult[];
   resources: { customers: string[]; subscriptions: string[]; checkoutSessions: string[] };
 };
 
-const MANDATORY = [
+const SHARED_MANDATORY = [
   "secure_startup",
-  "checkout",
-  "payment_and_credit",
+  "checkout_session_created",
+  "checkout_completed",
+  "subscription_payment_and_credit",
   "webhook_lifecycle",
-  "failed_payment_lifecycle",
-  "recovery",
+  "simulated_failed_payment_lifecycle",
+  "simulated_recovery",
   "tax_and_seats",
   "cleanup",
 ] as const;
+
+const LIVE_ONLY_MANDATORY = ["stripe_dunning_recovery"] as const;
+
+function mandatoryFor(kind: J9Kind): readonly string[] {
+  return kind === "live_j9" ? [...SHARED_MANDATORY, ...LIVE_ONLY_MANDATORY] : SHARED_MANDATORY;
+}
 
 function scenario(name: string, status: J9ScenarioStatus, source: J9EventSource, evidence: string, extra: Partial<J9ScenarioResult> = {}): J9ScenarioResult {
   return { scenario: name, status, source, evidence, ...extra };
 }
 
-function finish(scenarios: J9ScenarioResult[], resources: J9Report["resources"]): J9Report {
-  const byName = new Map(scenarios.map((row) => [row.scenario, row]));
-  const ordered = MANDATORY.map((name) => byName.get(name) ?? scenario(name, "NOT_RUN", "none", "not executed"));
-  const hasFail = ordered.some((row) => row.status === "FAIL");
-  const hasBlockedOrSkip = ordered.some((row) => row.status === "BLOCKED" || row.status === "NOT_RUN");
+export function finish(input: {
+  kind: J9Kind;
+  scenarios: J9ScenarioResult[];
+  resources: J9Report["resources"];
+}): J9Report {
+  const required = mandatoryFor(input.kind);
+  const byName = new Map(input.scenarios.map((row) => [row.scenario, row]));
+  const ordered = [
+    ...required.map((name) => byName.get(name) ?? scenario(name, "NOT_RUN", "none", "not executed")),
+    ...input.scenarios.filter((row) => !required.includes(row.scenario)),
+  ];
+  // Deduplicate while preferring required order.
+  const seen = new Set<string>();
+  const scenarios = ordered.filter((row) => {
+    if (seen.has(row.scenario)) return false;
+    seen.add(row.scenario);
+    return true;
+  });
+  const requiredRows = scenarios.filter((row) => required.includes(row.scenario));
+  const hasFail = requiredRows.some((row) => row.status === "FAIL");
+  const hasBlockedOrSkip = requiredRows.some((row) => row.status === "BLOCKED" || row.status === "NOT_RUN");
   const overall = hasFail ? "FAIL" : hasBlockedOrSkip ? "BLOCKED" : "PASS";
   const exitCode = overall === "PASS" ? 0 : overall === "FAIL" ? 1 : 2;
-  return { overall, exitCode, scenarios: ordered, resources };
+  return {
+    kind: input.kind,
+    liveAcceptance: input.kind === "live_j9" && overall === "PASS",
+    overall,
+    exitCode,
+    scenarios,
+    resources: input.resources,
+  };
 }
 
 function asEvent(id: string, type: string, created: number, object: Record<string, unknown>): StripeEvent {
@@ -64,6 +109,10 @@ function signedBody(secret: string, event: StripeEvent): { body: string; header:
   return { body, header };
 }
 
+function isFakeTransport(transport: J9StripeTransport): transport is FakeStripeTransport {
+  return typeof (transport as FakeStripeTransport).markCheckoutComplete === "function";
+}
+
 export type J9DriverDeps = {
   env: NodeJS.ProcessEnv;
   transport?: J9StripeTransport;
@@ -72,26 +121,40 @@ export type J9DriverDeps = {
 };
 
 /**
- * Isolated J9 Stripe test-mode verification. Credentials alone never yield PASS.
- * Mandatory scenarios must each PASS; otherwise overall is FAIL or BLOCKED.
+ * Isolated J9 verification. Fake-unit PASS is never live acceptance.
+ * Live J9 PASS requires every live mandatory scenario, including hosted checkout completion
+ * and Stripe dunning coverage.
  */
 export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
   const log = deps.log ?? (() => {});
   const scenarios: J9ScenarioResult[] = [];
   const resources = { customers: [] as string[], subscriptions: [] as string[], checkoutSessions: [] as string[] };
   const resolved = resolveJ9Config(deps.env);
+  const kind: J9Kind = (resolved.ok ? resolved.config.transport : "live") === "fake" ? "fake_unit" : "live_j9";
+
   if (!resolved.ok) {
     scenarios.push(scenario("secure_startup", resolved.status, "config", resolved.reason, { failureReason: resolved.reason }));
-    for (const name of MANDATORY) {
+    for (const name of mandatoryFor(kind)) {
       if (name === "secure_startup") continue;
       scenarios.push(scenario(name, "NOT_RUN", "none", "blocked by secure_startup"));
     }
-    return finish(scenarios, resources);
+    return finish({ kind, scenarios, resources });
   }
+
   const config = resolved.config;
+  if (config.transport === "live" && deps.transport && isFakeTransport(deps.transport)) {
+    scenarios.push(scenario("secure_startup", "FAIL", "config", "live config with fake transport injected", {
+      failureReason: "refusing fake transport under live J9 config",
+    }));
+    for (const name of mandatoryFor("live_j9")) {
+      if (name === "secure_startup") continue;
+      scenarios.push(scenario(name, "NOT_RUN", "none", "blocked by secure_startup"));
+    }
+    return finish({ kind: "live_j9", scenarios, resources });
+  }
+
   const secrets = [config.apiKey, config.webhookSecret];
   const safeLog = (line: string) => log(redactSecrets(line, secrets));
-
   const transport = deps.transport
     ?? (config.transport === "fake"
       ? createFakeStripeTransport()
@@ -101,7 +164,7 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     "secure_startup",
     "PASS",
     "config",
-    `mode=test transport=${config.transport} key_prefix=sk_test_ price=${config.priceHome.startsWith("price_") ? "configured" : "missing"}`,
+    `kind=${kind} mode=test transport=${config.transport} key_prefix=sk_test_ price=configured`,
   ));
 
   const credit = createMemoryCreditStore();
@@ -129,44 +192,45 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     return Math.floor(clock / 1000);
   };
 
-  const applySigned = async (event: StripeEvent, source: J9EventSource) => {
+  const applySignedFixture = async (event: StripeEvent) => {
     const { body, header } = signedBody(config.webhookSecret, event);
     const verified = verifyStripeSignature({ secret: config.webhookSecret, body, header, now: () => event.created * 1000 });
     if (!verified.ok) throw new Error(`signature_${verified.error}`);
-    const delivery = await deliverWebhookEvent({
+    return deliverWebhookEvent({
       store: webhookStore,
       provider: "stripe",
       eventId: event.id,
       handler: () => billing.applyEvent(event),
       now: () => event.created * 1000,
     });
-    return { source, delivery, verified: true as const };
   };
 
   try {
-    scenarios.push(await runCheckout(config, transport, resources, workspaceId));
-    scenarios.push(await runPaymentAndCredit({
-      config, transport, resources, workspaceId, credit, billing, applySigned, createdSec: nextCreatedSec, safeLog,
+    scenarios.push(await runCheckoutSessionCreated(config, transport, resources, workspaceId, billing));
+    scenarios.push(await runCheckoutCompleted(kind, transport, resources));
+    scenarios.push(await runSubscriptionPaymentAndCredit({
+      config, transport, resources, workspaceId, credit, billing, applySignedFixture, createdSec: nextCreatedSec, safeLog,
     }));
     scenarios.push(await runWebhookLifecycle({
-      config, workspaceId, billing, applySigned, createdSec: nextCreatedSec, credit,
+      config, workspaceId, billing, credit, createdSec: nextCreatedSec,
     }));
-    scenarios.push(await runFailedPayment({
-      workspaceId, billing, applySigned, createdSec: nextCreatedSec, email, deletes,
+    scenarios.push(await runSimulatedFailedPayment({
+      workspaceId, billing, applySignedFixture, createdSec: nextCreatedSec, email, deletes,
       now: () => clock,
       advance: async (ms) => {
         clock += ms;
         return billing.tick(clock);
       },
     }));
-    scenarios.push(await runRecovery({
-      workspaceId, billing, applySigned, createdSec: nextCreatedSec, credit, resumes,
+    scenarios.push(await runSimulatedRecovery({
+      workspaceId, billing, applySignedFixture, createdSec: nextCreatedSec, credit, resumes,
     }));
-    scenarios.push(await runTaxAndSeats({ config, transport, billing, workspaceId, resources }));
+    scenarios.push(runStripeDunning(kind));
+    scenarios.push(await runTaxAndSeats({ config, transport, resources }));
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error), secrets);
     safeLog(`j9_error ${message}`);
-    for (const name of MANDATORY) {
+    for (const name of mandatoryFor(kind)) {
       if (scenarios.some((row) => row.scenario === name)) continue;
       scenarios.push(scenario(name, "FAIL", "none", "aborted", { failureReason: message }));
     }
@@ -175,14 +239,15 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     await billing.close();
   }
 
-  return finish(scenarios, resources);
+  return finish({ kind, scenarios, resources });
 }
 
-async function runCheckout(
+async function runCheckoutSessionCreated(
   config: J9Config,
   transport: J9StripeTransport,
   resources: J9Report["resources"],
   workspaceId: string,
+  billing: ReturnType<typeof createBillingService>,
 ): Promise<J9ScenarioResult> {
   const customer = await transport.request("POST", "customers", {
     email: "j9@example.invalid",
@@ -190,8 +255,15 @@ async function runCheckout(
     "metadata[workspace_id]": workspaceId,
   });
   const customerId = String(customer.id ?? "");
-  if (!customerId) return scenario("checkout", "FAIL", "stripe_api", "customer missing", { failureReason: "no customer id" });
+  if (!customerId) {
+    return scenario("checkout_session_created", "FAIL", "stripe_api", "customer missing", { failureReason: "no customer id" });
+  }
   resources.customers.push(customerId);
+  const record = (await billing.store.get(workspaceId)) ?? emptyRecord(workspaceId);
+  record.stripeCustomerId = customerId;
+  record.plan = "home";
+  record.country = "GB";
+  await billing.store.save(record);
 
   const session = await transport.request("POST", "checkout/sessions", {
     mode: "subscription",
@@ -211,44 +283,89 @@ async function runCheckout(
   });
   const sessionId = String(session.id ?? "");
   if (!sessionId || !session.url) {
-    return scenario("checkout", "FAIL", "stripe_api", "checkout session incomplete", { failureReason: "missing id or url" });
+    return scenario("checkout_session_created", "FAIL", "stripe_api", "checkout session incomplete", {
+      failureReason: "missing id or url",
+    });
   }
   resources.checkoutSessions.push(sessionId);
+  if (session.status !== "open" && session.status != null) {
+    return scenario("checkout_session_created", "FAIL", "stripe_api", `session=${sessionId}`, {
+      failureReason: `expected open session, got ${String(session.status)}`,
+    });
+  }
   const taxOn = Boolean((session.automatic_tax as { enabled?: boolean } | undefined)?.enabled);
   const taxIdOn = Boolean((session.tax_id_collection as { enabled?: boolean } | undefined)?.enabled);
   if (!taxOn || !taxIdOn) {
-    return scenario("checkout", "FAIL", "stripe_api", `session=${sessionId}`, {
+    return scenario("checkout_session_created", "FAIL", "stripe_api", `session=${sessionId}`, {
       failureReason: `automatic_tax=${taxOn} tax_id_collection=${taxIdOn}`,
     });
   }
   return scenario(
-    "checkout",
+    "checkout_session_created",
     "PASS",
     "stripe_api",
-    `session=${sessionId} customer=${customerId} payment_not_completed mode=subscription tax=on`,
+    `session=${sessionId} customer=${customerId} status=open payment_not_completed`,
   );
 }
 
-async function runPaymentAndCredit(input: {
+async function runCheckoutCompleted(
+  kind: J9Kind,
+  transport: J9StripeTransport,
+  resources: J9Report["resources"],
+): Promise<J9ScenarioResult> {
+  const sessionId = resources.checkoutSessions[0];
+  if (!sessionId) {
+    return scenario("checkout_completed", "FAIL", "none", "no checkout session", { failureReason: "missing session" });
+  }
+  if (kind === "fake_unit" && isFakeTransport(transport)) {
+    transport.markCheckoutComplete(sessionId);
+  }
+  const session = await transport.request("GET", `checkout/sessions/${sessionId}`, null);
+  if (session.status === "complete" && session.payment_status === "paid") {
+    return scenario(
+      "checkout_completed",
+      "PASS",
+      kind === "fake_unit" ? "stripe_api" : "stripe_api",
+      `session=${sessionId} status=complete payment_status=paid kind=${kind} note=${kind === "fake_unit" ? "fake_markCheckoutComplete_only" : "stripe_hosted_complete"}`,
+    );
+  }
+  if (kind === "live_j9") {
+    return scenario("checkout_completed", "BLOCKED", "stripe_api", `session=${sessionId} status=${String(session.status)}`, {
+      failureReason: "Hosted Checkout completion is not automated; complete the open test Session in Stripe test mode (browser or Stripe CLI) then re-run, or keep BLOCKED",
+    });
+  }
+  return scenario("checkout_completed", "FAIL", "stripe_api", `session=${sessionId}`, {
+    failureReason: `fake checkout not complete status=${String(session.status)}`,
+  });
+}
+
+async function runSubscriptionPaymentAndCredit(input: {
   config: J9Config;
   transport: J9StripeTransport;
   resources: J9Report["resources"];
   workspaceId: string;
   credit: ReturnType<typeof createMemoryCreditStore>;
   billing: ReturnType<typeof createBillingService>;
-  applySigned: (event: StripeEvent, source: J9EventSource) => Promise<unknown>;
+  applySignedFixture: (event: StripeEvent) => Promise<unknown>;
   createdSec: () => number;
   safeLog: (line: string) => void;
 }): Promise<J9ScenarioResult> {
   const customerId = input.resources.customers[0];
-  if (!customerId) return scenario("payment_and_credit", "FAIL", "none", "no customer", { failureReason: "checkout did not create customer" });
+  if (!customerId) {
+    return scenario("subscription_payment_and_credit", "FAIL", "none", "no customer", { failureReason: "missing customer" });
+  }
 
   const pm = await input.transport.request("POST", "payment_methods", {
     type: "card",
     "card[token]": "tok_visa",
   });
   const pmId = String(pm.id ?? "");
-  await input.transport.request("POST", `customers/${customerId}/payment_methods/${pmId}/attach`, {});
+  if (!pmId) {
+    return scenario("subscription_payment_and_credit", "FAIL", "stripe_api", "payment method missing", {
+      failureReason: "no payment_method id",
+    });
+  }
+  await input.transport.request("POST", `payment_methods/${pmId}/attach`, { customer: customerId });
 
   const sub = await input.transport.request("POST", "subscriptions", {
     customer: customerId,
@@ -257,63 +374,71 @@ async function runPaymentAndCredit(input: {
     "items[0][quantity]": "1",
     "metadata[workspace_id]": input.workspaceId,
     "metadata[plan]": "home",
-    "payment_behavior": "error_if_incomplete",
+    payment_behavior: "error_if_incomplete",
+    "expand[]": "latest_invoice",
   });
   const subscriptionId = String(sub.id ?? "");
-  if (!subscriptionId) return scenario("payment_and_credit", "FAIL", "stripe_api", "subscription missing", { failureReason: "no subscription id" });
+  if (!subscriptionId) {
+    return scenario("subscription_payment_and_credit", "FAIL", "stripe_api", "subscription missing", {
+      failureReason: "no subscription id",
+    });
+  }
   input.resources.subscriptions.push(subscriptionId);
 
-  const invoiceObj = (sub.latest_invoice && typeof sub.latest_invoice === "object"
-    ? sub.latest_invoice
-    : {
-      id: `in_j9_${subscriptionId}`,
-      object: "invoice",
-      status: "paid",
-      customer: customerId,
-      subscription: subscriptionId,
-      metadata: { workspace_id: input.workspaceId, plan: "home" },
-    }) as Record<string, unknown>;
-  if (!invoiceObj.metadata || typeof invoiceObj.metadata !== "object") {
-    invoiceObj.metadata = { workspace_id: input.workspaceId, plan: "home" };
+  // Independent Subscription API journey — not linked to an incomplete Checkout Session.
+  const invoiceId = invoiceIdFromSubscription(sub);
+  if (!invoiceId) {
+    return scenario("subscription_payment_and_credit", "FAIL", "stripe_api", `subscription=${subscriptionId}`, {
+      failureReason: "latest_invoice missing; no fabricated invoice",
+    });
   }
-  const meta = invoiceObj.metadata as Record<string, unknown>;
-  meta.workspace_id = input.workspaceId;
-  meta.plan = "home";
+  let invoice: Record<string, unknown>;
+  if (sub.latest_invoice && typeof sub.latest_invoice === "object") {
+    invoice = sub.latest_invoice as Record<string, unknown>;
+  } else {
+    invoice = await input.transport.request("GET", `invoices/${invoiceId}`, null);
+  }
+  const paid = assertPaidInvoice(invoice, { customerId, subscriptionId });
+  if (!paid.ok) {
+    return scenario("subscription_payment_and_credit", "FAIL", "stripe_api", `invoice=${invoiceId}`, {
+      failureReason: paid.reason,
+    });
+  }
 
   const t = input.createdSec();
   await input.billing.applyEvent(asEvent(`evt_sub_${t}`, "customer.subscription.created", t, {
-    ...sub,
     id: subscriptionId,
     object: "subscription",
-    status: "active",
+    status: String(sub.status ?? "active"),
     customer: customerId,
     default_payment_method: pmId,
-    metadata: { workspace_id: input.workspaceId, plan: "home" },
+    metadata: (sub.metadata as Record<string, unknown> | undefined) ?? { workspace_id: input.workspaceId, plan: "home" },
+    items: sub.items,
   }));
 
-  const paid = asEvent(`evt_paid_${t}`, "invoice.paid", t + 1, invoiceObj);
-  await input.applySigned(paid, "locally_signed_fixture");
-  await input.applySigned(paid, "locally_signed_fixture");
+  // Webhook delivery is a locally signed fixture; the invoice object came from Stripe API.
+  const paidEvent = asEvent(`evt_paid_${t}`, "invoice.paid", t + 1, invoice);
+  await input.applySignedFixture(paidEvent);
+  await input.applySignedFixture(paidEvent);
 
   const summary = await input.credit.summary(input.workspaceId);
   const expected = PLAN_INCLUDED_MICRO_GBP.home;
   if (summary.balanceMicroGbp !== expected) {
-    return scenario("payment_and_credit", "FAIL", "locally_signed_fixture", `balance=${summary.balanceMicroGbp}`, {
+    return scenario("subscription_payment_and_credit", "FAIL", "locally_signed_fixture", `balance=${summary.balanceMicroGbp}`, {
       failureReason: `expected included credit ${expected} once`,
     });
   }
-  const allows = await input.billing.allows(input.workspaceId);
-  if (!allows) {
-    return scenario("payment_and_credit", "FAIL", "locally_signed_fixture", "proxy refused after paid invoice", {
-      failureReason: "subscription_required still true",
+  if (!(await input.billing.allows(input.workspaceId))) {
+    return scenario("subscription_payment_and_credit", "FAIL", "locally_signed_fixture", "proxy refused", {
+      failureReason: "subscription_required",
     });
   }
-  input.safeLog(`payment_and_credit subscription=${subscriptionId} invoice=${String(invoiceObj.id)} balance=${summary.balanceMicroGbp}`);
+  input.safeLog(`subscription_payment_and_credit subscription=${subscriptionId} invoice=${paid.invoiceId} balance=${summary.balanceMicroGbp}`);
   return scenario(
-    "payment_and_credit",
+    "subscription_payment_and_credit",
     "PASS",
     "locally_signed_fixture",
-    `subscription=${subscriptionId} invoice=${String(invoiceObj.id)} balance=${summary.balanceMicroGbp} duplicate_grant=false stripe_objects=created`,
+    `subscription=${subscriptionId} invoice=${paid.invoiceId} invoice_object=stripe_api webhook_delivery=locally_signed_fixture balance=${summary.balanceMicroGbp} duplicate_grant=false separate_from_checkout=true`,
   );
 }
 
@@ -321,19 +446,17 @@ async function runWebhookLifecycle(input: {
   config: J9Config;
   workspaceId: string;
   billing: ReturnType<typeof createBillingService>;
-  applySigned: (event: StripeEvent, source: J9EventSource) => Promise<unknown>;
-  createdSec: () => number;
   credit: ReturnType<typeof createMemoryCreditStore>;
+  createdSec: () => number;
 }): Promise<J9ScenarioResult> {
   const bad = asEvent("evt_bad_sig", "customer.updated", input.createdSec(), {
     id: "cus_ignore",
     object: "customer",
     metadata: { workspace_id: input.workspaceId },
   });
-  const body = JSON.stringify(bad);
   const verified = verifyStripeSignature({
     secret: input.config.webhookSecret,
-    body,
+    body: JSON.stringify(bad),
     header: "t=1,v1=deadbeef",
     now: () => bad.created * 1000,
   });
@@ -342,17 +465,15 @@ async function runWebhookLifecycle(input: {
       failureReason: "verifyStripeSignature returned ok",
     });
   }
-
   const before = await input.credit.summary(input.workspaceId);
   const beforeStatus = (await input.billing.store.get(input.workspaceId))?.status;
-  const older = asEvent("evt_stale_paid", "invoice.payment_failed", 1, {
+  await input.billing.applyEvent(asEvent("evt_stale_paid", "invoice.payment_failed", 1, {
     id: "in_stale",
     object: "invoice",
     customer: "cus_x",
     subscription: "sub_x",
     metadata: { workspace_id: input.workspaceId, plan: "home" },
-  });
-  await input.billing.applyEvent(older);
+  }));
   const afterStale = await input.billing.store.get(input.workspaceId);
   if (afterStale?.status !== beforeStatus) {
     return scenario("webhook_lifecycle", "FAIL", "locally_signed_fixture", "stale payment_failed applied", {
@@ -361,7 +482,7 @@ async function runWebhookLifecycle(input: {
   }
   const after = await input.credit.summary(input.workspaceId);
   if (after.balanceMicroGbp !== before.balanceMicroGbp) {
-    return scenario("webhook_lifecycle", "FAIL", "locally_signed_fixture", "credit changed on webhook checks", {
+    return scenario("webhook_lifecycle", "FAIL", "locally_signed_fixture", "credit changed", {
       failureReason: `before=${before.balanceMicroGbp} after=${after.balanceMicroGbp}`,
     });
   }
@@ -369,14 +490,14 @@ async function runWebhookLifecycle(input: {
     "webhook_lifecycle",
     "PASS",
     "locally_signed_fixture",
-    "invalid_signature=rejected stale_payment_failed=ignored duplicate_invoice_paid=idempotent_earlier",
+    "invalid_signature=rejected stale_event=ignored label=locally_signed_fixture_not_stripe_delivery",
   );
 }
 
-async function runFailedPayment(input: {
+async function runSimulatedFailedPayment(input: {
   workspaceId: string;
   billing: ReturnType<typeof createBillingService>;
-  applySigned: (event: StripeEvent, source: J9EventSource) => Promise<unknown>;
+  applySignedFixture: (event: StripeEvent) => Promise<unknown>;
   createdSec: () => number;
   email: ReturnType<typeof createFakeEmailProvider>;
   deletes: string[];
@@ -384,64 +505,54 @@ async function runFailedPayment(input: {
   advance: (ms: number) => Promise<unknown>;
 }): Promise<J9ScenarioResult> {
   const t = input.createdSec();
-  await input.applySigned(asEvent(`evt_fail_${t}`, "invoice.payment_failed", t, {
+  await input.applySignedFixture(asEvent(`evt_fail_${t}`, "invoice.payment_failed", t, {
     id: `in_fail_${t}`,
     object: "invoice",
     customer: "cus_x",
     subscription: "sub_x",
     metadata: { workspace_id: input.workspaceId, plan: "home" },
-  }), "locally_signed_fixture");
+  }));
   const pastDue = await input.billing.store.get(input.workspaceId);
   if (pastDue?.status !== "past_due") {
-    return scenario("failed_payment_lifecycle", "FAIL", "locally_signed_fixture", `status=${pastDue?.status}`, {
+    return scenario("simulated_failed_payment_lifecycle", "FAIL", "locally_signed_fixture", `status=${pastDue?.status}`, {
       failureReason: "expected past_due",
     });
   }
   await input.advance(0);
   const grace = await input.billing.store.get(input.workspaceId);
   if (grace?.status !== "grace") {
-    return scenario("failed_payment_lifecycle", "FAIL", "simulated_clock", `status=${grace?.status}`, {
-      failureReason: "expected grace on next tick",
-    });
-  }
-  if (!(await input.billing.allows(input.workspaceId))) {
-    return scenario("failed_payment_lifecycle", "FAIL", "simulated_clock", "proxy blocked during grace", {
-      failureReason: "grace must still allow proxy",
+    return scenario("simulated_failed_payment_lifecycle", "FAIL", "simulated_clock", `status=${grace?.status}`, {
+      failureReason: "expected grace",
     });
   }
   const suspendAt = (grace.firstFailureAt ?? t * 1000) + GRACE_WINDOW_MS;
   await input.advance(Math.max(0, suspendAt - input.now()));
   const suspended = await input.billing.store.get(input.workspaceId);
-  if (suspended?.status !== "suspended") {
-    return scenario("failed_payment_lifecycle", "FAIL", "simulated_clock", `status=${suspended?.status}`, {
-      failureReason: "expected suspended after 7 days",
-    });
-  }
-  if (await input.billing.allows(input.workspaceId)) {
-    return scenario("failed_payment_lifecycle", "FAIL", "simulated_clock", "proxy still allowed while suspended", {
-      failureReason: "suspended must deny proxy",
+  if (suspended?.status !== "suspended" || await input.billing.allows(input.workspaceId)) {
+    return scenario("simulated_failed_payment_lifecycle", "FAIL", "simulated_clock", `status=${suspended?.status}`, {
+      failureReason: "expected suspended with proxy denied",
     });
   }
   const noticeAt = (suspended.suspendedAt ?? suspendAt) + DELETE_AFTER_SUSPEND_MS - NOTICE_BEFORE_DELETE_MS;
   await input.advance(Math.max(0, noticeAt - input.now()));
   if (input.email.sent.length < 1) await input.advance(DAY_MS);
   if (input.email.sent.length < 1) {
-    return scenario("failed_payment_lifecycle", "FAIL", "simulated_clock", "notice email missing", {
+    return scenario("simulated_failed_payment_lifecycle", "FAIL", "simulated_clock", "notice missing", {
       failureReason: "expected deletion notice",
     });
   }
   return scenario(
-    "failed_payment_lifecycle",
+    "simulated_failed_payment_lifecycle",
     "PASS",
     "simulated_clock",
-    `past_due→grace→suspended notice_emails=${input.email.sent.length} deletes_requested=${input.deletes.length} (deletion deferred to recovery scenario)`,
+    `label=simulated_app_lifecycle_not_stripe_dunning past_due→grace→suspended notice=${input.email.sent.length}`,
   );
 }
 
-async function runRecovery(input: {
+async function runSimulatedRecovery(input: {
   workspaceId: string;
   billing: ReturnType<typeof createBillingService>;
-  applySigned: (event: StripeEvent, source: J9EventSource) => Promise<unknown>;
+  applySignedFixture: (event: StripeEvent) => Promise<unknown>;
   createdSec: () => number;
   credit: ReturnType<typeof createMemoryCreditStore>;
   resumes: string[];
@@ -449,57 +560,60 @@ async function runRecovery(input: {
   const before = await input.credit.summary(input.workspaceId);
   const t = input.createdSec();
   const invoiceId = `in_recover_${t}`;
-  await input.applySigned(asEvent(`evt_recover_${t}`, "invoice.paid", t, {
+  const payload = {
     id: invoiceId,
     object: "invoice",
     status: "paid",
+    paid: true,
+    livemode: false,
     customer: "cus_x",
     subscription: "sub_x",
     metadata: { workspace_id: input.workspaceId, plan: "home" },
-  }), "locally_signed_fixture");
-  await input.applySigned(asEvent(`evt_recover_${t}`, "invoice.paid", t, {
-    id: invoiceId,
-    object: "invoice",
-    status: "paid",
-    customer: "cus_x",
-    subscription: "sub_x",
-    metadata: { workspace_id: input.workspaceId, plan: "home" },
-  }), "locally_signed_fixture");
-
+  };
+  await input.applySignedFixture(asEvent(`evt_recover_${t}`, "invoice.paid", t, payload));
+  await input.applySignedFixture(asEvent(`evt_recover_${t}`, "invoice.paid", t, payload));
   const record = await input.billing.store.get(input.workspaceId);
-  if (record?.status !== "active") {
-    return scenario("recovery", "FAIL", "locally_signed_fixture", `status=${record?.status}`, { failureReason: "expected active" });
-  }
-  if (!(await input.billing.allows(input.workspaceId))) {
-    return scenario("recovery", "FAIL", "locally_signed_fixture", "proxy still denied", { failureReason: "allows=false" });
+  if (record?.status !== "active" || !(await input.billing.allows(input.workspaceId))) {
+    return scenario("simulated_recovery", "FAIL", "locally_signed_fixture", `status=${record?.status}`, {
+      failureReason: "expected active with proxy allowed",
+    });
   }
   const after = await input.credit.summary(input.workspaceId);
   const expected = before.balanceMicroGbp + PLAN_INCLUDED_MICRO_GBP.home;
-  if (after.balanceMicroGbp !== expected) {
-    return scenario("recovery", "FAIL", "locally_signed_fixture", `balance=${after.balanceMicroGbp}`, {
-      failureReason: `expected one new grant to ${expected}`,
+  if (after.balanceMicroGbp !== expected || !input.resumes.includes(input.workspaceId)) {
+    return scenario("simulated_recovery", "FAIL", "locally_signed_fixture", `balance=${after.balanceMicroGbp}`, {
+      failureReason: "grant or resume mismatch",
     });
   }
-  if (!input.resumes.includes(input.workspaceId)) {
-    return scenario("recovery", "FAIL", "locally_signed_fixture", "onResume not called", { failureReason: "resume missing" });
-  }
   return scenario(
-    "recovery",
+    "simulated_recovery",
     "PASS",
     "locally_signed_fixture",
-    `status=active balance=${after.balanceMicroGbp} resume=1 duplicate_recover_invoice=idempotent`,
+    `label=simulated_recovery_fixture_not_stripe_test_clock status=active balance=${after.balanceMicroGbp}`,
   );
+}
+
+function runStripeDunning(kind: J9Kind): J9ScenarioResult {
+  if (kind === "fake_unit") {
+    return scenario(
+      "stripe_dunning_recovery",
+      "NOT_RUN",
+      "none",
+      "not required for fake_unit acceptance; real Stripe Test Clock dunning remains a live_j9 requirement",
+    );
+  }
+  return scenario("stripe_dunning_recovery", "BLOCKED", "none", "Stripe Test Clock dunning not automated", {
+    failureReason: "Create a test clock, attach the customer, advance through payment_failed and recovery, then assert Stripe-originated events; keep BLOCKED until that procedure is wired",
+  });
 }
 
 async function runTaxAndSeats(input: {
   config: J9Config;
   transport: J9StripeTransport;
-  billing: ReturnType<typeof createBillingService>;
-  workspaceId: string;
   resources: J9Report["resources"];
 }): Promise<J9ScenarioResult> {
   if (vatGate("FR", "") !== "vat_id_required") {
-    return scenario("tax_and_seats", "FAIL", "config", "vatGate FR without id", { failureReason: "expected vat_id_required" });
+    return scenario("tax_and_seats", "FAIL", "config", "vatGate", { failureReason: "expected vat_id_required" });
   }
   let taxEvidence = "";
   try {
@@ -510,7 +624,6 @@ async function runTaxAndSeats(input: {
       "customer_details[address][country]": "GB",
       "customer_details[address_source]": "billing",
     });
-    const gbTax = Number(gb.tax_amount_exclusive ?? -1);
     const eu = await input.transport.request("POST", "tax/calculations", {
       currency: "gbp",
       "line_items[0][amount]": "1999",
@@ -520,51 +633,46 @@ async function runTaxAndSeats(input: {
       "customer_details[tax_ids][0][type]": "eu_vat",
       "customer_details[tax_ids][0][value]": "FR12345678901",
     });
+    const gbTax = Number(gb.tax_amount_exclusive ?? -1);
     const euTax = Number(eu.tax_amount_exclusive ?? -1);
-    if (gbTax !== 400) {
-      return scenario("tax_and_seats", "BLOCKED", "stripe_api", `gb_tax=${gbTax}`, {
-        failureReason: "Stripe Tax GB fixture did not return 400 minor units; account Tax settings may differ",
+    if (gbTax !== 400 || euTax !== 0) {
+      return scenario("tax_and_seats", "BLOCKED", "stripe_api", `gb=${gbTax} eu=${euTax}`, {
+        failureReason: "Stripe Tax amounts differ from the GB 20% / EU reverse-charge fixture; check Tax settings on the test account",
       });
     }
-    if (euTax !== 0) {
-      return scenario("tax_and_seats", "BLOCKED", "stripe_api", `eu_tax=${euTax}`, {
-        failureReason: "Stripe Tax reverse-charge fixture did not return 0; enable Tax / reverse charge in the test account",
-      });
-    }
-    taxEvidence = `gb_vat=400 eu_reverse_charge=0`;
+    taxEvidence = "gb_vat=400 eu_reverse_charge=0";
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     return scenario("tax_and_seats", "BLOCKED", "stripe_api", "tax/calculations unavailable", {
-      failureReason: message.slice(0, 160),
+      failureReason: (error instanceof Error ? error.message : String(error)).slice(0, 160),
     });
   }
 
   const subId = input.resources.subscriptions[0];
   if (!subId) {
-    return scenario("tax_and_seats", "FAIL", "stripe_api", taxEvidence, { failureReason: "missing subscription for seat sync" });
+    return scenario("tax_and_seats", "FAIL", "stripe_api", taxEvidence, { failureReason: "missing subscription" });
   }
-  const record = await input.billing.store.get(input.workspaceId);
-  if (record) {
-    record.plan = "team";
-    record.stripeSubscriptionId = subId;
-    record.quantity = 1;
-    await input.billing.store.save(record);
+  const before = await input.transport.request("GET", `subscriptions/${subId}`, null);
+  const beforeQty = stripeQuantity(before);
+  if (!beforeQty.itemId) {
+    return scenario("tax_and_seats", "FAIL", "stripe_api", taxEvidence, { failureReason: "subscription item id missing from Stripe" });
   }
-  await input.billing.syncSeats(input.workspaceId, "team", 3);
-  const after = await input.billing.store.get(input.workspaceId);
-  if (after?.quantity !== 3) {
-    // live provider path updates via transport; fake BillingProvider may not touch transport
-    await input.transport.request("POST", `subscriptions/${subId}`, {
-      "items[0][id]": after?.stripeItemId ?? "si_placeholder",
-      "items[0][quantity]": "3",
+  await input.transport.request("POST", `subscriptions/${subId}`, {
+    "items[0][id]": beforeQty.itemId,
+    "items[0][quantity]": "3",
+  });
+  const after = await input.transport.request("GET", `subscriptions/${subId}`, null);
+  const afterQty = stripeQuantity(after);
+  if (afterQty.quantity !== 3) {
+    return scenario("tax_and_seats", "FAIL", "stripe_api", taxEvidence, {
+      failureReason: `stripe_quantity=${afterQty.quantity} expected=3 (local app state ignored)`,
     });
   }
-  const refreshed = await input.transport.request("GET", `subscriptions/${subId}`, null);
-  const qty = Number(((refreshed.items as { data?: Array<{ quantity?: number }> } | undefined)?.data?.[0]?.quantity) ?? 0);
-  if (qty !== 3 && after?.quantity !== 3) {
-    return scenario("tax_and_seats", "FAIL", "stripe_api", taxEvidence, { failureReason: `seat quantity=${qty}` });
-  }
-  return scenario("tax_and_seats", "PASS", "stripe_api", `${taxEvidence} seats=3 vatGate_fr_without_id=vat_id_required`);
+  return scenario(
+    "tax_and_seats",
+    "PASS",
+    "stripe_api",
+    `${taxEvidence} stripe_seats=3 item=${beforeQty.itemId} fixture_vatGate=vat_id_required`,
+  );
 }
 
 async function runCleanup(
@@ -573,22 +681,37 @@ async function runCleanup(
   secrets: string[],
 ): Promise<J9ScenarioResult> {
   const remaining: string[] = [];
+  const note = (error: unknown) => redactSecrets(error instanceof Error ? error.message : String(error), secrets).slice(0, 80);
+
+  for (const sessionId of [...resources.checkoutSessions].reverse()) {
+    try {
+      const session = await transport.request("GET", `checkout/sessions/${sessionId}`, null);
+      if (session.status === "open") {
+        await transport.request("POST", `checkout/sessions/${sessionId}/expire`, null);
+      }
+    } catch (error) {
+      const message = note(error);
+      if (!/404|already|complete|expired/i.test(message)) remaining.push(`checkout_session:${sessionId}:${message}`);
+    }
+  }
   for (const sub of [...resources.subscriptions].reverse()) {
     try {
       await transport.request("DELETE", `subscriptions/${sub}`, { invoice_now: "false", prorate: "true" });
     } catch (error) {
-      remaining.push(`subscription:${sub}:${redactSecrets(error instanceof Error ? error.message : String(error), secrets).slice(0, 80)}`);
+      const message = note(error);
+      if (!/404|canceled|missing/i.test(message)) remaining.push(`subscription:${sub}:${message}`);
     }
   }
   for (const customer of [...resources.customers].reverse()) {
     try {
       await transport.request("DELETE", `customers/${customer}`, null);
     } catch (error) {
-      remaining.push(`customer:${customer}:${redactSecrets(error instanceof Error ? error.message : String(error), secrets).slice(0, 80)}`);
+      const message = note(error);
+      if (!/404|deleted|missing/i.test(message)) remaining.push(`customer:${customer}:${message}`);
     }
   }
   if (remaining.length > 0) {
-    return scenario("cleanup", "FAIL", "stripe_api", `removed_partial remaining=${remaining.length}`, {
+    return scenario("cleanup", "FAIL", "stripe_api", `remaining=${remaining.length}`, {
       failureReason: remaining.join("; "),
       cleanup: "partial",
     });
@@ -597,20 +720,19 @@ async function runCleanup(
     "cleanup",
     "PASS",
     "stripe_api",
-    `customers=${resources.customers.length} subscriptions=${resources.subscriptions.length} checkout_sessions_left=${resources.checkoutSessions.length}`,
+    `expired_or_closed_sessions=${resources.checkoutSessions.length} subscriptions=${resources.subscriptions.length} customers=${resources.customers.length}`,
     { cleanup: "complete" },
   );
 }
 
 export function formatJ9Report(report: J9Report): string {
-  const lines = [
-    `j9_overall=${report.overall} exit=${report.exitCode}`,
+  return [
+    `j9_kind=${report.kind} live_acceptance=${report.liveAcceptance} overall=${report.overall} exit=${report.exitCode}`,
     ...report.scenarios.map((row) => {
       const fail = row.failureReason ? ` failure=${JSON.stringify(row.failureReason)}` : "";
       const cleanup = row.cleanup ? ` cleanup=${row.cleanup}` : "";
       return `j9_scenario name=${row.scenario} status=${row.status} source=${row.source} evidence=${JSON.stringify(row.evidence)}${fail}${cleanup}`;
     }),
     `j9_resources customers=${report.resources.customers.length} subscriptions=${report.resources.subscriptions.length} checkout_sessions=${report.resources.checkoutSessions.length}`,
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }

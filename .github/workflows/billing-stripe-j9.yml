@@ -1,6 +1,7 @@
 # J9 billing lifecycle against Stripe test mode. Not on the daily gate.
-# Credentials alone never pass: the driver exits non-zero unless every mandatory
-# scenario reports PASS. Requires an explicit test Price id (not unpublished placeholders).
+# Transport must stay live. Fake-unit PASS is not live acceptance.
+# Credentials alone never pass. Hosted Checkout completion and Test Clock dunning
+# remain required for live_acceptance=true.
 name: Fizot billing Stripe test mode (J9)
 on:
   workflow_dispatch:

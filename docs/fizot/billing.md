@@ -43,6 +43,13 @@ Team quantity is the membership count. The owner is a seat. Invite accept and me
 
 `.github/workflows/billing-stripe-j9.yml` is manual. The driver is `scripts/fizot/billing-j9.mjs` (`server/fizot/billing/j9-driver.ts`). Credentials alone never exit 0.
 
+Acceptance kinds:
+
+| Kind | When | Meaning of PASS |
+| --- | --- | --- |
+| `fake_unit` | `STRIPE_J9_TRANSPORT=fake` | Deterministic unit journey only. `live_acceptance=false`. |
+| `live_j9` | `STRIPE_J9_TRANSPORT=live` (Actions) | Complete Stripe test-mode E2E. Requires hosted Checkout completion and Stripe Test Clock dunning. |
+
 Required configuration:
 
 | Name | Kind | Rule |
@@ -52,10 +59,14 @@ Required configuration:
 | `STRIPE_TEST_WEBHOOK_SECRET` | secret | Stripe webhook signing secret (`whsec_…`) |
 | `STRIPE_J9_PRICE_HOME` | variable | Real Stripe **test** Price id; not `price_unpublished_*` |
 | `STRIPE_J9_PRICE_TEAM` | variable | Optional; defaults to the home test Price |
-| `STRIPE_J9_TRANSPORT` | env | `live` (default in Actions) or `fake` (unit tests only) |
+| `STRIPE_J9_TRANSPORT` | env | Actions must use `live`. `fake` is unit tests only |
 
-Mandatory scenarios: `secure_startup`, `checkout`, `payment_and_credit`, `webhook_lifecycle`, `failed_payment_lifecycle`, `recovery`, `tax_and_seats`, `cleanup`. Any `FAIL`, `BLOCKED` or `NOT_RUN` prevents overall PASS.
+Shared scenarios: `secure_startup`, `checkout_session_created`, `checkout_completed`, `subscription_payment_and_credit`, `webhook_lifecycle`, `simulated_failed_payment_lifecycle`, `simulated_recovery`, `tax_and_seats`, `cleanup`. Live also requires `stripe_dunning_recovery`. Any required `FAIL`, `BLOCKED` or `NOT_RUN` prevents overall PASS and sets `live_acceptance=false`.
 
-Webhook deliveries into the billing state machine are locally signed with the test webhook secret (fixture). Stripe API objects (customer, checkout session, subscription, tax calculation, cleanup) are real when `STRIPE_J9_TRANSPORT=live`. Grace, suspension and notice use the app's simulated clock, not a production clock.
+`checkout_session_created` only proves Session creation. `checkout_completed` requires a Stripe Session with `status=complete` and `payment_status=paid`. Hosted Checkout is not automated for live runs (BLOCKED until completed in a browser / Stripe test harness). The Subscription API payment path is separate and must not be treated as Checkout completion.
 
-Create a recurring test Price in the Stripe Dashboard (GBP, tax behavior exclusive) and set `STRIPE_J9_PRICE_HOME` to that id before dispatching the workflow.
+Paid invoices are loaded from Stripe (`expand[]=latest_invoice` or `GET /invoices/:id`). Missing or unpaid invoices fail. Locally signed webhook deliveries are labelled fixtures; they are not Stripe-originated events. Simulated grace/suspension/recovery uses the app clock. Real Stripe dunning stays BLOCKED until Test Clocks are wired.
+
+Cleanup expires open Checkout Sessions, then deletes subscriptions and customers; residuals fail the cleanup scenario.
+
+Create a recurring test Price in the Stripe Dashboard (GBP, tax behavior exclusive) and set `STRIPE_J9_PRICE_HOME` before a live dispatch.
