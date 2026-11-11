@@ -4,6 +4,7 @@ import { createMemoryCreditStore } from "../proxy/credit-store.ts";
 import { createBillingService, type StripeEvent } from "./apply.ts";
 import { createFakeEmailProvider } from "./email.ts";
 import { resolveJ9Config, redactSecrets, type J9Config } from "./j9-config.ts";
+import { classifyCleanupError, type CleanupResource } from "./j9-errors.ts";
 import { assertPaidInvoice, invoiceIdFromSubscription, stripeQuantity } from "./j9-invoice.ts";
 import {
   createFakeStripeTransport,
@@ -675,39 +676,53 @@ async function runTaxAndSeats(input: {
   );
 }
 
+function recordCleanupFailure(
+  remaining: string[],
+  resource: CleanupResource,
+  id: string,
+  error: unknown,
+  secrets: string[],
+): void {
+  const classified = classifyCleanupError(resource, error);
+  if (classified.action === "tolerate") return;
+  const detail = redactSecrets(error instanceof Error ? error.message : String(error), secrets).slice(0, 80);
+  remaining.push(`${resource}:${id}:${classified.reason}:${detail}`);
+}
+
 async function runCleanup(
   transport: J9StripeTransport,
   resources: J9Report["resources"],
   secrets: string[],
 ): Promise<J9ScenarioResult> {
   const remaining: string[] = [];
-  const note = (error: unknown) => redactSecrets(error instanceof Error ? error.message : String(error), secrets).slice(0, 80);
 
   for (const sessionId of [...resources.checkoutSessions].reverse()) {
     try {
       const session = await transport.request("GET", `checkout/sessions/${sessionId}`, null);
       if (session.status === "open") {
-        await transport.request("POST", `checkout/sessions/${sessionId}/expire`, null);
+        try {
+          await transport.request("POST", `checkout/sessions/${sessionId}/expire`, null);
+        } catch (error) {
+          recordCleanupFailure(remaining, "checkout_session", sessionId, error, secrets);
+        }
       }
+      // complete/expired sessions need no expire; they are already closed.
     } catch (error) {
-      const message = note(error);
-      if (!/404|already|complete|expired/i.test(message)) remaining.push(`checkout_session:${sessionId}:${message}`);
+      recordCleanupFailure(remaining, "checkout_session", sessionId, error, secrets);
     }
   }
   for (const sub of [...resources.subscriptions].reverse()) {
     try {
       await transport.request("DELETE", `subscriptions/${sub}`, { invoice_now: "false", prorate: "true" });
     } catch (error) {
-      const message = note(error);
-      if (!/404|canceled|missing/i.test(message)) remaining.push(`subscription:${sub}:${message}`);
+      recordCleanupFailure(remaining, "subscription", sub, error, secrets);
     }
   }
   for (const customer of [...resources.customers].reverse()) {
     try {
       await transport.request("DELETE", `customers/${customer}`, null);
     } catch (error) {
-      const message = note(error);
-      if (!/404|deleted|missing/i.test(message)) remaining.push(`customer:${customer}:${message}`);
+      recordCleanupFailure(remaining, "customer", customer, error, secrets);
     }
   }
   if (remaining.length > 0) {
@@ -720,7 +735,7 @@ async function runCleanup(
     "cleanup",
     "PASS",
     "stripe_api",
-    `expired_or_closed_sessions=${resources.checkoutSessions.length} subscriptions=${resources.subscriptions.length} customers=${resources.customers.length}`,
+    `closed_sessions=${resources.checkoutSessions.length} subscriptions=${resources.subscriptions.length} customers=${resources.customers.length}`,
     { cleanup: "complete" },
   );
 }

@@ -101,7 +101,7 @@ it("does not treat an unpaid invoice as payment success or credit evidence", asy
   expect(report.liveAcceptance).toBe(false);
   const payment = report.scenarios.find((row) => row.scenario === "subscription_payment_and_credit");
   expect(payment?.status).toBe("FAIL");
-  expect(payment?.failureReason).toMatch(/invoice_status=open/);
+  expect(payment?.failureReason).toBe("invoice_paid_flag_false");
 });
 
 it("does not pass full checkout E2E on an incomplete Checkout Session", async () => {

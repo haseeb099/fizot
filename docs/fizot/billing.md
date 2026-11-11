@@ -65,8 +65,10 @@ Shared scenarios: `secure_startup`, `checkout_session_created`, `checkout_comple
 
 `checkout_session_created` only proves Session creation. `checkout_completed` requires a Stripe Session with `status=complete` and `payment_status=paid`. Hosted Checkout is not automated for live runs (BLOCKED until completed in a browser / Stripe test harness). The Subscription API payment path is separate and must not be treated as Checkout completion.
 
-Paid invoices are loaded from Stripe (`expand[]=latest_invoice` or `GET /invoices/:id`). Missing or unpaid invoices fail. Locally signed webhook deliveries are labelled fixtures; they are not Stripe-originated events. Simulated grace/suspension/recovery uses the app clock. Real Stripe dunning stays BLOCKED until Test Clocks are wired.
+Paid invoices are loaded from Stripe (`expand[]=latest_invoice` or `GET /invoices/:id`). Verification requires `object=invoice`, `id` starting `in_`, `livemode===false`, `paid===true`, `status=paid`, and matching `cus_` / `sub_` ids. Missing or contradictory fields fail; no fabricated invoice is accepted. Locally signed webhook deliveries are labelled fixtures; they are not Stripe-originated events. A successful Stripe API call (customer create, Session create, Subscription create) is never by itself complete J9 evidence.
 
-Cleanup expires open Checkout Sessions, then deletes subscriptions and customers; residuals fail the cleanup scenario.
+Simulated grace/suspension/recovery uses the app clock and remains labelled simulated. `checkout_completed` stays BLOCKED for live runs until a Session is proven `complete` with `payment_status=paid`. `stripe_dunning_recovery` stays BLOCKED until genuine Stripe Test Clock events exist. Either mandatory BLOCKED scenario keeps `live_acceptance=false`.
 
-Create a recurring test Price in the Stripe Dashboard (GBP, tax behavior exclusive) and set `STRIPE_J9_PRICE_HOME` before a live dispatch.
+Cleanup expires open Checkout Sessions, then deletes subscriptions and customers. Only typed Stripe already-gone / already-closed codes are ignored (`resource_missing`, `checkout_session_already_expired`, `checkout_session_unexpected_state`, `resource_already_deleted`). HTTP 500/429, network errors, and free-text matches are failures. The Actions workflow must keep `STRIPE_J9_TRANSPORT=live`; fake transport cannot produce live acceptance.
+
+Create a recurring test Price in the Stripe Dashboard (GBP, tax behavior exclusive) and set `STRIPE_J9_PRICE_HOME` before a live dispatch. Do not mark BL-E / FZ-27 Done from a fake_unit PASS.

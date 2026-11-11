@@ -1,4 +1,5 @@
 import { redactSecrets } from "./j9-config.ts";
+import { J9StripeError, stripeErrorFromHttp } from "./j9-errors.ts";
 
 export type J9StripeTransport = {
   request(method: "GET" | "POST" | "DELETE", path: string, params?: Record<string, string> | null): Promise<Record<string, unknown>>;
@@ -16,8 +17,11 @@ export type FakeStripeTransport = J9StripeTransport & {
   markCheckoutComplete(sessionId: string): void;
   /** Test hook: refuse quantity updates so Stripe stays at 1. */
   freezeQuantity: boolean;
-  /** Test hook: fail cleanup deletes. */
+  /** Test hook: fail cleanup deletes/expires with a typed Stripe error. */
   failCleanup: boolean;
+  cleanupFailStatus: number;
+  cleanupFailCode: string;
+  cleanupFailMessage: string;
 };
 
 type FetchLike = typeof fetch;
@@ -39,7 +43,13 @@ export function createLiveStripeTransport(apiKey: string, fetchImpl: FetchLike =
       });
       const text = await res.text();
       if (!res.ok) {
-        throw new Error(`stripe_${res.status}:${redactSecrets(text, [apiKey]).slice(0, 180)}`);
+        const err = stripeErrorFromHttp(res.status, text);
+        throw new J9StripeError({
+          status: err.status,
+          code: err.code,
+          stripeType: err.stripeType,
+          message: redactSecrets(err.message, [apiKey]),
+        });
       }
       return text ? (JSON.parse(text) as Record<string, unknown>) : {};
     },
@@ -81,6 +91,9 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
     quantities,
     freezeQuantity: false,
     failCleanup: false,
+    cleanupFailStatus: 500,
+    cleanupFailCode: "api_error",
+    cleanupFailMessage: "cleanup complete failed",
     markCheckoutComplete(sessionId) {
       const session = sessions.get(sessionId);
       if (!session) throw new Error(`fake_checkout_missing:${sessionId}`);
@@ -128,15 +141,41 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
       if (method === "GET" && /^checkout\/sessions\/[^/]+$/.test(path)) {
         const id = path.split("/")[2]!;
         const session = sessions.get(id);
-        if (!session) throw new Error(`stripe_404:checkout_session_missing`);
+        if (!session) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:checkout_session_missing" });
+        }
         return { ...session };
       }
       if (method === "POST" && /^checkout\/sessions\/[^/]+\/expire$/.test(path)) {
         const id = path.split("/")[2]!;
+        if (transport.failCleanup) {
+          throw new J9StripeError({
+            status: transport.cleanupFailStatus,
+            code: transport.cleanupFailCode,
+            stripeType: "api_error",
+            message: `stripe_${transport.cleanupFailStatus}:${transport.cleanupFailMessage}`,
+          });
+        }
         const session = sessions.get(id);
-        if (!session) throw new Error(`stripe_404:checkout_session_missing`);
-        if (session.status === "expired") return { ...session };
-        if (session.status === "complete") throw new Error(`stripe_400:session_already_complete`);
+        if (!session) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:checkout_session_missing" });
+        }
+        if (session.status === "expired") {
+          throw new J9StripeError({
+            status: 400,
+            code: "checkout_session_already_expired",
+            stripeType: "invalid_request_error",
+            message: "stripe_400:checkout_session_already_expired",
+          });
+        }
+        if (session.status === "complete") {
+          throw new J9StripeError({
+            status: 400,
+            code: "checkout_session_unexpected_state",
+            stripeType: "invalid_request_error",
+            message: "stripe_400:checkout_session_unexpected_state",
+          });
+        }
         session.status = "expired";
         expiredSessions.push(id);
         return { ...session };
@@ -189,16 +228,20 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
       if (method === "GET" && /^invoices\/[^/]+$/.test(path)) {
         const id = path.split("/")[1]!;
         const invoice = invoices.get(id);
-        if (!invoice) throw new Error(`stripe_404:invoice_missing`);
+        if (!invoice) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:invoice_missing" });
+        }
         return { ...invoice };
       }
       if (method === "POST" && /^subscriptions\/[^/]+$/.test(path) && params?.["items[0][quantity]"]) {
         const id = path.split("/")[1]!;
-        if (deletedSubs.has(id)) throw new Error(`stripe_404:subscription_missing`);
+        if (deletedSubs.has(id)) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:subscription_missing" });
+        }
         const item = subItems.get(id);
         const itemId = params["items[0][id]"];
         if (!item || !itemId || itemId !== item.id) {
-          throw new Error(`stripe_400:subscription_item_mismatch`);
+          throw new J9StripeError({ status: 400, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_400:subscription_item_mismatch" });
         }
         if (!transport.freezeQuantity) {
           item.quantity = Number(params["items[0][quantity]"]);
@@ -212,9 +255,13 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
       }
       if (method === "GET" && /^subscriptions\/[^/]+$/.test(path)) {
         const id = path.split("/")[1]!;
-        if (deletedSubs.has(id)) throw new Error(`stripe_404:subscription_missing`);
+        if (deletedSubs.has(id)) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:subscription_missing" });
+        }
         const item = subItems.get(id);
-        if (!item) throw new Error(`stripe_404:subscription_missing`);
+        if (!item) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:subscription_missing" });
+        }
         return {
           id,
           object: "subscription",
@@ -242,25 +289,63 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
             tax_breakdown: [{ taxable_amount: 1999, taxability_reason: "reverse_charge", tax_rate_details: { percentage_decimal: "0.0", country } }],
           };
         }
-        throw new Error("stripe_400:vat_id_required_for_eu_business");
+        throw new J9StripeError({
+          status: 400,
+          code: "parameter_missing",
+          stripeType: "invalid_request_error",
+          message: "stripe_400:vat_id_required_for_eu_business",
+        });
       }
       if (method === "DELETE" && /^subscriptions\/[^/]+$/.test(path)) {
         const id = path.split("/")[1]!;
-        if (transport.failCleanup) throw new Error("stripe_500:cleanup_failed");
-        if (deletedSubs.has(id)) return { id, object: "subscription", status: "canceled" };
+        if (transport.failCleanup) {
+          throw new J9StripeError({
+            status: transport.cleanupFailStatus,
+            code: transport.cleanupFailCode,
+            stripeType: "api_error",
+            message: `stripe_${transport.cleanupFailStatus}:${transport.cleanupFailMessage}`,
+          });
+        }
+        if (deletedSubs.has(id)) {
+          throw new J9StripeError({
+            status: 404,
+            code: "resource_missing",
+            stripeType: "invalid_request_error",
+            message: "stripe_404:subscription_already_deleted",
+          });
+        }
         deletedSubs.add(id);
         deletedSubscriptions.push(id);
         return { id, object: "subscription", status: "canceled" };
       }
       if (method === "DELETE" && /^customers\/[^/]+$/.test(path)) {
         const id = path.split("/")[1]!;
-        if (transport.failCleanup) throw new Error("stripe_500:cleanup_failed");
-        if (deletedCust.has(id)) return { id, object: "customer", deleted: true };
+        if (transport.failCleanup) {
+          throw new J9StripeError({
+            status: transport.cleanupFailStatus,
+            code: transport.cleanupFailCode,
+            stripeType: "api_error",
+            message: `stripe_${transport.cleanupFailStatus}:${transport.cleanupFailMessage}`,
+          });
+        }
+        if (deletedCust.has(id)) {
+          throw new J9StripeError({
+            status: 404,
+            code: "resource_missing",
+            stripeType: "invalid_request_error",
+            message: "stripe_404:customer_already_deleted",
+          });
+        }
         deletedCust.add(id);
         deletedCustomers.push(id);
         return { id, object: "customer", deleted: true };
       }
-      throw new Error(`fake_stripe_unhandled:${method}:${path}`);
+      throw new J9StripeError({
+        status: 500,
+        code: "fake_unhandled",
+        stripeType: "api_error",
+        message: `fake_stripe_unhandled:${method}:${path}`,
+      });
     },
   };
   return transport;
