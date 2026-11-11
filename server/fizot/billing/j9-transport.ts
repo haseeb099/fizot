@@ -131,14 +131,28 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
         const customer = String(session.customer ?? "");
         const metadata = { ...(session.metadata as Record<string, string> | undefined) };
         const price = String(session.line_price ?? "price_j9_test_home");
+        const itemId = `si_checkout_${seq}`;
+        const invoiceId = `in_checkout_${seq}`;
         subItems.set(subId, {
-          id: `si_checkout_${seq}`,
+          id: itemId,
           price,
           quantity: 1,
           customer,
           metadata,
           defaultPaymentMethod: "pm_card_visa",
         });
+        invoices.set(invoiceId, {
+          id: invoiceId,
+          object: "invoice",
+          livemode: false,
+          status: "paid",
+          paid: true,
+          customer,
+          subscription: subId,
+          amount_paid: 2399,
+          metadata: { ...metadata },
+        });
+        (session as { latest_invoice_id?: string }).latest_invoice_id = invoiceId;
       }
     },
     pushEvent(event) {
@@ -468,6 +482,13 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
         if (!item) {
           throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:subscription_missing" });
         }
+        const expandInvoice = params?.["expand[]"] === "latest_invoice";
+        let latestInvoice: string | Record<string, unknown> | null = null;
+        for (const [invoiceId, invoice] of invoices) {
+          if (invoice.subscription === id) {
+            latestInvoice = expandInvoice ? { ...invoice } : invoiceId;
+          }
+        }
         return {
           id,
           object: "subscription",
@@ -476,6 +497,7 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
           customer: item.customer,
           metadata: item.metadata,
           default_payment_method: item.defaultPaymentMethod,
+          latest_invoice: latestInvoice,
           items: {
             data: [{
               id: item.id,

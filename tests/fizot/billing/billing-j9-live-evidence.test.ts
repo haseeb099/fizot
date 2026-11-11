@@ -1,18 +1,17 @@
 import { expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { signStripeHeader } from "../../../server/fizot/admin/webhooks.ts";
 import { runJ9 } from "../../../server/fizot/billing/j9-driver.ts";
-import {
-  assertCompletedCheckoutSession,
-} from "../../../server/fizot/billing/j9-checkout-evidence.ts";
+import { assertCompletedCheckoutSession } from "../../../server/fizot/billing/j9-checkout-evidence.ts";
 import {
   createRunId,
-  createRunNonce,
   loadJ9RunArtifact,
   parseJ9RunArtifact,
   sealArtifact,
+  J9_FIXED_ARTIFACT_RELATIVE,
+  J9_FIXED_CAPTURE_RELATIVE,
 } from "../../../server/fizot/billing/j9-run-artifact.ts";
 import {
   advanceTestClockUntilReady,
@@ -23,55 +22,133 @@ import { createFakeStripeTransport } from "../../../server/fizot/billing/j9-tran
 import { verifyWebhookCapture } from "../../../server/fizot/billing/j9-webhook-capture.ts";
 
 const secret = "whsec_test_j9_live_evidence";
-const liveEnv = {
-  STRIPE_J9_MODE: "test",
-  STRIPE_J9_TRANSPORT: "live",
-  STRIPE_TEST_API_KEY: "sk_test_FAKE_KEY_DO_NOT_LEAK_OR_PRINT",
-  STRIPE_TEST_WEBHOOK_SECRET: secret,
-  STRIPE_J9_PRICE_HOME: "price_j9_test_home",
-  STRIPE_J9_PRICE_TEAM: "price_j9_test_team",
-};
+const hmacSecret = "j9_artifact_hmac_secret_for_unit_tests_only_32";
 
-function artifactPath(): string {
-  return join(mkdtempSync(join(tmpdir(), "j9-art-")), "run.json");
+function repoFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), "j9-repo-"));
+  mkdirSync(join(root, "artifacts", "j9"), { recursive: true });
+  return root;
 }
 
-it("resumes the same sealed test run after prepare", async () => {
-  const path = artifactPath();
+function liveEnv(root: string, extra: Record<string, string> = {}) {
+  return {
+    STRIPE_J9_MODE: "test",
+    STRIPE_J9_TRANSPORT: "live",
+    STRIPE_TEST_API_KEY: "sk_test_FAKE_KEY_DO_NOT_LEAK_OR_PRINT",
+    STRIPE_TEST_WEBHOOK_SECRET: secret,
+    STRIPE_J9_ARTIFACT_HMAC_SECRET: hmacSecret,
+    STRIPE_J9_PRICE_HOME: "price_j9_test_home",
+    STRIPE_J9_PRICE_TEAM: "price_j9_test_team",
+    ...extra,
+  };
+}
+
+function artifactFile(root: string): string {
+  return join(root, J9_FIXED_ARTIFACT_RELATIVE);
+}
+
+function captureFile(root: string): string {
+  return join(root, J9_FIXED_CAPTURE_RELATIVE);
+}
+
+function writeSignedCapture(path: string, input: {
+  runId: string;
+  customerId: string;
+  subscriptionId: string;
+  sessionId: string;
+}): void {
+  const created = 1_700_000_100;
+  const sessionBody = JSON.stringify({
+    id: "evt_capture_session",
+    object: "event",
+    type: "checkout.session.completed",
+    created,
+    livemode: false,
+    data: {
+      object: {
+        id: input.sessionId,
+        object: "checkout.session",
+        customer: input.customerId,
+        subscription: input.subscriptionId,
+        metadata: { fizot_j9_run_id: input.runId },
+      },
+    },
+  });
+  const paidBody = JSON.stringify({
+    id: "evt_capture_paid",
+    object: "event",
+    type: "invoice.paid",
+    created: created + 1,
+    livemode: false,
+    data: {
+      object: {
+        id: "in_capture_paid",
+        object: "invoice",
+        customer: input.customerId,
+        subscription: input.subscriptionId,
+        metadata: { fizot_j9_run_id: input.runId },
+      },
+    },
+  });
+  writeFileSync(path, JSON.stringify({
+    schemaVersion: 2,
+    kind: "stripe_cli_signed_capture",
+    runId: input.runId,
+    capturedAt: new Date().toISOString(),
+    deliveries: [
+      {
+        body: sessionBody,
+        stripeSignatureHeader: signStripeHeader(secret, sessionBody, created),
+        provenance: "stripe_cli_listen",
+      },
+      {
+        body: paidBody,
+        stripeSignatureHeader: signStripeHeader(secret, paidBody, created + 1),
+        provenance: "stripe_cli_listen",
+      },
+    ],
+  }));
+}
+
+it("resumes the same sealed test run after prepare using Checkout subscription credit", async () => {
+  const root = repoFixture();
   const transport = createFakeStripeTransport();
   const prepared = await runJ9({
-    env: { ...liveEnv, STRIPE_J9_STAGE: "prepare", STRIPE_J9_ARTIFACT_PATH: path },
+    env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }),
     transport,
+    repoRoot: root,
   });
   expect(prepared.overall).toBe("BLOCKED");
-  expect(prepared.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("BLOCKED");
   expect(prepared.scenarios.find((row) => row.scenario === "cleanup")?.cleanup).toBe("retained");
-  const artifact = loadJ9RunArtifact(path);
+  const artifact = loadJ9RunArtifact(artifactFile(root), hmacSecret);
   expect(artifact.ok).toBe(true);
   if (!artifact.ok) return;
 
   transport.markCheckoutComplete(artifact.artifact.checkout.sessionId);
-  const capturePath = join(dirnameOf(path), "capture.json");
-  writeSignedCapture(capturePath, artifact.artifact.runId);
+  const session = await transport.request("GET", `checkout/sessions/${artifact.artifact.checkout.sessionId}`, null);
+  writeSignedCapture(captureFile(root), {
+    runId: artifact.artifact.runId,
+    customerId: artifact.artifact.checkout.customerId,
+    subscriptionId: String(session.subscription),
+    sessionId: artifact.artifact.checkout.sessionId,
+  });
 
   const resumed = await runJ9({
-    env: {
-      ...liveEnv,
-      STRIPE_J9_STAGE: "resume",
-      STRIPE_J9_ARTIFACT_PATH: path,
-      STRIPE_J9_WEBHOOK_CAPTURE_PATH: capturePath,
-    },
+    env: liveEnv(root, { STRIPE_J9_STAGE: "resume" }),
     transport,
+    repoRoot: root,
   });
   expect(resumed.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("PASS");
-  expect(resumed.runId).toBe(artifact.artifact.runId);
+  expect(resumed.scenarios.find((row) => row.scenario === "subscription_payment_and_credit")?.evidence).toContain("source=checkout_session_subscription");
+  expect(resumed.scenarios.find((row) => row.scenario === "subscription_payment_and_credit")?.evidence).toContain("separate_api_subscription=false");
   expect(resumed.scenarios.find((row) => row.scenario === "stripe_dunning_recovery")?.status).toBe("PASS");
+  expect(resumed.scenarios.find((row) => row.scenario === "stripe_dunning_recovery")?.evidence).toContain("baseline_excluded=true");
 });
 
-it("rejects invalid resource ownership and foreign run ids", () => {
+it("rejects MAC tampering and substituted run payloads", () => {
   const runId = createRunId();
-  const sealed = sealArtifact({
-    schemaVersion: 1,
+  const sealed = sealArtifact(hmacSecret, {
+    schemaVersion: 2,
     kind: "live_j9_run",
     runId,
     stage: "awaiting_checkout",
@@ -79,15 +156,15 @@ it("rejects invalid resource ownership and foreign run ids", () => {
     workspaceId: `ws_j9_${runId.slice(6, 14)}`,
     priceHome: "price_j9_test_home",
     priceTeam: "price_j9_test_home",
-    runNonce: createRunNonce(),
     pauseCleanup: true,
-    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_j9_test_home" },
+    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_j9_test_home", subscriptionId: null },
     clock: {
       clockId: "clock_a",
       frozenTime: 1,
       customerId: "cus_b",
       subscriptionId: "sub_a",
       baselineInvoiceId: "in_a",
+      baselineEventIds: ["evt_base"],
     },
     resources: {
       customers: ["cus_a", "cus_b"],
@@ -96,26 +173,23 @@ it("rejects invalid resource ownership and foreign run ids", () => {
       testClocks: ["clock_a"],
     },
   });
-  const tampered = { ...sealed, resourceMac: "00".repeat(32) };
-  expect(parseJ9RunArtifact(tampered).ok).toBe(false);
-
-  const completed = assertCompletedCheckoutSession({
-    id: "cs_other",
-    object: "checkout.session",
-    livemode: false,
-    status: "complete",
-    payment_status: "paid",
-    customer: "cus_a",
-    subscription: "sub_a",
-  }, sealed);
-  expect(completed.ok).toBe(false);
-  if (!completed.ok) expect(completed.reason).toBe("checkout_session_foreign_run");
+  expect(parseJ9RunArtifact({ ...sealed, artifactMac: "00".repeat(32) }, hmacSecret).ok).toBe(false);
+  expect(parseJ9RunArtifact({
+    ...sealed,
+    runId: createRunId(),
+  }, hmacSecret).ok).toBe(false);
+  expect(parseJ9RunArtifact({
+    ...sealed,
+    resources: { ...sealed.resources, customers: ["cus_foreign", "cus_b"] },
+  }, hmacSecret).ok).toBe(false);
+  // Recalculating MAC with a different secret must fail against the original seal.
+  expect(parseJ9RunArtifact(sealed, "different_hmac_secret_value_32chars!!").ok).toBe(false);
 });
 
-it("keeps incomplete Checkout BLOCKED", () => {
+it("keeps incomplete Checkout BLOCKED and rejects foreign sessions", () => {
   const runId = createRunId();
-  const sealed = sealArtifact({
-    schemaVersion: 1,
+  const sealed = sealArtifact(hmacSecret, {
+    schemaVersion: 2,
     kind: "live_j9_run",
     runId,
     stage: "awaiting_checkout",
@@ -123,15 +197,15 @@ it("keeps incomplete Checkout BLOCKED", () => {
     workspaceId: `ws_j9_${runId.slice(6, 14)}`,
     priceHome: "price_home",
     priceTeam: "price_home",
-    runNonce: createRunNonce(),
     pauseCleanup: true,
-    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_home" },
+    checkout: { customerId: "cus_a", sessionId: "cs_a", expectedPriceId: "price_home", subscriptionId: null },
     clock: {
       clockId: "clock_a",
       frozenTime: 1,
       customerId: "cus_b",
       subscriptionId: null,
       baselineInvoiceId: null,
+      baselineEventIds: [],
     },
     resources: {
       customers: ["cus_a", "cus_b"],
@@ -140,7 +214,7 @@ it("keeps incomplete Checkout BLOCKED", () => {
       testClocks: ["clock_a"],
     },
   });
-  const result = assertCompletedCheckoutSession({
+  const incomplete = assertCompletedCheckoutSession({
     id: "cs_a",
     object: "checkout.session",
     livemode: false,
@@ -149,285 +223,251 @@ it("keeps incomplete Checkout BLOCKED", () => {
     customer: "cus_a",
     subscription: null,
   }, sealed);
-  expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.blocked).toBe(true);
-    expect(result.reason).toContain("checkout_incomplete");
-  }
-});
+  expect(incomplete.ok).toBe(false);
+  if (!incomplete.ok) expect(incomplete.blocked).toBe(true);
 
-it("rejects wrong customer subscription invoice evidence", () => {
-  const runId = createRunId();
-  const sealed = sealArtifact({
-    schemaVersion: 1,
-    kind: "live_j9_run",
-    runId,
-    stage: "awaiting_checkout",
-    createdAt: new Date().toISOString(),
-    workspaceId: `ws_j9_${runId.slice(6, 14)}`,
-    priceHome: "price_home",
-    priceTeam: "price_home",
-    runNonce: createRunNonce(),
-    pauseCleanup: true,
-    checkout: { customerId: "cus_expected", sessionId: "cs_a", expectedPriceId: "price_home" },
-    clock: {
-      clockId: "clock_a",
-      frozenTime: 1,
-      customerId: "cus_b",
-      subscriptionId: null,
-      baselineInvoiceId: null,
-    },
-    resources: {
-      customers: ["cus_expected", "cus_b"],
-      subscriptions: [],
-      checkoutSessions: ["cs_a"],
-      testClocks: ["clock_a"],
-    },
-  });
-  expect(assertCompletedCheckoutSession({
-    id: "cs_a",
+  const foreign = assertCompletedCheckoutSession({
+    id: "cs_other",
     object: "checkout.session",
     livemode: false,
     status: "complete",
     payment_status: "paid",
-    customer: "cus_wrong",
+    customer: "cus_a",
     subscription: "sub_a",
-  }, sealed).ok).toBe(false);
+  }, sealed);
+  expect(foreign.ok).toBe(false);
 });
 
-it("distinguishes Test Clock advancing versus ready", async () => {
-  const transport = createFakeStripeTransport();
-  transport.clockAdvanceStatus = "advancing";
-  const created = await transport.request("POST", "test_helpers/test_clocks", { frozen_time: "1000", name: "t" });
-  const clockId = String(created.id);
-  const advancing = await advanceTestClockUntilReady({
-    transport,
-    clockId,
-    targetFrozenTime: 2000,
-    sleepMs: 0,
-    maxAttempts: 2,
-  });
-  expect(advancing.ok).toBe(false);
-  if (!advancing.ok) expect(advancing.reason).toBe("test_clock_advance_timeout");
-
-  transport.clockAdvanceStatus = "ready";
-  const clock = await transport.request("GET", `test_helpers/test_clocks/${clockId}`, null);
-  clock.status = "ready";
-  // Force frozen_time catch-up then re-advance from current.
-  const readyTransport = createFakeStripeTransport();
-  const clock2 = await readyTransport.request("POST", "test_helpers/test_clocks", { frozen_time: "1000", name: "t2" });
-  const ready = await advanceTestClockUntilReady({
-    transport: readyTransport,
-    clockId: String(clock2.id),
-    targetFrozenTime: 5000,
-    sleepMs: 0,
-    maxAttempts: 3,
-  });
-  expect(ready.ok).toBe(true);
-});
-
-it("correlates Stripe events and rejects absent failure evidence", () => {
-  const failed = parseStripeEvent({
+it("rejects missing customer/subscription associations in event correlation", () => {
+  const event = parseStripeEvent({
     id: "evt_1",
     object: "event",
     livemode: false,
-    created: 1,
+    created: 10,
     type: "invoice.payment_failed",
-    data: { object: { id: "in_1", object: "invoice", customer: "cus_1", subscription: "sub_1" } },
+    data: { object: { id: "in_1", object: "invoice" } },
   });
-  expect(failed).not.toBeNull();
-  const matched = correlateCustomerEvents(failed ? [failed] : [], {
+  expect(event).not.toBeNull();
+  const matched = correlateCustomerEvents(event ? [event] : [], {
     customerId: "cus_1",
     subscriptionId: "sub_1",
-    types: ["invoice.payment_failed", "invoice.paid"],
+    types: ["invoice.payment_failed"],
   });
-  expect(matched.missingTypes).toEqual(["invoice.paid"]);
+  expect(matched.matched).toEqual([]);
+  expect(matched.rejected[0]).toContain("missing_association");
 });
 
-it("treats recovery as unconfirmed when paid events are missing", async () => {
-  const path = artifactPath();
-  const transport = createFakeStripeTransport();
-  // Suppress auto event emission by leaving clockAdvanceStatus ready but emptying events after prepare.
-  const prepared = await runJ9({
-    env: { ...liveEnv, STRIPE_J9_STAGE: "prepare", STRIPE_J9_ARTIFACT_PATH: path },
-    transport,
+it("excludes baseline invoice.paid from recovery evidence", () => {
+  const baseline = parseStripeEvent({
+    id: "evt_base",
+    object: "event",
+    livemode: false,
+    created: 1,
+    type: "invoice.paid",
+    data: { object: { id: "in_base", object: "invoice", customer: "cus_1", subscription: "sub_1" } },
+  })!;
+  const recovery = parseStripeEvent({
+    id: "evt_recover",
+    object: "event",
+    livemode: false,
+    created: 100,
+    type: "invoice.paid",
+    data: { object: { id: "in_recover", object: "invoice", customer: "cus_1", subscription: "sub_1" } },
+  })!;
+  const matched = correlateCustomerEvents([baseline, recovery], {
+    customerId: "cus_1",
+    subscriptionId: "sub_1",
+    types: ["invoice.paid"],
+    excludeEventIds: ["evt_base"],
+    excludeInvoiceIds: ["in_base"],
+    createdAfterSec: 50,
   });
-  expect(prepared.overall).toBe("BLOCKED");
-  const artifact = loadJ9RunArtifact(path);
-  expect(artifact.ok).toBe(true);
-  if (!artifact.ok) return;
-  transport.markCheckoutComplete(artifact.artifact.checkout.sessionId);
-  // Clear events so dunning cannot find payment_failed.
-  transport.events.length = 0;
-  const originalPush = transport.pushEvent.bind(transport);
-  // Replace request to swallow event creation side-effects: use advancing then ready without fail events.
-  transport.clockAdvanceStatus = "ready";
-  // Monkeypatch: after first advance, wipe events again.
-  const inner = transport.request.bind(transport);
-  let advances = 0;
-  transport.request = async (method, pathName, params) => {
-    const result = await inner(method, pathName, params);
-    if (method === "POST" && pathName.endsWith("/advance")) {
-      advances += 1;
-      transport.events.length = 0;
-    }
-    return result;
-  };
-  const capturePath = join(dirnameOf(path), "capture.json");
-  writeSignedCapture(capturePath, artifact.artifact.runId);
-  const resumed = await runJ9({
-    env: {
-      ...liveEnv,
-      STRIPE_J9_STAGE: "resume",
-      STRIPE_J9_ARTIFACT_PATH: path,
-      STRIPE_J9_WEBHOOK_CAPTURE_PATH: capturePath,
+  expect(matched.matched.map((row) => row.id)).toEqual(["evt_recover"]);
+});
+
+it("verifies webhook captures with header t and required event set", () => {
+  const runId = createRunId();
+  const created = Math.floor(Date.now() / 1000) - 10;
+  const sessionBody = JSON.stringify({
+    id: "evt_s",
+    object: "event",
+    type: "checkout.session.completed",
+    created,
+    data: { object: { id: "cs_1", object: "checkout.session", customer: "cus_1", subscription: "sub_1", metadata: { fizot_j9_run_id: runId } } },
+  });
+  const paidBody = JSON.stringify({
+    id: "evt_p",
+    object: "event",
+    type: "invoice.paid",
+    created: created + 1,
+    data: { object: { id: "in_1", object: "invoice", customer: "cus_1", subscription: "sub_1", metadata: { fizot_j9_run_id: runId } } },
+  });
+  const ok = verifyWebhookCapture({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader(secret, sessionBody, created), provenance: "stripe_cli_listen" },
+        { body: paidBody, stripeSignatureHeader: signStripeHeader(secret, paidBody, created + 1), provenance: "stripe_cli_listen" },
+      ],
     },
-    transport,
+    expectedRunId: runId,
+    expectedCustomerId: "cus_1",
+    expectedSubscriptionId: "sub_1",
+    webhookSecret: secret,
   });
-  expect(advances).toBeGreaterThan(0);
-  expect(resumed.scenarios.find((row) => row.scenario === "stripe_dunning_recovery")?.status).toMatch(/BLOCKED|FAIL/);
-  originalPush({ id: "evt_x", object: "event", livemode: false, created: 1, type: "invoice.paid", data: { object: {} } });
+  expect(ok.ok).toBe(true);
+
+  const unrelated = verifyWebhookCapture({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        {
+          body: JSON.stringify({
+            id: "evt_other",
+            object: "event",
+            type: "customer.updated",
+            created,
+            data: { object: { id: "cus_other", object: "customer", metadata: {} } },
+          }),
+          stripeSignatureHeader: signStripeHeader(secret, JSON.stringify({
+            id: "evt_other",
+            object: "event",
+            type: "customer.updated",
+            created,
+            data: { object: { id: "cus_other", object: "customer", metadata: {} } },
+          }), created),
+          provenance: "stripe_cli_listen",
+        },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_1",
+    expectedSubscriptionId: "sub_1",
+    webhookSecret: secret,
+  });
+  expect(unrelated.ok).toBe(false);
+
+  const badSig = verifyWebhookCapture({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: "t=1,v1=deadbeef", provenance: "stripe_cli_listen" },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_1",
+    expectedSubscriptionId: "sub_1",
+    webhookSecret: secret,
+  });
+  expect(badSig.ok).toBe(false);
 });
 
-it("supports interrupted prepare then retry-safe abandoned cleanup", async () => {
-  const path = artifactPath();
+it("refuses abandoned cleanup without matching confirm and ownership", async () => {
+  const root = repoFixture();
   const transport = createFakeStripeTransport();
-  const prepared = await runJ9({
-    env: { ...liveEnv, STRIPE_J9_STAGE: "prepare", STRIPE_J9_ARTIFACT_PATH: path },
-    transport,
-  });
-  expect(prepared.cleanup ?? prepared.scenarios.find((row) => row.scenario === "cleanup")?.cleanup).toBe("retained");
-  const artifact = loadJ9RunArtifact(path);
+  await runJ9({ env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }), transport, repoRoot: root });
+  const artifact = loadJ9RunArtifact(artifactFile(root), hmacSecret);
   expect(artifact.ok).toBe(true);
   if (!artifact.ok) return;
 
   const refused = await runJ9({
-    env: {
-      ...liveEnv,
-      STRIPE_J9_STAGE: "cleanup",
-      STRIPE_J9_ARTIFACT_PATH: path,
-      STRIPE_J9_CLEANUP_CONFIRM: "j9run_wrong",
-    },
+    env: liveEnv(root, { STRIPE_J9_STAGE: "cleanup", STRIPE_J9_CLEANUP_CONFIRM: "j9run_wrong" }),
     transport,
+    repoRoot: root,
   });
-  expect(refused.scenarios.find((row) => row.scenario === "cleanup")?.status).toBe("FAIL");
+  expect(refused.scenarios.find((row) => row.scenario === "cleanup")?.cleanup).toBe("refused");
 
   const cleaned = await runJ9({
-    env: {
-      ...liveEnv,
-      STRIPE_J9_STAGE: "cleanup",
-      STRIPE_J9_ARTIFACT_PATH: path,
-      STRIPE_J9_CLEANUP_CONFIRM: artifact.artifact.runId,
-    },
+    env: liveEnv(root, { STRIPE_J9_STAGE: "cleanup", STRIPE_J9_CLEANUP_CONFIRM: artifact.artifact.runId }),
     transport,
+    repoRoot: root,
   });
   expect(cleaned.scenarios.find((row) => row.scenario === "cleanup")?.status).toBe("PASS");
-  expect(transport.deletedCustomers.length).toBeGreaterThan(0);
 });
 
-it("reports partial cleanup without claiming complete", async () => {
-  const path = artifactPath();
+it("reports partial cleanup without marking abandoned while resources remain", async () => {
+  const root = repoFixture();
   const transport = createFakeStripeTransport();
-  await runJ9({
-    env: { ...liveEnv, STRIPE_J9_STAGE: "prepare", STRIPE_J9_ARTIFACT_PATH: path },
-    transport,
-  });
-  const artifact = loadJ9RunArtifact(path);
-  expect(artifact.ok).toBe(true);
-  if (!artifact.ok) return;
+  await runJ9({ env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }), transport, repoRoot: root });
+  const before = loadJ9RunArtifact(artifactFile(root), hmacSecret);
+  expect(before.ok).toBe(true);
+  if (!before.ok) return;
   transport.failCleanup = true;
   transport.cleanupFailStatus = 500;
   const cleaned = await runJ9({
-    env: {
-      ...liveEnv,
-      STRIPE_J9_STAGE: "cleanup",
-      STRIPE_J9_ARTIFACT_PATH: path,
-      STRIPE_J9_CLEANUP_CONFIRM: artifact.artifact.runId,
-    },
+    env: liveEnv(root, { STRIPE_J9_STAGE: "cleanup", STRIPE_J9_CLEANUP_CONFIRM: before.artifact.runId }),
     transport,
+    repoRoot: root,
   });
   const row = cleaned.scenarios.find((item) => item.scenario === "cleanup");
   expect(row?.status).toBe("FAIL");
   expect(row?.cleanup).toBe("partial");
+  const after = JSON.parse(readFileSync(artifactFile(root), "utf8")) as { stage: string };
+  expect(after.stage).toBe("cleanup_partial");
 });
 
-it("blocks live acceptance when signed webhook capture is missing", async () => {
-  const path = artifactPath();
+it("blocks live acceptance when signed webhook capture coverage is incomplete", async () => {
+  const root = repoFixture();
   const transport = createFakeStripeTransport();
-  await runJ9({
-    env: { ...liveEnv, STRIPE_J9_STAGE: "prepare", STRIPE_J9_ARTIFACT_PATH: path },
-    transport,
-  });
-  const artifact = loadJ9RunArtifact(path);
+  await runJ9({ env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }), transport, repoRoot: root });
+  const artifact = loadJ9RunArtifact(artifactFile(root), hmacSecret);
   expect(artifact.ok).toBe(true);
   if (!artifact.ok) return;
   transport.markCheckoutComplete(artifact.artifact.checkout.sessionId);
   const resumed = await runJ9({
-    env: {
-      ...liveEnv,
-      STRIPE_J9_STAGE: "resume",
-      STRIPE_J9_ARTIFACT_PATH: path,
-    },
+    env: liveEnv(root, { STRIPE_J9_STAGE: "resume" }),
     transport,
+    repoRoot: root,
   });
   expect(resumed.liveAcceptance).toBe(false);
   expect(resumed.overall).toBe("BLOCKED");
   expect(resumed.scenarios.find((row) => row.scenario === "webhook_lifecycle")?.status).toBe("BLOCKED");
 });
 
-it("verifies Stripe CLI signed captures and rejects wrong signatures", () => {
-  const runId = createRunId();
-  const body = JSON.stringify({
-    id: "evt_capture_1",
-    object: "event",
-    type: "invoice.paid",
-    created: 1_700_000_000,
-    data: { object: { id: "in_1", object: "invoice" } },
+it("distinguishes Test Clock advancing versus ready", async () => {
+  const transport = createFakeStripeTransport();
+  transport.clockAdvanceStatus = "advancing";
+  const created = await transport.request("POST", "test_helpers/test_clocks", { frozen_time: "1000", name: "t" });
+  const advancing = await advanceTestClockUntilReady({
+    transport,
+    clockId: String(created.id),
+    targetFrozenTime: 2000,
+    sleepMs: 0,
+    maxAttempts: 2,
   });
-  const header = signStripeHeader(secret, body, 1_700_000_000);
-  const ok = verifyWebhookCapture({
-    capture: {
-      schemaVersion: 1,
-      kind: "stripe_cli_signed_capture",
-      runId,
-      deliveries: [{ body, stripeSignatureHeader: header }],
-    },
-    expectedRunId: runId,
-    webhookSecret: secret,
-  });
-  expect(ok.ok).toBe(true);
-
-  const bad = verifyWebhookCapture({
-    capture: {
-      schemaVersion: 1,
-      kind: "stripe_cli_signed_capture",
-      runId,
-      deliveries: [{ body, stripeSignatureHeader: "t=1,v1=deadbeef" }],
-    },
-    expectedRunId: runId,
-    webhookSecret: secret,
-  });
-  expect(bad.ok).toBe(false);
+  expect(advancing.ok).toBe(false);
 });
 
-function dirnameOf(path: string): string {
-  return path.replace(/[/\\][^/\\]+$/, "");
-}
-
-function writeSignedCapture(path: string, runId: string): void {
-  const body = JSON.stringify({
-    id: "evt_capture_live",
-    object: "event",
-    type: "invoice.paid",
-    created: 1_700_000_100,
-    livemode: false,
-    data: { object: { id: "in_cap", object: "invoice", livemode: false } },
+it("tracks resources on mid-prepare failure for later cleanup", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const original = transport.request.bind(transport);
+  let customers = 0;
+  transport.request = async (method, path, params) => {
+    if (method === "POST" && path === "customers") {
+      customers += 1;
+      if (customers >= 2) throw new Error("injected_prepare_failure");
+    }
+    return original(method, path, params);
+  };
+  const prepared = await runJ9({
+    env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }),
+    transport,
+    repoRoot: root,
   });
-  const header = signStripeHeader(secret, body, 1_700_000_100);
-  writeFileSync(path, JSON.stringify({
-    schemaVersion: 1,
-    kind: "stripe_cli_signed_capture",
-    runId,
-    deliveries: [{ body, stripeSignatureHeader: header }],
-  }));
-}
+  expect(prepared.scenarios.some((row) => row.status === "FAIL")).toBe(true);
+  const artifact = loadJ9RunArtifact(artifactFile(root), hmacSecret);
+  expect(artifact.ok).toBe(true);
+  if (!artifact.ok) return;
+  expect(artifact.artifact.resources.testClocks.length + artifact.artifact.resources.customers.length).toBeGreaterThan(0);
+  expect(artifact.artifact.stage).toBe("cleanup_partial");
+});

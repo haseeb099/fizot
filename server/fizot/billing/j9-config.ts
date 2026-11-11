@@ -3,11 +3,20 @@
  * and an explicitly configured test Price id. Live keys and unpublished
  * placeholder Price ids are refused.
  */
+import {
+  assertArtifactHmacSecret,
+  J9_FIXED_ARTIFACT_RELATIVE,
+  J9_FIXED_CAPTURE_RELATIVE,
+  resolveSafeJ9Path,
+} from "./j9-run-artifact.ts";
+
 export type J9Stage = "full" | "prepare" | "resume" | "cleanup";
 
 export type J9Config = {
   apiKey: string;
   webhookSecret: string;
+  /** Independent HMAC secret for run artifacts. Never written into artifacts. */
+  artifactHmacSecret: string;
   priceHome: string;
   priceTeam: string;
   successUrl: string;
@@ -15,9 +24,11 @@ export type J9Config = {
   portalReturnUrl: string;
   transport: "live" | "fake";
   stage: J9Stage;
-  artifactPath: string | null;
-  webhookCapturePath: string | null;
+  artifactPath: string;
+  webhookCapturePath: string;
   cleanupConfirm: string | null;
+  /** GitHub Actions run id of the prepare workflow (digits only). */
+  prepareRunId: string | null;
 };
 
 export type J9ConfigError = {
@@ -31,7 +42,7 @@ export type J9ConfigResult = { ok: true; config: J9Config } | J9ConfigError;
 
 const PLACEHOLDER_PRICES = new Set(["price_unpublished_home", "price_unpublished_team"]);
 
-export function resolveJ9Config(env: NodeJS.ProcessEnv): J9ConfigResult {
+export function resolveJ9Config(env: NodeJS.ProcessEnv, repoRoot = process.cwd()): J9ConfigResult {
   const mode = (env.STRIPE_J9_MODE ?? "").trim().toLowerCase();
   if (mode !== "test") {
     return {
@@ -44,6 +55,7 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv): J9ConfigResult {
 
   const apiKey = (env.STRIPE_TEST_API_KEY ?? "").trim();
   const webhookSecret = (env.STRIPE_TEST_WEBHOOK_SECRET ?? "").trim();
+  const artifactHmac = assertArtifactHmacSecret(env.STRIPE_J9_ARTIFACT_HMAC_SECRET);
   const priceHome = (env.STRIPE_J9_PRICE_HOME ?? "").trim();
   const priceTeam = (env.STRIPE_J9_PRICE_TEAM ?? priceHome).trim();
   const transport = (env.STRIPE_J9_TRANSPORT ?? "live").trim().toLowerCase() === "fake" ? "fake" : "live";
@@ -60,15 +72,29 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv): J9ConfigResult {
       missing: [],
     };
   }
-  const artifactPath = (env.STRIPE_J9_ARTIFACT_PATH ?? "").trim() || null;
-  const webhookCapturePath = (env.STRIPE_J9_WEBHOOK_CAPTURE_PATH ?? "").trim() || null;
   const cleanupConfirm = (env.STRIPE_J9_CLEANUP_CONFIRM ?? "").trim() || null;
+  const prepareRunIdRaw = (env.STRIPE_J9_PREPARE_RUN_ID ?? "").trim();
+  const prepareRunId = prepareRunIdRaw && /^\d+$/.test(prepareRunIdRaw) ? prepareRunIdRaw : null;
+  if (prepareRunIdRaw && !prepareRunId) {
+    return { ok: false, status: "FAIL", reason: "STRIPE_J9_PREPARE_RUN_ID must be digits only", missing: [] };
+  }
+
+  const artifactResolved = resolveSafeJ9Path(repoRoot, J9_FIXED_ARTIFACT_RELATIVE);
+  const captureResolved = resolveSafeJ9Path(repoRoot, J9_FIXED_CAPTURE_RELATIVE);
+  if (!artifactResolved.ok) {
+    return { ok: false, status: "FAIL", reason: artifactResolved.reason, missing: [] };
+  }
+  if (!captureResolved.ok) {
+    return { ok: false, status: "FAIL", reason: captureResolved.reason, missing: [] };
+  }
+
   const missing: string[] = [];
   if (!apiKey) missing.push("STRIPE_TEST_API_KEY");
   if (!webhookSecret) missing.push("STRIPE_TEST_WEBHOOK_SECRET");
   if (!priceHome) missing.push("STRIPE_J9_PRICE_HOME");
-  if ((stage === "resume" || stage === "cleanup") && !artifactPath) missing.push("STRIPE_J9_ARTIFACT_PATH");
-  if (stage === "prepare" && transport === "live" && !artifactPath) missing.push("STRIPE_J9_ARTIFACT_PATH");
+  if ((stage === "prepare" || stage === "resume" || stage === "cleanup") && !artifactHmac.ok) {
+    missing.push("STRIPE_J9_ARTIFACT_HMAC_SECRET");
+  }
   if (stage === "cleanup" && !cleanupConfirm) missing.push("STRIPE_J9_CLEANUP_CONFIRM");
   if (missing.length > 0) {
     return { ok: false, status: "BLOCKED", reason: `missing_secret ${missing.join(" ")}`, missing };
@@ -103,11 +129,17 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv): J9ConfigResult {
     };
   }
 
+  // Full fake_unit may omit HMAC secret; staged live always requires it (checked above).
+  const hmacSecret = artifactHmac.ok
+    ? artifactHmac.secret
+    : "j9_fake_unit_hmac_secret_not_for_live_use_32b";
+
   return {
     ok: true,
     config: {
       apiKey,
       webhookSecret,
+      artifactHmacSecret: hmacSecret,
       priceHome,
       priceTeam: priceTeam || priceHome,
       successUrl: env.FIZOT_BILLING_SUCCESS_URL?.trim() || "https://admin.example.invalid/billing/success",
@@ -115,9 +147,10 @@ export function resolveJ9Config(env: NodeJS.ProcessEnv): J9ConfigResult {
       portalReturnUrl: env.FIZOT_BILLING_PORTAL_RETURN_URL?.trim() || "https://admin.example.invalid/billing",
       transport,
       stage,
-      artifactPath,
-      webhookCapturePath,
+      artifactPath: artifactResolved.path,
+      webhookCapturePath: captureResolved.path,
       cleanupConfirm,
+      prepareRunId,
     },
   };
 }

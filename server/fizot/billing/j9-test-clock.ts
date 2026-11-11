@@ -149,26 +149,105 @@ export function parseStripeEvent(raw: Record<string, unknown>): StripeEventLike 
   };
 }
 
+export function eventObjectCustomerId(obj: Record<string, unknown>): string | null {
+  if (typeof obj.customer === "string" && obj.customer.startsWith("cus_")) return obj.customer;
+  if (typeof obj.id === "string" && obj.object === "customer" && obj.id.startsWith("cus_")) return obj.id;
+  return null;
+}
+
+export function eventObjectSubscriptionId(obj: Record<string, unknown>): string | null {
+  if (typeof obj.subscription === "string" && obj.subscription.startsWith("sub_")) return obj.subscription;
+  if (typeof obj.id === "string" && obj.object === "subscription" && obj.id.startsWith("sub_")) return obj.id;
+  return null;
+}
+
+export function eventObjectInvoiceId(obj: Record<string, unknown>): string | null {
+  if (typeof obj.id === "string" && obj.object === "invoice" && obj.id.startsWith("in_")) return obj.id;
+  return null;
+}
+
+/**
+ * Correlate Stripe Events to an exact customer/subscription. Missing associations
+ * are rejected (never treated as wildcards). Baseline event/invoice ids are excluded.
+ */
 export function correlateCustomerEvents(
   events: StripeEventLike[],
-  expected: { customerId: string; subscriptionId?: string; types: string[] },
-): { matched: StripeEventLike[]; missingTypes: string[] } {
+  expected: {
+    customerId: string;
+    subscriptionId: string;
+    types: string[];
+    excludeEventIds?: string[];
+    excludeInvoiceIds?: string[];
+    createdAfterSec?: number;
+  },
+): { matched: StripeEventLike[]; missingTypes: string[]; rejected: string[] } {
   const matched: StripeEventLike[] = [];
+  const rejected: string[] = [];
+  const excludeEvents = new Set(expected.excludeEventIds ?? []);
+  const excludeInvoices = new Set(expected.excludeInvoiceIds ?? []);
   for (const event of events) {
     if (!expected.types.includes(event.type)) continue;
+    if (excludeEvents.has(event.id)) {
+      rejected.push(`${event.id}:baseline_event`);
+      continue;
+    }
+    if (expected.createdAfterSec != null && event.created <= expected.createdAfterSec) {
+      rejected.push(`${event.id}:not_after_failure`);
+      continue;
+    }
     const obj = event.data.object;
-    const customer = typeof obj.customer === "string" ? obj.customer : typeof obj.id === "string" && obj.object === "customer" ? obj.id : null;
-    const subscription = typeof obj.subscription === "string"
-      ? obj.subscription
-      : typeof obj.id === "string" && obj.object === "subscription"
-        ? obj.id
-        : null;
-    if (customer && customer !== expected.customerId) continue;
-    if (expected.subscriptionId && subscription && subscription !== expected.subscriptionId) continue;
-    if (expected.subscriptionId && event.type.startsWith("invoice.") && subscription !== expected.subscriptionId) continue;
+    const customer = eventObjectCustomerId(obj);
+    const subscription = eventObjectSubscriptionId(obj);
+    const invoiceId = eventObjectInvoiceId(obj);
+    if (!customer || !subscription) {
+      rejected.push(`${event.id}:missing_association`);
+      continue;
+    }
+    if (customer !== expected.customerId || subscription !== expected.subscriptionId) {
+      rejected.push(`${event.id}:foreign_resource`);
+      continue;
+    }
+    if (invoiceId && excludeInvoices.has(invoiceId)) {
+      rejected.push(`${event.id}:baseline_invoice`);
+      continue;
+    }
     matched.push(event);
   }
   const present = new Set(matched.map((row) => row.type));
   const missingTypes = expected.types.filter((type) => !present.has(type));
-  return { matched, missingTypes };
+  return { matched, missingTypes, rejected };
+}
+
+/** List events with pagination until exhausted or a hard page cap (honest limit). */
+export async function listStripeEventsPaged(input: {
+  transport: J9StripeTransport;
+  type: string;
+  maxPages?: number;
+}): Promise<{ ok: true; events: StripeEventLike[]; truncated: boolean } | { ok: false; reason: string }> {
+  const maxPages = input.maxPages ?? 5;
+  const events: StripeEventLike[] = [];
+  let startingAfter: string | undefined;
+  for (let page = 0; page < maxPages; page += 1) {
+    const params: Record<string, string> = { type: input.type, limit: "100" };
+    if (startingAfter) params.starting_after = startingAfter;
+    let raw: Record<string, unknown>;
+    try {
+      raw = await input.transport.request("GET", "events", params);
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message.slice(0, 120) : "events_list_failed" };
+    }
+    const data = (raw.data as Array<Record<string, unknown>> | undefined) ?? [];
+    for (const row of data) {
+      const parsed = parseStripeEvent(row);
+      if (parsed) events.push(parsed);
+    }
+    const hasMore = raw.has_more === true;
+    if (!hasMore || data.length === 0) {
+      return { ok: true, events, truncated: false };
+    }
+    const lastId = data[data.length - 1]?.id;
+    if (typeof lastId !== "string") return { ok: true, events, truncated: true };
+    startingAfter = lastId;
+  }
+  return { ok: true, events, truncated: true };
 }

@@ -145,6 +145,8 @@ export type J9DriverDeps = {
   transport?: J9StripeTransport;
   fetchImpl?: typeof fetch;
   log?: (line: string) => void;
+  /** Override repo root for fixed artifacts/j9 paths (tests). */
+  repoRoot?: string;
 };
 
 /**
@@ -156,7 +158,7 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
   const log = deps.log ?? (() => {});
   const scenarios: J9ScenarioResult[] = [];
   const resources = emptyResources();
-  const resolved = resolveJ9Config(deps.env);
+  const resolved = resolveJ9Config(deps.env, deps.repoRoot ?? process.cwd());
   const kind: J9Kind = (resolved.ok ? resolved.config.transport : "live") === "fake" ? "fake_unit" : "live_j9";
 
   if (!resolved.ok) {
@@ -181,7 +183,7 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     return finish({ kind: "live_j9", scenarios, resources });
   }
 
-  const secrets = [config.apiKey, config.webhookSecret];
+  const secrets = [config.apiKey, config.webhookSecret, config.artifactHmacSecret];
   const safeLog = (line: string) => log(redactSecrets(line, secrets));
   const transport = deps.transport
     ?? (config.transport === "fake"
@@ -214,8 +216,11 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
       resources: prepared.resources,
       secrets,
       pauseCleanup: prepared.artifact.pauseCleanup,
+      artifact: prepared.artifact,
+      hmacSecret: config.artifactHmacSecret,
+      artifactPath: config.artifactPath,
     }));
-    if (prepared.checkoutUrl) safeLog(`j9_prepare checkout_url=${prepared.checkoutUrl} artifact=${config.artifactPath ?? ""}`);
+    if (prepared.checkoutUrl) safeLog(`j9_prepare checkout_url=${prepared.checkoutUrl} artifact=${config.artifactPath}`);
     return finish({
       kind: "live_j9",
       scenarios,
@@ -228,6 +233,7 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
 
   let liveArtifact: J9RunArtifact | null = null;
   let resumeCheckoutSub: string | null = null;
+  let resumeCheckoutInvoice: string | null = null;
   let webhookFromCapture = false;
 
   if (config.stage === "resume") {
@@ -238,23 +244,29 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
         if (scenarios.some((row) => row.scenario === name)) continue;
         scenarios.push(scenario(name, "NOT_RUN", "none", "blocked by resume"));
       }
+      const retained = resumed.resources;
       scenarios.push(await cleanupTrackedResources({
         transport,
-        resources: emptyResources(),
+        resources: retained,
         secrets,
         pauseCleanup: true,
+        artifact: resumed.artifact,
+        hmacSecret: config.artifactHmacSecret,
+        artifactPath: config.artifactPath,
       }));
       return finish({
         kind: "live_j9",
         scenarios,
-        resources: emptyResources(),
+        resources: retained,
         artifactPath: config.artifactPath,
+        runId: resumed.artifact?.runId ?? null,
       });
     }
     for (const row of resumed.evidence.scenarios) scenarios.push(row);
     Object.assign(resources, resumed.evidence.resources);
     liveArtifact = resumed.evidence.artifact;
     resumeCheckoutSub = resumed.evidence.checkoutSubscriptionId;
+    resumeCheckoutInvoice = resumed.evidence.checkoutInvoiceId;
     webhookFromCapture = resumed.evidence.webhookCaptureOk;
   } else {
     scenarios.push(scenario(
@@ -307,17 +319,33 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     if (config.stage !== "resume") {
       scenarios.push(await runCheckoutSessionCreated(config, transport, resources, workspaceId, billing));
       scenarios.push(await runCheckoutCompleted(kind, transport, resources));
-    } else if (resumeCheckoutSub && liveArtifact) {
+      scenarios.push(await runSubscriptionPaymentAndCredit({
+        config, transport, resources, workspaceId, credit, billing, applySignedFixture, createdSec: nextCreatedSec, safeLog,
+      }));
+    } else if (resumeCheckoutSub && resumeCheckoutInvoice && liveArtifact) {
       const record = (await billing.store.get(workspaceId)) ?? emptyRecord(workspaceId);
       record.stripeCustomerId = liveArtifact.checkout.customerId;
       record.plan = "home";
       record.country = "GB";
       await billing.store.save(record);
+      scenarios.push(await runCheckoutSubscriptionPaymentAndCredit({
+        config,
+        transport,
+        workspaceId,
+        customerId: liveArtifact.checkout.customerId,
+        subscriptionId: resumeCheckoutSub,
+        invoiceId: resumeCheckoutInvoice,
+        credit,
+        billing,
+        applySignedFixture,
+        createdSec: nextCreatedSec,
+        safeLog,
+      }));
+    } else {
+      scenarios.push(scenario("subscription_payment_and_credit", "FAIL", "none", "checkout subscription missing on resume", {
+        failureReason: "checkout_subscription_required",
+      }));
     }
-
-    scenarios.push(await runSubscriptionPaymentAndCredit({
-      config, transport, resources, workspaceId, credit, billing, applySignedFixture, createdSec: nextCreatedSec, safeLog,
-    }));
     if (!(config.stage === "resume" && webhookFromCapture)) {
       scenarios.push(await runWebhookLifecycle({
         config, workspaceId, billing, credit, createdSec: nextCreatedSec, kind,
@@ -349,6 +377,9 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
       resources,
       secrets,
       pauseCleanup: false,
+      artifact: liveArtifact,
+      hmacSecret: config.artifactHmacSecret,
+      artifactPath: config.artifactPath,
     }));
     await billing.close();
   }
@@ -458,6 +489,68 @@ async function runCheckoutCompleted(
   return scenario("checkout_completed", "FAIL", "stripe_api", `session=${sessionId}`, {
     failureReason: `fake checkout not complete status=${String(session.status)}`,
   });
+}
+
+/** Credit evidence from the completed Checkout subscription — never a second unrelated Subscription API create. */
+async function runCheckoutSubscriptionPaymentAndCredit(input: {
+  config: J9Config;
+  transport: J9StripeTransport;
+  workspaceId: string;
+  customerId: string;
+  subscriptionId: string;
+  invoiceId: string;
+  credit: ReturnType<typeof createMemoryCreditStore>;
+  billing: ReturnType<typeof createBillingService>;
+  applySignedFixture: (event: StripeEvent) => Promise<unknown>;
+  createdSec: () => number;
+  safeLog: (line: string) => void;
+}): Promise<J9ScenarioResult> {
+  const sub = await input.transport.request("GET", `subscriptions/${input.subscriptionId}`, {
+    "expand[]": "latest_invoice",
+  });
+  const invoice = sub.latest_invoice && typeof sub.latest_invoice === "object"
+    ? sub.latest_invoice as Record<string, unknown>
+    : await input.transport.request("GET", `invoices/${input.invoiceId}`, null);
+  const paid = assertPaidInvoice(invoice, {
+    customerId: input.customerId,
+    subscriptionId: input.subscriptionId,
+  });
+  if (!paid.ok || paid.invoiceId !== input.invoiceId) {
+    return scenario("subscription_payment_and_credit", "FAIL", "stripe_api", `invoice=${input.invoiceId}`, {
+      failureReason: paid.ok ? "checkout_invoice_id_mismatch" : paid.reason,
+    });
+  }
+  const t = input.createdSec();
+  await input.billing.applyEvent(asEvent(`evt_checkout_sub_${t}`, "customer.subscription.created", t, {
+    id: input.subscriptionId,
+    object: "subscription",
+    status: String(sub.status ?? "active"),
+    customer: input.customerId,
+    metadata: (sub.metadata as Record<string, unknown> | undefined) ?? { workspace_id: input.workspaceId, plan: "home" },
+    items: sub.items,
+  }));
+  const paidEvent = asEvent(`evt_checkout_paid_${t}`, "invoice.paid", t + 1, invoice);
+  await input.applySignedFixture(paidEvent);
+  await input.applySignedFixture(paidEvent);
+  const summary = await input.credit.summary(input.workspaceId);
+  const expected = PLAN_INCLUDED_MICRO_GBP.home;
+  if (summary.balanceMicroGbp !== expected) {
+    return scenario("subscription_payment_and_credit", "FAIL", "locally_signed_fixture", `balance=${summary.balanceMicroGbp}`, {
+      failureReason: `expected included credit ${expected} once from checkout invoice`,
+    });
+  }
+  if (!(await input.billing.allows(input.workspaceId))) {
+    return scenario("subscription_payment_and_credit", "FAIL", "locally_signed_fixture", "proxy refused", {
+      failureReason: "subscription_required",
+    });
+  }
+  input.safeLog(`checkout_payment_and_credit subscription=${input.subscriptionId} invoice=${paid.invoiceId}`);
+  return scenario(
+    "subscription_payment_and_credit",
+    "PASS",
+    "stripe_api",
+    `subscription=${input.subscriptionId} invoice=${paid.invoiceId} source=checkout_session_subscription separate_api_subscription=false balance=${summary.balanceMicroGbp}`,
+  );
 }
 
 async function runSubscriptionPaymentAndCredit(input: {

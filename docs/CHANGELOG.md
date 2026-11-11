@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-53 J9 live evidence review fixes: independent HMAC, handoff, correlation (P4.4 / FZ-27)
+
+- Why we changed it: PR #24 review found artifact MACs keyed from in-file material, Actions resume without artifact download, webhook freshness from untrusted body timestamps, Test Clock recovery accepting baseline `invoice.paid`, and resume risk of crediting a second unrelated subscription.
+- How it works: Schema v2 artifacts use `STRIPE_J9_ARTIFACT_HMAC_SECRET` (never written to disk). Actions resume/cleanup download `j9-run-artifact` / `j9-webhook-capture` by digits-only run id into fixed `artifacts/j9/` paths. Webhook verify uses Stripe-Signature `t=` and a required correlated event set. Dunning excludes baseline invoice/events and requires post-failure recovery. Resume credits only the completed Checkout subscription; mid-prepare failures persist `cleanup_partial` with retained resources.
+- Why it is necessary: Keep false live PASS impossible and make the prepare/resume handoff operable and authenticatable.
+- Impact: No live Stripe dispatch in this change. Live acceptance stays blocked until secrets, Price, manual Checkout and capture exist.
+- Rollback? Revert the review-fix commit on `fz-27-j9-live-evidence` / PR #24.
+- Files / Patch IDs: PATCH-44.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-52 J9 live evidence path: prepare/resume, Test Clocks, signed capture (P4.4 / FZ-27)
 
 - Why we changed it: After PR #23 the harness existed, but live J9 could not honestly prove Checkout completion, Stripe Test Clock dunning, or Stripe-originated webhook delivery.

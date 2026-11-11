@@ -3,14 +3,15 @@
  * remains required; incomplete Sessions stay BLOCKED.
  */
 import type { J9Config } from "./j9-config.ts";
+import { redactSecrets } from "./j9-config.ts";
 import {
   assertCompletedCheckoutSession,
   assertCustomerBelongsToRun,
   assertSubscriptionPrice,
 } from "./j9-checkout-evidence.ts";
 import {
+  assertOwnedResource,
   createRunId,
-  createRunNonce,
   loadJ9RunArtifact,
   saveJ9RunArtifact,
   sealArtifact,
@@ -21,17 +22,15 @@ import {
   advanceTestClockUntilReady,
   correlateCustomerEvents,
   createTestClock,
+  listStripeEventsPaged,
   nextBillingFrozenTime,
-  parseStripeEvent,
   recurringIntervalFromPrice,
   retrieveTestClock,
-  type StripeEventLike,
 } from "./j9-test-clock.ts";
 import { invoiceIdFromSubscription, assertPaidInvoice } from "./j9-invoice.ts";
 import type { J9StripeTransport } from "./j9-transport.ts";
 import { loadWebhookCapture, verifyWebhookCapture } from "./j9-webhook-capture.ts";
 import { classifyCleanupError, type CleanupResource } from "./j9-errors.ts";
-import { redactSecrets } from "./j9-config.ts";
 
 export type StageScenario = {
   scenario: string;
@@ -52,6 +51,66 @@ function scenario(
   return { scenario: name, status, source, evidence, ...extra };
 }
 
+function emptyResources(): J9TrackedResources {
+  return { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] };
+}
+
+async function verifyLiveOwnership(
+  transport: J9StripeTransport,
+  artifact: J9RunArtifact,
+  resource: CleanupResource,
+  id: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const owned = assertOwnedResource(
+    artifact,
+    resource === "checkout_session"
+      ? "checkoutSessions"
+      : resource === "test_clock"
+        ? "testClocks"
+        : resource === "subscription"
+          ? "subscriptions"
+          : "customers",
+    id,
+  );
+  if (!owned.ok) return owned;
+  try {
+    if (resource === "customer") {
+      const customer = await transport.request("GET", `customers/${id}`, null);
+      return assertCustomerBelongsToRun(customer, { customerId: id, runId: artifact.runId });
+    }
+    if (resource === "subscription") {
+      const sub = await transport.request("GET", `subscriptions/${id}`, null);
+      const customerId = typeof sub.customer === "string" ? sub.customer : "";
+      if (!artifact.resources.customers.includes(customerId)) {
+        return { ok: false, reason: "subscription_customer_not_tracked" };
+      }
+      const metadata = sub.metadata as Record<string, unknown> | undefined;
+      if (metadata?.fizot_j9_run_id !== artifact.runId) {
+        return { ok: false, reason: "subscription_run_metadata_mismatch" };
+      }
+      if (sub.livemode !== false) return { ok: false, reason: "subscription_livemode_invalid" };
+      return { ok: true };
+    }
+    if (resource === "checkout_session") {
+      const session = await transport.request("GET", `checkout/sessions/${id}`, null);
+      if (session.livemode !== false) return { ok: false, reason: "session_livemode_invalid" };
+      const metadata = session.metadata as Record<string, unknown> | undefined;
+      if (metadata?.fizot_j9_run_id && metadata.fizot_j9_run_id !== artifact.runId) {
+        return { ok: false, reason: "session_run_metadata_mismatch" };
+      }
+      return { ok: true };
+    }
+    if (resource === "test_clock") {
+      const clock = await retrieveTestClock(transport, id);
+      if (!clock.ok) return { ok: false, reason: clock.reason };
+      return { ok: true };
+    }
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message.slice(0, 80) : "ownership_verify_failed" };
+  }
+  return { ok: false, reason: "ownership_unhandled" };
+}
+
 export type PrepareResult = {
   artifact: J9RunArtifact;
   checkoutUrl: string | null;
@@ -66,15 +125,10 @@ export async function prepareLiveJ9(input: {
 }): Promise<PrepareResult> {
   const scenarios: StageScenario[] = [];
   const runId = createRunId();
-  const runNonce = createRunNonce();
   const workspaceId = `ws_j9_${runId.slice(6, 18)}`;
   const frozenTime = input.frozenTime ?? Math.floor(Date.UTC(2026, 0, 1) / 1000);
-  const resources: J9TrackedResources = {
-    customers: [],
-    subscriptions: [],
-    checkoutSessions: [],
-    testClocks: [],
-  };
+  const createdAt = new Date().toISOString();
+  const resources = emptyResources();
 
   scenarios.push(scenario(
     "secure_startup",
@@ -83,251 +137,281 @@ export async function prepareLiveJ9(input: {
     `kind=live_j9 stage=prepare mode=test transport=live run=${runId}`,
   ));
 
-  const clockCreated = await createTestClock(input.transport, {
-    frozenTime,
-    name: `fizot-j9-${runId}`.slice(0, 300),
-  });
-  if (!clockCreated.ok) {
-    scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", clockCreated.reason, {
-      failureReason: clockCreated.reason,
-    }));
-    return {
-      artifact: sealArtifact({
-        schemaVersion: 1,
-        kind: "live_j9_run",
-        runId,
-        stage: "abandoned",
-        createdAt: new Date().toISOString(),
-        workspaceId,
-        priceHome: input.config.priceHome,
-        priceTeam: input.config.priceTeam,
-        runNonce,
-        pauseCleanup: false,
-        checkout: { customerId: "cus_missing", sessionId: "cs_missing", expectedPriceId: input.config.priceHome },
-        clock: { clockId: "clock_missing", frozenTime, customerId: "cus_missing", subscriptionId: null, baselineInvoiceId: null },
-        resources,
-      }),
-      checkoutUrl: null,
-      scenarios,
-      resources,
-    };
-  }
-  resources.testClocks.push(clockCreated.clock.id);
-
-  const checkoutCustomer = await input.transport.request("POST", "customers", {
-    email: `j9+checkout-${runId}@example.invalid`,
-    "address[country]": "GB",
-    "metadata[workspace_id]": workspaceId,
-    "metadata[fizot_j9_run_id]": runId,
-    "metadata[fizot_j9_role]": "checkout",
-  });
-  const checkoutCustomerId = String(checkoutCustomer.id ?? "");
-  if (!checkoutCustomerId.startsWith("cus_")) {
-    scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "checkout customer missing", {
-      failureReason: "no checkout customer id",
-    }));
-    return emptyPrepareFail(runId, runNonce, workspaceId, input.config, resources, scenarios, frozenTime);
-  }
-  resources.customers.push(checkoutCustomerId);
-
-  const clockCustomer = await input.transport.request("POST", "customers", {
-    email: `j9+clock-${runId}@example.invalid`,
-    "address[country]": "GB",
-    test_clock: clockCreated.clock.id,
-    "metadata[workspace_id]": workspaceId,
-    "metadata[fizot_j9_run_id]": runId,
-    "metadata[fizot_j9_role]": "test_clock",
-  });
-  const clockCustomerId = String(clockCustomer.id ?? "");
-  if (!clockCustomerId.startsWith("cus_")) {
-    scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "clock customer missing", {
-      failureReason: "no clock customer id",
-    }));
-    return emptyPrepareFail(runId, runNonce, workspaceId, input.config, resources, scenarios, frozenTime, clockCreated.clock.id);
-  }
-  resources.customers.push(clockCustomerId);
-
-  await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: clockCustomerId });
-  await input.transport.request("POST", `customers/${clockCustomerId}`, {
-    "invoice_settings[default_payment_method]": "pm_card_visa",
-  });
-
-  const clockSub = await input.transport.request("POST", "subscriptions", {
-    customer: clockCustomerId,
-    default_payment_method: "pm_card_visa",
-    "items[0][price]": input.config.priceHome,
-    "items[0][quantity]": "1",
-    "metadata[workspace_id]": workspaceId,
-    "metadata[plan]": "home",
-    "metadata[fizot_j9_run_id]": runId,
-    payment_behavior: "error_if_incomplete",
-    "expand[]": "latest_invoice",
-  });
-  const clockSubId = String(clockSub.id ?? "");
-  const baselineInvoiceId = invoiceIdFromSubscription(clockSub);
-  if (!clockSubId.startsWith("sub_") || !baselineInvoiceId) {
-    scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "clock baseline subscription missing", {
-      failureReason: "clock subscription/invoice missing",
-    }));
-    return emptyPrepareFail(runId, runNonce, workspaceId, input.config, resources, scenarios, frozenTime, clockCreated.clock.id);
-  }
-  resources.subscriptions.push(clockSubId);
-  let invoiceObj: Record<string, unknown>;
-  if (clockSub.latest_invoice && typeof clockSub.latest_invoice === "object") {
-    invoiceObj = clockSub.latest_invoice as Record<string, unknown>;
-  } else {
-    invoiceObj = await input.transport.request("GET", `invoices/${baselineInvoiceId}`, null);
-  }
-  const paid = assertPaidInvoice(invoiceObj, { customerId: clockCustomerId, subscriptionId: clockSubId });
-  if (!paid.ok) {
-    scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", `baseline_invoice=${baselineInvoiceId}`, {
-      failureReason: paid.reason,
-    }));
-    return emptyPrepareFail(runId, runNonce, workspaceId, input.config, resources, scenarios, frozenTime, clockCreated.clock.id);
-  }
-
-  const session = await input.transport.request("POST", "checkout/sessions", {
-    mode: "subscription",
-    customer: checkoutCustomerId,
-    success_url: input.config.successUrl,
-    cancel_url: input.config.cancelUrl,
-    client_reference_id: workspaceId,
-    "line_items[0][price]": input.config.priceHome,
-    "line_items[0][quantity]": "1",
-    "automatic_tax[enabled]": "true",
-    "tax_id_collection[enabled]": "true",
-    billing_address_collection: "required",
-    "metadata[workspace_id]": workspaceId,
-    "metadata[plan]": "home",
-    "metadata[fizot_j9_run_id]": runId,
-    "subscription_data[metadata][workspace_id]": workspaceId,
-    "subscription_data[metadata][plan]": "home",
-    "subscription_data[metadata][fizot_j9_run_id]": runId,
-  });
-  const sessionId = String(session.id ?? "");
-  const checkoutUrl = typeof session.url === "string" ? session.url : null;
-  if (!sessionId.startsWith("cs_") || !checkoutUrl) {
-    scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "checkout session incomplete", {
-      failureReason: "missing id or url",
-    }));
-    return emptyPrepareFail(runId, runNonce, workspaceId, input.config, resources, scenarios, frozenTime, clockCreated.clock.id);
-  }
-  resources.checkoutSessions.push(sessionId);
-  scenarios.push(scenario(
-    "checkout_session_created",
-    "PASS",
-    "stripe_api",
-    `session=${sessionId} customer=${checkoutCustomerId} status=open clock=${clockCreated.clock.id} clock_sub=${clockSubId}`,
-  ));
-  scenarios.push(scenario(
-    "checkout_completed",
-    "BLOCKED",
-    "stripe_api",
-    `session=${sessionId} awaiting_manual_hosted_checkout`,
-    {
-      failureReason: "Complete the open Stripe Checkout Session in a browser with a test card, then run stage=resume with the same artifact",
-    },
-  ));
-
-  const artifact = sealArtifact({
-    schemaVersion: 1,
-    kind: "live_j9_run",
-    runId,
-    stage: "awaiting_checkout",
-    createdAt: new Date().toISOString(),
-    workspaceId,
-    priceHome: input.config.priceHome,
-    priceTeam: input.config.priceTeam,
-    runNonce,
-    pauseCleanup: true,
-    checkout: {
-      customerId: checkoutCustomerId,
-      sessionId,
-      expectedPriceId: input.config.priceHome,
-    },
-    clock: {
-      clockId: clockCreated.clock.id,
-      frozenTime: clockCreated.clock.frozen_time,
-      customerId: clockCustomerId,
-      subscriptionId: clockSubId,
-      baselineInvoiceId,
-    },
-    resources,
-  });
-  if (input.config.artifactPath) saveJ9RunArtifact(input.config.artifactPath, artifact);
-  return { artifact, checkoutUrl, scenarios, resources };
-}
-
-function emptyPrepareFail(
-  runId: string,
-  runNonce: string,
-  workspaceId: string,
-  config: J9Config,
-  resources: J9TrackedResources,
-  scenarios: StageScenario[],
-  frozenTime: number,
-  clockId = "clock_missing",
-): PrepareResult {
-  return {
-    artifact: sealArtifact({
-      schemaVersion: 1,
+  const persistPartial = (stage: J9RunArtifact["stage"]) => {
+    // Retain recorded resources for explicit cleanup; never auto-abandon mid-prepare.
+    const artifact = sealArtifact(input.config.artifactHmacSecret, {
+      schemaVersion: 2,
       kind: "live_j9_run",
       runId,
-      stage: "abandoned",
-      createdAt: new Date().toISOString(),
+      stage,
+      createdAt,
       workspaceId,
-      priceHome: config.priceHome,
-      priceTeam: config.priceTeam,
-      runNonce,
-      pauseCleanup: false,
+      priceHome: input.config.priceHome,
+      priceTeam: input.config.priceTeam,
+      pauseCleanup: true,
       checkout: {
-        customerId: resources.customers[0] ?? "cus_missing",
+        customerId: resources.customers.find((id) => id) ?? "cus_missing",
         sessionId: resources.checkoutSessions[0] ?? "cs_missing",
-        expectedPriceId: config.priceHome,
+        expectedPriceId: input.config.priceHome,
+        subscriptionId: null,
       },
       clock: {
-        clockId: resources.testClocks[0] ?? clockId,
+        clockId: resources.testClocks[0] ?? "clock_missing",
         frozenTime,
         customerId: resources.customers[1] ?? resources.customers[0] ?? "cus_missing",
         subscriptionId: resources.subscriptions[0] ?? null,
         baselineInvoiceId: null,
+        baselineEventIds: [],
       },
-      resources,
-    }),
-    checkoutUrl: null,
-    scenarios,
-    resources,
+      resources: {
+        customers: [...resources.customers],
+        subscriptions: [...resources.subscriptions],
+        checkoutSessions: [...resources.checkoutSessions],
+        testClocks: [...resources.testClocks],
+      },
+    });
+    saveJ9RunArtifact(input.config.artifactPath, artifact);
+    return artifact;
   };
+
+  try {
+    const clockCreated = await createTestClock(input.transport, {
+      frozenTime,
+      name: `fizot-j9-${runId}`.slice(0, 300),
+    });
+    if (!clockCreated.ok) {
+      scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", clockCreated.reason, {
+        failureReason: clockCreated.reason,
+      }));
+      const artifact = persistPartial("cleanup_partial");
+      return { artifact, checkoutUrl: null, scenarios, resources };
+    }
+    resources.testClocks.push(clockCreated.clock.id);
+
+    const checkoutCustomer = await input.transport.request("POST", "customers", {
+      email: `j9+checkout-${runId}@example.invalid`,
+      "address[country]": "GB",
+      "metadata[workspace_id]": workspaceId,
+      "metadata[fizot_j9_run_id]": runId,
+      "metadata[fizot_j9_role]": "checkout",
+    });
+    const checkoutCustomerId = String(checkoutCustomer.id ?? "");
+    if (!checkoutCustomerId.startsWith("cus_")) {
+      scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "checkout customer missing", {
+        failureReason: "no checkout customer id",
+      }));
+      const artifact = persistPartial("cleanup_partial");
+      return { artifact, checkoutUrl: null, scenarios, resources };
+    }
+    resources.customers.push(checkoutCustomerId);
+
+    const clockCustomer = await input.transport.request("POST", "customers", {
+      email: `j9+clock-${runId}@example.invalid`,
+      "address[country]": "GB",
+      test_clock: clockCreated.clock.id,
+      "metadata[workspace_id]": workspaceId,
+      "metadata[fizot_j9_run_id]": runId,
+      "metadata[fizot_j9_role]": "test_clock",
+    });
+    const clockCustomerId = String(clockCustomer.id ?? "");
+    if (!clockCustomerId.startsWith("cus_")) {
+      scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "clock customer missing", {
+        failureReason: "no clock customer id",
+      }));
+      const artifact = persistPartial("cleanup_partial");
+      return { artifact, checkoutUrl: null, scenarios, resources };
+    }
+    resources.customers.push(clockCustomerId);
+
+    await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: clockCustomerId });
+    await input.transport.request("POST", `customers/${clockCustomerId}`, {
+      "invoice_settings[default_payment_method]": "pm_card_visa",
+    });
+
+    const clockSub = await input.transport.request("POST", "subscriptions", {
+      customer: clockCustomerId,
+      default_payment_method: "pm_card_visa",
+      "items[0][price]": input.config.priceHome,
+      "items[0][quantity]": "1",
+      "metadata[workspace_id]": workspaceId,
+      "metadata[plan]": "home",
+      "metadata[fizot_j9_run_id]": runId,
+      payment_behavior: "error_if_incomplete",
+      "expand[]": "latest_invoice",
+    });
+    const clockSubId = String(clockSub.id ?? "");
+    const baselineInvoiceId = invoiceIdFromSubscription(clockSub);
+    if (clockSubId.startsWith("sub_")) resources.subscriptions.push(clockSubId);
+    if (!clockSubId.startsWith("sub_") || !baselineInvoiceId) {
+      scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "clock baseline subscription missing", {
+        failureReason: "clock subscription/invoice missing",
+      }));
+      const artifact = persistPartial("cleanup_partial");
+      return { artifact, checkoutUrl: null, scenarios, resources };
+    }
+    let invoiceObj: Record<string, unknown>;
+    if (clockSub.latest_invoice && typeof clockSub.latest_invoice === "object") {
+      invoiceObj = clockSub.latest_invoice as Record<string, unknown>;
+    } else {
+      invoiceObj = await input.transport.request("GET", `invoices/${baselineInvoiceId}`, null);
+    }
+    const paid = assertPaidInvoice(invoiceObj, { customerId: clockCustomerId, subscriptionId: clockSubId });
+    if (!paid.ok) {
+      scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", `baseline_invoice=${baselineInvoiceId}`, {
+        failureReason: paid.reason,
+      }));
+      const artifact = persistPartial("cleanup_partial");
+      return { artifact, checkoutUrl: null, scenarios, resources };
+    }
+
+    const baselineEvents = await listStripeEventsPaged({
+      transport: input.transport,
+      type: "invoice.paid",
+      maxPages: 2,
+    });
+    const baselineEventIds = baselineEvents.ok
+      ? baselineEvents.events
+        .filter((event) => {
+          const obj = event.data.object;
+          return obj.subscription === clockSubId || obj.id === baselineInvoiceId;
+        })
+        .map((event) => event.id)
+      : [];
+
+    const session = await input.transport.request("POST", "checkout/sessions", {
+      mode: "subscription",
+      customer: checkoutCustomerId,
+      success_url: input.config.successUrl,
+      cancel_url: input.config.cancelUrl,
+      client_reference_id: workspaceId,
+      "line_items[0][price]": input.config.priceHome,
+      "line_items[0][quantity]": "1",
+      "automatic_tax[enabled]": "true",
+      "tax_id_collection[enabled]": "true",
+      billing_address_collection: "required",
+      "metadata[workspace_id]": workspaceId,
+      "metadata[plan]": "home",
+      "metadata[fizot_j9_run_id]": runId,
+      "subscription_data[metadata][workspace_id]": workspaceId,
+      "subscription_data[metadata][plan]": "home",
+      "subscription_data[metadata][fizot_j9_run_id]": runId,
+    });
+    const sessionId = String(session.id ?? "");
+    const checkoutUrl = typeof session.url === "string" ? session.url : null;
+    if (sessionId.startsWith("cs_")) resources.checkoutSessions.push(sessionId);
+    if (!sessionId.startsWith("cs_") || !checkoutUrl) {
+      scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "checkout session incomplete", {
+        failureReason: "missing id or url",
+      }));
+      const artifact = persistPartial("cleanup_partial");
+      return { artifact, checkoutUrl: null, scenarios, resources };
+    }
+
+    scenarios.push(scenario(
+      "checkout_session_created",
+      "PASS",
+      "stripe_api",
+      `session=${sessionId} customer=${checkoutCustomerId} status=open clock=${clockCreated.clock.id} clock_sub=${clockSubId}`,
+    ));
+    scenarios.push(scenario(
+      "checkout_completed",
+      "BLOCKED",
+      "stripe_api",
+      `session=${sessionId} awaiting_manual_hosted_checkout`,
+      {
+        failureReason: "Complete the open Stripe Checkout Session in a browser with a test card, then run stage=resume with the same artifact",
+      },
+    ));
+
+    const artifact = sealArtifact(input.config.artifactHmacSecret, {
+      schemaVersion: 2,
+      kind: "live_j9_run",
+      runId,
+      stage: "awaiting_checkout",
+      createdAt,
+      workspaceId,
+      priceHome: input.config.priceHome,
+      priceTeam: input.config.priceTeam,
+      pauseCleanup: true,
+      checkout: {
+        customerId: checkoutCustomerId,
+        sessionId,
+        expectedPriceId: input.config.priceHome,
+        subscriptionId: null,
+      },
+      clock: {
+        clockId: clockCreated.clock.id,
+        frozenTime: clockCreated.clock.frozen_time,
+        customerId: clockCustomerId,
+        subscriptionId: clockSubId,
+        baselineInvoiceId,
+        baselineEventIds,
+      },
+      resources: {
+        customers: [...resources.customers],
+        subscriptions: [...resources.subscriptions],
+        checkoutSessions: [...resources.checkoutSessions],
+        testClocks: [...resources.testClocks],
+      },
+    });
+    saveJ9RunArtifact(input.config.artifactPath, artifact);
+    return { artifact, checkoutUrl, scenarios, resources };
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 160) : String(error);
+    scenarios.push(scenario("checkout_session_created", "FAIL", "stripe_api", "prepare_aborted", {
+      failureReason: message,
+    }));
+    const artifact = persistPartial("cleanup_partial");
+    return { artifact, checkoutUrl: null, scenarios, resources };
+  }
 }
 
 export type ResumeEvidence = {
   scenarios: StageScenario[];
   resources: J9TrackedResources;
   artifact: J9RunArtifact;
-  checkoutSubscriptionId: string | null;
-  stripeOriginatedEvents: StripeEventLike[];
+  checkoutSubscriptionId: string;
+  checkoutInvoiceId: string;
   webhookCaptureOk: boolean;
 };
 
 export async function resumeLiveCheckoutEvidence(input: {
   config: J9Config;
   transport: J9StripeTransport;
-}): Promise<{ ok: true; evidence: ResumeEvidence } | { ok: false; reason: string; scenarios: StageScenario[] }> {
-  const loaded = loadJ9RunArtifact(input.config.artifactPath!);
+}): Promise<
+  | { ok: true; evidence: ResumeEvidence }
+  | { ok: false; reason: string; scenarios: StageScenario[]; artifact: J9RunArtifact | null; resources: J9TrackedResources }
+> {
+  const loaded = loadJ9RunArtifact(input.config.artifactPath, input.config.artifactHmacSecret);
   if (!loaded.ok) {
     return {
       ok: false,
       reason: loaded.reason,
+      artifact: null,
+      resources: emptyResources(),
       scenarios: [scenario("secure_startup", "FAIL", "config", loaded.reason, { failureReason: loaded.reason })],
     };
   }
   const artifact = loaded.artifact;
-  if (artifact.priceHome !== input.config.priceHome) {
+  if (artifact.priceHome !== input.config.priceHome || artifact.priceTeam !== input.config.priceTeam) {
     return {
       ok: false,
       reason: "artifact_price_mismatch",
-      scenarios: [scenario("secure_startup", "FAIL", "config", "artifact priceHome does not match env", {
+      artifact,
+      resources: artifact.resources,
+      scenarios: [scenario("secure_startup", "FAIL", "config", "artifact prices do not match env", {
         failureReason: "artifact_price_mismatch",
+      })],
+    };
+  }
+  if (artifact.stage === "completed") {
+    return {
+      ok: false,
+      reason: "artifact_already_completed",
+      artifact,
+      resources: artifact.resources,
+      scenarios: [scenario("secure_startup", "FAIL", "config", "refuse duplicate resume of completed run", {
+        failureReason: "artifact_already_completed",
       })],
     };
   }
@@ -341,6 +425,8 @@ export async function resumeLiveCheckoutEvidence(input: {
     return {
       ok: false,
       reason: customerOk.reason,
+      artifact,
+      resources: artifact.resources,
       scenarios: [
         scenario("secure_startup", "PASS", "config", `resume run=${artifact.runId}`),
         scenario("checkout_completed", "FAIL", "stripe_api", customerOk.reason, { failureReason: customerOk.reason }),
@@ -354,6 +440,8 @@ export async function resumeLiveCheckoutEvidence(input: {
     return {
       ok: false,
       reason: completed.reason,
+      artifact,
+      resources: artifact.resources,
       scenarios: [
         scenario("secure_startup", "PASS", "config", `resume run=${artifact.runId}`),
         scenario("checkout_session_created", "PASS", "stripe_api", `session=${artifact.checkout.sessionId} from_artifact`),
@@ -364,7 +452,9 @@ export async function resumeLiveCheckoutEvidence(input: {
     };
   }
 
-  const subscription = await input.transport.request("GET", `subscriptions/${completed.subscriptionId}`, null);
+  const subscription = await input.transport.request("GET", `subscriptions/${completed.subscriptionId}`, {
+    "expand[]": "latest_invoice",
+  });
   const subOk = assertSubscriptionPrice(subscription, {
     subscriptionId: completed.subscriptionId,
     customerId: completed.customerId,
@@ -375,9 +465,49 @@ export async function resumeLiveCheckoutEvidence(input: {
     return {
       ok: false,
       reason: subOk.reason,
+      artifact,
+      resources: artifact.resources,
       scenarios: [
         scenario("secure_startup", "PASS", "config", `resume run=${artifact.runId}`),
         scenario("checkout_completed", "FAIL", "stripe_api", subOk.reason, { failureReason: subOk.reason }),
+      ],
+    };
+  }
+
+  const invoiceId = invoiceIdFromSubscription(subscription);
+  if (!invoiceId) {
+    return {
+      ok: false,
+      reason: "checkout_invoice_missing",
+      artifact,
+      resources: artifact.resources,
+      scenarios: [
+        scenario("secure_startup", "PASS", "config", `resume run=${artifact.runId}`),
+        scenario("checkout_completed", "FAIL", "stripe_api", "checkout subscription latest_invoice missing", {
+          failureReason: "checkout_invoice_missing",
+        }),
+      ],
+    };
+  }
+  let invoice: Record<string, unknown>;
+  if (subscription.latest_invoice && typeof subscription.latest_invoice === "object") {
+    invoice = subscription.latest_invoice as Record<string, unknown>;
+  } else {
+    invoice = await input.transport.request("GET", `invoices/${invoiceId}`, null);
+  }
+  const paid = assertPaidInvoice(invoice, {
+    customerId: completed.customerId,
+    subscriptionId: completed.subscriptionId,
+  });
+  if (!paid.ok) {
+    return {
+      ok: false,
+      reason: paid.reason,
+      artifact,
+      resources: artifact.resources,
+      scenarios: [
+        scenario("secure_startup", "PASS", "config", `resume run=${artifact.runId}`),
+        scenario("checkout_completed", "FAIL", "stripe_api", paid.reason, { failureReason: paid.reason }),
       ],
     };
   }
@@ -393,52 +523,46 @@ export async function resumeLiveCheckoutEvidence(input: {
 
   let webhookCaptureOk = false;
   const webhookScenarios: StageScenario[] = [];
-  if (input.config.webhookCapturePath) {
-    const captureLoaded = loadWebhookCapture(input.config.webhookCapturePath);
-    if (!captureLoaded.ok) {
-      webhookScenarios.push(scenario("webhook_lifecycle", "FAIL", "stripe_cli_capture", captureLoaded.reason, {
-        failureReason: captureLoaded.reason,
+  const captureLoaded = loadWebhookCapture(input.config.webhookCapturePath);
+  if (!captureLoaded.ok) {
+    webhookScenarios.push(scenario("webhook_lifecycle", "BLOCKED", "none", captureLoaded.reason, {
+      failureReason: "Place a Stripe CLI signed capture at artifacts/j9/webhook-capture.json for this runId",
+    }));
+  } else {
+    const verified = verifyWebhookCapture({
+      capture: captureLoaded.capture,
+      expectedRunId: artifact.runId,
+      expectedCustomerId: completed.customerId,
+      expectedSubscriptionId: completed.subscriptionId,
+      webhookSecret: input.config.webhookSecret,
+    });
+    if (!verified.ok) {
+      webhookScenarios.push(scenario("webhook_lifecycle", "FAIL", "stripe_cli_capture", verified.reason, {
+        failureReason: verified.reason,
       }));
     } else {
-      const verified = verifyWebhookCapture({
-        capture: captureLoaded.capture,
-        expectedRunId: artifact.runId,
-        webhookSecret: input.config.webhookSecret,
-      });
-      if (!verified.ok) {
-        webhookScenarios.push(scenario("webhook_lifecycle", "FAIL", "stripe_cli_capture", verified.reason, {
-          failureReason: verified.reason,
-        }));
-      } else {
-        webhookCaptureOk = true;
-        webhookScenarios.push(scenario(
-          "webhook_lifecycle",
-          "PASS",
-          "stripe_cli_capture",
-          `signed_deliveries=${verified.accepted.length} run=${artifact.runId} label=stripe_originated_signed_capture`,
-        ));
-      }
+      webhookCaptureOk = true;
+      webhookScenarios.push(scenario(
+        "webhook_lifecycle",
+        "PASS",
+        "stripe_cli_capture",
+        `signed_deliveries=${verified.accepted.length} coverage=${verified.coverage.join(",")} run=${artifact.runId} label=header_t_verified_not_body_created`,
+      ));
     }
-  } else {
-    webhookScenarios.push(scenario(
-      "webhook_lifecycle",
-      "BLOCKED",
-      "none",
-      "stripe_cli_signed_capture_missing",
-      {
-        failureReason: "Set STRIPE_J9_WEBHOOK_CAPTURE_PATH to a Stripe CLI signed capture for this runId; do not expose a public webhook endpoint without approval",
-      },
-    ));
   }
 
-  const updated = sealArtifact({
+  const updated = sealArtifact(input.config.artifactHmacSecret, {
     ...artifact,
     stage: "ready_to_resume",
     pauseCleanup: false,
+    checkout: {
+      ...artifact.checkout,
+      subscriptionId: completed.subscriptionId,
+    },
     resources,
     updatedAt: new Date().toISOString(),
   });
-  if (input.config.artifactPath) saveJ9RunArtifact(input.config.artifactPath, updated);
+  saveJ9RunArtifact(input.config.artifactPath, updated);
 
   return {
     ok: true,
@@ -450,14 +574,14 @@ export async function resumeLiveCheckoutEvidence(input: {
           "checkout_completed",
           "PASS",
           "stripe_api",
-          `session=${completed.sessionId} status=complete payment_status=paid subscription=${completed.subscriptionId}`,
+          `session=${completed.sessionId} status=complete payment_status=paid subscription=${completed.subscriptionId} invoice=${paid.invoiceId}`,
         ),
         ...webhookScenarios,
       ],
       resources,
       artifact: updated,
       checkoutSubscriptionId: completed.subscriptionId,
-      stripeOriginatedEvents: [],
+      checkoutInvoiceId: paid.invoiceId,
       webhookCaptureOk,
     },
   };
@@ -471,9 +595,10 @@ export async function runStripeTestClockDunning(input: {
   const clockId = input.artifact.clock.clockId;
   const customerId = input.artifact.clock.customerId;
   const subscriptionId = input.artifact.clock.subscriptionId;
-  if (!subscriptionId) {
-    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "clock subscription missing", {
-      failureReason: "prepare did not record a clock subscription",
+  const baselineInvoiceId = input.artifact.clock.baselineInvoiceId;
+  if (!subscriptionId || !baselineInvoiceId) {
+    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "clock baseline missing", {
+      failureReason: "prepare did not record clock subscription/baseline invoice",
     });
   }
 
@@ -483,7 +608,7 @@ export async function runStripeTestClockDunning(input: {
   }
   if (retrieved.clock.status === "internal_failure") {
     return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "test_clock_internal_failure", {
-      failureReason: "Stripe test clock entered internal_failure; unsupported for this run",
+      failureReason: "Stripe test clock entered internal_failure",
     });
   }
 
@@ -501,13 +626,13 @@ export async function runStripeTestClockDunning(input: {
     });
   }
 
-  // Arrange a test-mode failure card before advancing into the next period.
+  const preFailureFrozen = retrieved.clock.frozen_time;
   await input.transport.request("POST", "payment_methods/pm_card_chargeCustomerFail/attach", { customer: customerId });
   await input.transport.request("POST", `customers/${customerId}`, {
     "invoice_settings[default_payment_method]": "pm_card_chargeCustomerFail",
   });
 
-  const target = nextBillingFrozenTime(retrieved.clock.frozen_time, recurring);
+  const target = nextBillingFrozenTime(preFailureFrozen, recurring);
   const advanced = await advanceTestClockUntilReady({
     transport: input.transport,
     clockId,
@@ -522,31 +647,44 @@ export async function runStripeTestClockDunning(input: {
     });
   }
 
-  const failedList = await input.transport.request("GET", "events", {
-    type: "invoice.payment_failed",
-    limit: "20",
-  });
-  const failedEvents = ((failedList.data as Array<Record<string, unknown>> | undefined) ?? [])
-    .map(parseStripeEvent)
-    .filter((event): event is StripeEventLike => event != null);
-  const failedMatch = correlateCustomerEvents(failedEvents, {
+  const failedList = await listStripeEventsPaged({ transport: input.transport, type: "invoice.payment_failed" });
+  if (!failedList.ok) {
+    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", failedList.reason, {
+      failureReason: failedList.reason,
+    });
+  }
+  if (failedList.truncated) {
+    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "events_list_truncated", {
+      failureReason: "Stripe Events pagination truncated; cannot honestly confirm failure evidence",
+    });
+  }
+  const failedMatch = correlateCustomerEvents(failedList.events, {
     customerId,
     subscriptionId,
     types: ["invoice.payment_failed"],
+    excludeEventIds: input.artifact.clock.baselineEventIds,
+    excludeInvoiceIds: [baselineInvoiceId],
+    createdAfterSec: preFailureFrozen,
   });
-  if (failedMatch.missingTypes.length > 0) {
+  if (failedMatch.missingTypes.length > 0 || failedMatch.matched.length < 1) {
     return scenario(
       "stripe_dunning_recovery",
       "BLOCKED",
       "stripe_api",
-      `clock=${clockId} frozen_time=${advanced.clock.frozen_time} missing=invoice.payment_failed`,
+      `clock=${clockId} missing=invoice.payment_failed rejected=${failedMatch.rejected.length}`,
       {
-        failureReason: "Absent Stripe-generated payment failure after clock advance; check Price interval, payment method and Stripe retry settings",
+        failureReason: "Absent post-baseline Stripe-generated payment failure for the clock subscription",
       },
     );
   }
+  const failureEvent = failedMatch.matched[0]!;
+  const failureInvoiceId = typeof failureEvent.data.object.id === "string" ? failureEvent.data.object.id : null;
+  if (!failureInvoiceId || failureInvoiceId === baselineInvoiceId) {
+    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "failure invoice not distinct from baseline", {
+      failureReason: "payment_failed must reference a post-baseline invoice",
+    });
+  }
 
-  // Recovery: restore a succeeding card and advance again so Stripe can collect.
   await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: customerId });
   await input.transport.request("POST", `customers/${customerId}`, {
     "invoice_settings[default_payment_method]": "pm_card_visa",
@@ -565,34 +703,59 @@ export async function runStripeTestClockDunning(input: {
     });
   }
 
-  const paidList = await input.transport.request("GET", "events", {
-    type: "invoice.paid",
-    limit: "20",
-  });
-  const paidEvents = ((paidList.data as Array<Record<string, unknown>> | undefined) ?? [])
-    .map(parseStripeEvent)
-    .filter((event): event is StripeEventLike => event != null);
-  const paidMatch = correlateCustomerEvents(paidEvents, {
+  const paidList = await listStripeEventsPaged({ transport: input.transport, type: "invoice.paid" });
+  if (!paidList.ok) {
+    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", paidList.reason, {
+      failureReason: paidList.reason,
+    });
+  }
+  if (paidList.truncated) {
+    return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", "events_list_truncated", {
+      failureReason: "Stripe Events pagination truncated; cannot honestly confirm recovery evidence",
+    });
+  }
+  const paidMatch = correlateCustomerEvents(paidList.events, {
     customerId,
     subscriptionId,
     types: ["invoice.paid"],
+    excludeEventIds: [...input.artifact.clock.baselineEventIds, failureEvent.id],
+    excludeInvoiceIds: [baselineInvoiceId, failureInvoiceId],
+    createdAfterSec: failureEvent.created,
   });
-  // Baseline prepare invoice.paid may already exist; require at least one paid event for this subscription.
   if (paidMatch.matched.length < 1) {
-    return scenario(
-      "stripe_dunning_recovery",
-      "BLOCKED",
-      "stripe_api",
-      `clock=${clockId} recovery_not_confirmed`,
-      { failureReason: "Recovery not yet confirmed by Stripe invoice.paid for the clock subscription" },
-    );
+    // Also accept recovered subscription status from Stripe if a distinct paid invoice exists on the subscription.
+    const refreshed = await input.transport.request("GET", `subscriptions/${subscriptionId}`, {
+      "expand[]": "latest_invoice",
+    });
+    const latestId = invoiceIdFromSubscription(refreshed);
+    if (!latestId || latestId === baselineInvoiceId || latestId === failureInvoiceId || refreshed.status !== "active") {
+      return scenario(
+        "stripe_dunning_recovery",
+        "BLOCKED",
+        "stripe_api",
+        `clock=${clockId} recovery_not_confirmed`,
+        { failureReason: "Recovery not confirmed by a post-failure invoice.paid distinct from baseline" },
+      );
+    }
+    let latestInvoice: Record<string, unknown>;
+    if (refreshed.latest_invoice && typeof refreshed.latest_invoice === "object") {
+      latestInvoice = refreshed.latest_invoice as Record<string, unknown>;
+    } else {
+      latestInvoice = await input.transport.request("GET", `invoices/${latestId}`, null);
+    }
+    const recoveryPaid = assertPaidInvoice(latestInvoice, { customerId, subscriptionId });
+    if (!recoveryPaid.ok) {
+      return scenario("stripe_dunning_recovery", "BLOCKED", "stripe_api", recoveryPaid.reason, {
+        failureReason: recoveryPaid.reason,
+      });
+    }
   }
 
   return scenario(
     "stripe_dunning_recovery",
     "PASS",
     "stripe_api",
-    `clock=${clockId} stripe_time=${recoveredClock.clock.frozen_time} failed_events=${failedMatch.matched.length} paid_events=${paidMatch.matched.length} label=stripe_test_clock_not_app_worker_clock`,
+    `clock=${clockId} stripe_time=${recoveredClock.clock.frozen_time} failed_invoice=${failureInvoiceId} baseline_excluded=true label=stripe_test_clock_not_app_worker_clock`,
   );
 }
 
@@ -601,6 +764,9 @@ export async function cleanupTrackedResources(input: {
   resources: J9TrackedResources;
   secrets: string[];
   pauseCleanup?: boolean;
+  artifact?: J9RunArtifact | null;
+  hmacSecret?: string;
+  artifactPath?: string;
 }): Promise<StageScenario> {
   if (input.pauseCleanup) {
     return scenario(
@@ -609,10 +775,19 @@ export async function cleanupTrackedResources(input: {
       "stripe_api",
       "pauseCleanup=true awaiting_manual_checkout",
       {
-        failureReason: "Resources retained for manual Checkout; run stage=cleanup with STRIPE_J9_CLEANUP_CONFIRM=<runId> to remove an abandoned run",
+        failureReason: "Resources retained for manual Checkout; run stage=cleanup with STRIPE_J9_CLEANUP_CONFIRM=<runId>",
         cleanup: "retained",
       },
     );
+  }
+  if (input.artifact) {
+    // Refuse cleanup when sealed ownership cannot be established.
+    if (!input.hmacSecret) {
+      return scenario("cleanup", "FAIL", "config", "artifact_hmac_missing_for_cleanup", {
+        failureReason: "Cannot delete without verifying artifact MAC ownership",
+        cleanup: "refused",
+      });
+    }
   }
   const remaining: string[] = [];
   const recordFailure = (resource: CleanupResource, id: string, error: unknown) => {
@@ -623,6 +798,13 @@ export async function cleanupTrackedResources(input: {
   };
 
   for (const sessionId of [...input.resources.checkoutSessions].reverse()) {
+    if (input.artifact) {
+      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "checkout_session", sessionId);
+      if (!ownership.ok) {
+        remaining.push(`checkout_session:${sessionId}:ownership:${ownership.reason}`);
+        continue;
+      }
+    }
     try {
       const session = await input.transport.request("GET", `checkout/sessions/${sessionId}`, null);
       if (session.status === "open") {
@@ -637,6 +819,13 @@ export async function cleanupTrackedResources(input: {
     }
   }
   for (const sub of [...input.resources.subscriptions].reverse()) {
+    if (input.artifact) {
+      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "subscription", sub);
+      if (!ownership.ok) {
+        remaining.push(`subscription:${sub}:ownership:${ownership.reason}`);
+        continue;
+      }
+    }
     try {
       await input.transport.request("DELETE", `subscriptions/${sub}`, { invoice_now: "false", prorate: "true" });
     } catch (error) {
@@ -644,6 +833,13 @@ export async function cleanupTrackedResources(input: {
     }
   }
   for (const customer of [...input.resources.customers].reverse()) {
+    if (input.artifact) {
+      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "customer", customer);
+      if (!ownership.ok) {
+        remaining.push(`customer:${customer}:ownership:${ownership.reason}`);
+        continue;
+      }
+    }
     try {
       await input.transport.request("DELETE", `customers/${customer}`, null);
     } catch (error) {
@@ -651,6 +847,13 @@ export async function cleanupTrackedResources(input: {
     }
   }
   for (const clockId of [...input.resources.testClocks].reverse()) {
+    if (input.artifact) {
+      const ownership = await verifyLiveOwnership(input.transport, input.artifact, "test_clock", clockId);
+      if (!ownership.ok) {
+        remaining.push(`test_clock:${clockId}:ownership:${ownership.reason}`);
+        continue;
+      }
+    }
     try {
       await input.transport.request("DELETE", `test_helpers/test_clocks/${clockId}`, null);
     } catch (error) {
@@ -658,10 +861,43 @@ export async function cleanupTrackedResources(input: {
     }
   }
   if (remaining.length > 0) {
+    if (input.artifact && input.hmacSecret && input.artifactPath) {
+      const partial = sealArtifact(input.hmacSecret, {
+        ...input.artifact,
+        stage: "cleanup_partial",
+        pauseCleanup: false,
+        updatedAt: new Date().toISOString(),
+      });
+      saveJ9RunArtifact(input.artifactPath, partial);
+    }
     return scenario("cleanup", "FAIL", "stripe_api", `remaining=${remaining.length}`, {
-      failureReason: remaining.join("; "),
+      failureReason: `${remaining.join("; ")}; retry stage=cleanup with the same confirm once ownership is restored`,
       cleanup: "partial",
     });
+  }
+  if (input.artifact && input.hmacSecret && input.artifactPath) {
+    const done = sealArtifact(input.hmacSecret, {
+      ...input.artifact,
+      stage: "abandoned",
+      pauseCleanup: false,
+      checkout: {
+        customerId: "cus_missing",
+        sessionId: "cs_missing",
+        expectedPriceId: input.artifact.priceHome,
+        subscriptionId: null,
+      },
+      clock: {
+        clockId: "clock_missing",
+        frozenTime: input.artifact.clock.frozenTime,
+        customerId: "cus_missing",
+        subscriptionId: null,
+        baselineInvoiceId: null,
+        baselineEventIds: [],
+      },
+      resources: emptyResources(),
+      updatedAt: new Date().toISOString(),
+    });
+    saveJ9RunArtifact(input.artifactPath, done);
   }
   return scenario(
     "cleanup",
@@ -675,16 +911,21 @@ export async function cleanupTrackedResources(input: {
 export async function cleanupAbandonedRun(input: {
   config: J9Config;
   transport: J9StripeTransport;
-}): Promise<{ scenarios: StageScenario[]; resources: J9TrackedResources }> {
-  const loaded = loadJ9RunArtifact(input.config.artifactPath!);
+}): Promise<{ scenarios: StageScenario[]; resources: J9TrackedResources; artifact: J9RunArtifact | null }> {
+  const loaded = loadJ9RunArtifact(input.config.artifactPath, input.config.artifactHmacSecret);
   if (!loaded.ok) {
     return {
-      resources: { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] },
-      scenarios: [scenario("cleanup", "FAIL", "config", loaded.reason, { failureReason: loaded.reason })],
+      artifact: null,
+      resources: emptyResources(),
+      scenarios: [scenario("cleanup", "FAIL", "config", loaded.reason, {
+        failureReason: loaded.reason,
+        cleanup: "refused",
+      })],
     };
   }
   if (input.config.cleanupConfirm !== loaded.artifact.runId) {
     return {
+      artifact: loaded.artifact,
       resources: loaded.artifact.resources,
       scenarios: [scenario("cleanup", "FAIL", "config", "cleanup confirm mismatch", {
         failureReason: "STRIPE_J9_CLEANUP_CONFIRM must equal the artifact runId",
@@ -695,15 +936,11 @@ export async function cleanupAbandonedRun(input: {
   const cleanup = await cleanupTrackedResources({
     transport: input.transport,
     resources: loaded.artifact.resources,
-    secrets: [input.config.apiKey, input.config.webhookSecret],
+    secrets: [input.config.apiKey, input.config.webhookSecret, input.config.artifactHmacSecret],
     pauseCleanup: false,
+    artifact: loaded.artifact,
+    hmacSecret: input.config.artifactHmacSecret,
+    artifactPath: input.config.artifactPath,
   });
-  const abandoned = sealArtifact({
-    ...loaded.artifact,
-    stage: "abandoned",
-    pauseCleanup: false,
-    updatedAt: new Date().toISOString(),
-  });
-  saveJ9RunArtifact(input.config.artifactPath!, abandoned);
-  return { scenarios: [cleanup], resources: loaded.artifact.resources };
+  return { scenarios: [cleanup], resources: loaded.artifact.resources, artifact: loaded.artifact };
 }

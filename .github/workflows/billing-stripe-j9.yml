@@ -1,14 +1,24 @@
 # J9 billing lifecycle against Stripe test mode. Not on the daily gate.
 # Transport must stay live. Fake-unit PASS is not live acceptance.
-# Hosted Checkout completion is manual (prepare → browser → resume).
-# Stripe CLI signed webhook capture is required for live webhook evidence.
-# Do not expose a public production webhook endpoint from this workflow.
+#
+# Operator journey:
+# 1) Dispatch stage=prepare. Note github.run_id from the run URL.
+# 2) Download the uploaded j9-run-artifact, open checkout URL, pay with a test card.
+# 3) Capture signed webhooks with Stripe CLI into artifacts/j9/webhook-capture.json
+#    (schema v2) and upload as artifact name j9-webhook-capture from a small helper
+#    run, or place the file before resume when running locally.
+# 4) Dispatch stage=resume with prepare_run_id=<prepare github.run_id>
+#    and optionally capture_run_id=<run that uploaded j9-webhook-capture>.
+# 5) Abandoned cleanup: stage=cleanup, prepare_run_id=..., cleanup_confirm=<runId>.
+#
+# Paths are fixed under artifacts/j9/. Workflow inputs are never used as shell paths.
+# Never put Stripe secrets, webhook secrets, or card details in artifacts.
 name: Fizot billing Stripe test mode (J9)
 on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "full | prepare | resume | cleanup"
+        description: "prepare | resume | cleanup | full"
         required: true
         default: prepare
         type: choice
@@ -17,13 +27,13 @@ on:
           - resume
           - cleanup
           - full
-      artifact_path:
-        description: "Path for the non-secret run artifact JSON"
-        required: true
-        default: artifacts/j9/run.json
+      prepare_run_id:
+        description: "GitHub Actions run id from prepare (digits). Required for resume/cleanup."
+        required: false
+        default: ""
         type: string
-      webhook_capture_path:
-        description: "Optional Stripe CLI signed capture JSON (resume)"
+      capture_run_id:
+        description: "GitHub Actions run id that uploaded j9-webhook-capture (digits)."
         required: false
         default: ""
         type: string
@@ -35,6 +45,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   j9:
@@ -51,26 +62,68 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      - name: Validate handoff inputs
+        env:
+          STAGE: ${{ inputs.stage }}
+          PREPARE_RUN_ID: ${{ inputs.prepare_run_id }}
+          CAPTURE_RUN_ID: ${{ inputs.capture_run_id }}
+          CLEANUP_CONFIRM: ${{ inputs.cleanup_confirm }}
+        run: |
+          set -euo pipefail
+          case "$STAGE" in
+            prepare|resume|cleanup|full) ;;
+            *) echo "invalid stage"; exit 1 ;;
+          esac
+          if [[ "$STAGE" == "resume" || "$STAGE" == "cleanup" ]]; then
+            [[ "$PREPARE_RUN_ID" =~ ^[0-9]+$ ]] || { echo "prepare_run_id must be digits"; exit 1; }
+          fi
+          if [[ -n "$CAPTURE_RUN_ID" ]]; then
+            [[ "$CAPTURE_RUN_ID" =~ ^[0-9]+$ ]] || { echo "capture_run_id must be digits"; exit 1; }
+          fi
+          if [[ "$STAGE" == "cleanup" ]]; then
+            [[ "$CLEANUP_CONFIRM" =~ ^j9run_[0-9a-f]+$ ]] || { echo "cleanup_confirm must be j9run_…"; exit 1; }
+          fi
+
+      - name: Download prepare run artifact
+        if: ${{ inputs.stage == 'resume' || inputs.stage == 'cleanup' }}
+        uses: actions/download-artifact@634f93cb3702e9abc76e11045e0aa28c4201ca48 # v5.0.0
+        with:
+          name: j9-run-artifact
+          path: artifacts/j9
+          run-id: ${{ inputs.prepare_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download webhook capture artifact
+        if: ${{ inputs.stage == 'resume' && inputs.capture_run_id != '' }}
+        uses: actions/download-artifact@634f93cb3702e9abc76e11045e0aa28c4201ca48 # v5.0.0
+        with:
+          name: j9-webhook-capture
+          path: artifacts/j9
+          run-id: ${{ inputs.capture_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Run J9 stage
         env:
           STRIPE_J9_MODE: test
           STRIPE_J9_TRANSPORT: live
           STRIPE_J9_STAGE: ${{ inputs.stage }}
-          STRIPE_J9_ARTIFACT_PATH: ${{ inputs.artifact_path }}
-          STRIPE_J9_WEBHOOK_CAPTURE_PATH: ${{ inputs.webhook_capture_path }}
+          STRIPE_J9_PREPARE_RUN_ID: ${{ inputs.prepare_run_id }}
           STRIPE_J9_CLEANUP_CONFIRM: ${{ inputs.cleanup_confirm }}
           STRIPE_TEST_API_KEY: ${{ secrets.STRIPE_TEST_API_KEY }}
           STRIPE_TEST_WEBHOOK_SECRET: ${{ secrets.STRIPE_TEST_WEBHOOK_SECRET }}
+          STRIPE_J9_ARTIFACT_HMAC_SECRET: ${{ secrets.STRIPE_J9_ARTIFACT_HMAC_SECRET }}
           STRIPE_J9_PRICE_HOME: ${{ vars.STRIPE_J9_PRICE_HOME }}
           STRIPE_J9_PRICE_TEAM: ${{ vars.STRIPE_J9_PRICE_TEAM }}
           FIZOT_BILLING_SUCCESS_URL: https://admin.example.invalid/billing/success
           FIZOT_BILLING_CANCEL_URL: https://admin.example.invalid/billing/cancel
           FIZOT_BILLING_PORTAL_RETURN_URL: https://admin.example.invalid/billing
-        run: node --experimental-strip-types scripts/fizot/billing-j9.mjs --stage=${{ inputs.stage }} --artifact=${{ inputs.artifact_path }}
-      - name: Upload non-secret J9 artifact
+        run: node --experimental-strip-types scripts/fizot/billing-j9.mjs
+
+      - name: Upload non-secret J9 run artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: j9-run-artifact
-          path: ${{ inputs.artifact_path }}
+          path: artifacts/j9/run.json
           if-no-files-found: ignore

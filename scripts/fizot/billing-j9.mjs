@@ -2,7 +2,7 @@
 /**
  * J9 Stripe test-mode driver. Credentials alone never exit 0.
  * Stages: full (default), prepare, resume, cleanup.
- * Live acceptance requires prepare → manual Checkout → resume with signed webhook capture.
+ * Artifact and capture paths are fixed under artifacts/j9/ (see j9-config).
  */
 import { formatJ9Report, runJ9 } from "../../server/fizot/billing/j9-driver.ts";
 
@@ -13,16 +13,14 @@ function argValue(name) {
 }
 
 const stage = argValue("stage") ?? process.env.STRIPE_J9_STAGE ?? "full";
-const artifact = argValue("artifact") ?? process.env.STRIPE_J9_ARTIFACT_PATH ?? "";
-const capture = argValue("webhook-capture") ?? process.env.STRIPE_J9_WEBHOOK_CAPTURE_PATH ?? "";
 const confirm = argValue("confirm") ?? process.env.STRIPE_J9_CLEANUP_CONFIRM ?? "";
+const prepareRunId = argValue("prepare-run-id") ?? process.env.STRIPE_J9_PREPARE_RUN_ID ?? "";
 
 const env = {
   ...process.env,
   STRIPE_J9_STAGE: stage,
-  ...(artifact ? { STRIPE_J9_ARTIFACT_PATH: artifact } : {}),
-  ...(capture ? { STRIPE_J9_WEBHOOK_CAPTURE_PATH: capture } : {}),
   ...(confirm ? { STRIPE_J9_CLEANUP_CONFIRM: confirm } : {}),
+  ...(prepareRunId ? { STRIPE_J9_PREPARE_RUN_ID: prepareRunId } : {}),
 };
 
 const report = await runJ9({
@@ -31,6 +29,9 @@ const report = await runJ9({
 });
 console.log(formatJ9Report(report));
 if (report.checkoutUrl) {
-  console.error(`j9_operator Open this Checkout URL in a browser with a Stripe test card, then resume:\n${report.checkoutUrl}`);
+  console.error(`j9_operator Open this Checkout URL with a Stripe test card, then resume the SAME run:\n${report.checkoutUrl}`);
+}
+if (report.runId) {
+  console.error(`j9_operator runId=${report.runId} (use as cleanup confirm; store GitHub prepare run id for Actions resume)`);
 }
 process.exit(report.exitCode);
