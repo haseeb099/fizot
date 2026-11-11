@@ -195,7 +195,7 @@ export async function runCheckoutSubscriptionPaymentAndCredit(input: {
       "subscription_payment_and_credit",
       "PASS",
       "stripe_api",
-      `subscription=${input.subscriptionId} invoice=${paid.invoiceId} source=checkout_session_subscription separate_api_subscription=false duplicate_grant=false credit_checkpoint=${checkpointed ? "hit" : "set"} balance=${summary.balanceMicroGbp}`,
+      `subscription=${input.subscriptionId} invoice=${paid.invoiceId} source=checkout_session_subscription separate_api_subscription=false duplicate_grant=false credit_checkpoint=${checkpointed ? "hit" : "set"} credit_evidence=isolated_in_memory_billing_logic balance=${summary.balanceMicroGbp}`,
     ),
   };
 }

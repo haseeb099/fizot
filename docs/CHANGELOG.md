@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-56 J9 ambiguous Test Clock advance + credit evidence label (P4.4 / FZ-27)
+
+- Why we changed it: Resume of `*_advance_committed` could silently re-POST `/advance` when Stripe was still ready below target, and harness credit checks overstated durable exactly-once grants.
+- How it works: Committed checkpoints reconcile only (`allowAdvance: false`). Ready-below-target → `advance_outcome_ambiguous` BLOCKED with resources retained. Fresh advances POST only in the turn that records the committed intent. Credit scenario evidence is labelled `isolated_in_memory_billing_logic`.
+- Why it is necessary: Ambiguous advance outcomes need operator review, not silent replay; credit claims must match the in-memory test store.
+- Impact: No live Stripe dispatch. Live acceptance still blocked until secrets/Price/Checkout/capture exist.
+- Rollback? Revert the CL-56 commit on `fz-27-j9-live-evidence` / PR #24.
+- Files / Patch IDs: PATCH-47.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-55 J9 Test Clock authenticated checkpoints for safe resume (P4.4 / FZ-27)
 
 - Why we changed it: Resume could repeat Test Clock advances, payment-method flips and credit grants after a crash mid-dunning, and could confuse baseline invoices with recovery.

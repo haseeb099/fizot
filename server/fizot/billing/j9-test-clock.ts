@@ -20,6 +20,12 @@ export type AdvancePollOptions = {
   sleepMs?: number;
   maxAttempts?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * When false, never POST /advance. Used after an authenticated
+   * `*_advance_committed` checkpoint: reconcile Stripe state only.
+   * Ready-but-below-target is `advance_outcome_ambiguous` (operator review).
+   */
+  allowAdvance?: boolean;
 };
 
 export type AdvancePollResult =
@@ -75,13 +81,16 @@ export type EnsureClockResult =
   | { ok: false; reason: string; status?: string };
 
 /**
- * Bring a Test Clock to target frozen_time without repeating Stripe advances.
- * If frozen_time is already >= target, only polls for ready — never POSTs advance.
+ * Bring a Test Clock to target frozen_time.
+ * Fresh advances (`allowAdvance: true`) POST only when ready and below target.
+ * Prior committed advances (`allowAdvance: false`) never POST: at/past target or
+ * advancing → poll; ready below target → `advance_outcome_ambiguous`.
  */
 export async function ensureTestClockFrozenAt(options: AdvancePollOptions): Promise<EnsureClockResult> {
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const maxAttempts = options.maxAttempts ?? 40;
   const sleepMs = options.sleepMs ?? 0;
+  const allowAdvance = options.allowAdvance !== false;
 
   const initial = await retrieveTestClock(options.transport, options.clockId);
   if (!initial.ok) return { ok: false, reason: initial.reason };
@@ -93,9 +102,11 @@ export async function ensureTestClockFrozenAt(options: AdvancePollOptions): Prom
   if (initial.clock.frozen_time >= options.targetFrozenTime) {
     skippedAdvance = true;
   } else if (initial.clock.status === "advancing") {
-    // A prior advance is in flight — poll only; do not POST another advance.
     skippedAdvance = true;
   } else if (initial.clock.status === "ready") {
+    if (!allowAdvance) {
+      return { ok: false, reason: "advance_outcome_ambiguous", status: "ready" };
+    }
     await options.transport.request("POST", `test_helpers/test_clocks/${options.clockId}/advance`, {
       frozen_time: String(options.targetFrozenTime),
     });
@@ -111,6 +122,9 @@ export async function ensureTestClockFrozenAt(options: AdvancePollOptions): Prom
     }
     if (retrieved.clock.status === "ready" && retrieved.clock.frozen_time >= options.targetFrozenTime) {
       return { ok: true, clock: retrieved.clock, skippedAdvance };
+    }
+    if (retrieved.clock.status === "ready" && retrieved.clock.frozen_time < options.targetFrozenTime && !allowAdvance) {
+      return { ok: false, reason: "advance_outcome_ambiguous", status: "ready" };
     }
     if (retrieved.clock.status !== "ready" && retrieved.clock.status !== "advancing") {
       return { ok: false, reason: `test_clock_status=${retrieved.clock.status}`, status: retrieved.clock.status };

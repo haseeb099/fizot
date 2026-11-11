@@ -58,7 +58,7 @@ Artifact paths are **fixed**: `artifacts/j9/run.json` and `artifacts/j9/webhook-
 
 **Test Clock resume checkpoints**
 
-Dunning persists authenticated phases (`baseline` → `fail_pm_set` → `failure_advance_committed` → `failure_advanced` → `failure_confirmed` → `recover_pm_set` → `recovery_advance_committed` → `recovery_advanced` → `recovered`) with fail/recover targets and distinct failure/recovery invoice ids. Before any advance, resume reconciles `frozen_time` from Stripe: if already at/past the target, it polls only and never POSTs `advance` again. Baseline invoices/events never count as recovery. If Stripe state cannot be established, the scenario stays BLOCKED and resources are retained.
+Dunning persists authenticated phases (`baseline` → `fail_pm_set` → `failure_advance_committed` → `failure_advanced` → `failure_confirmed` → `recover_pm_set` → `recovery_advance_committed` → `recovery_advanced` → `recovered`) with fail/recover targets and distinct failure/recovery invoice ids. A fresh `advance` POST is issued only in the same turn that records `*_advance_committed`. On resume of an already-committed checkpoint the driver never POSTs again: at/past target or `advancing` → poll only; `ready` but below target → `BLOCKED` (`advance_outcome_ambiguous`) and retain resources for operator-reviewed recovery. Baseline invoices/events never count as recovery. Checkout credit checkpoint evidence in the harness is **isolated in-memory billing-logic** only; durable credit-ledger exactly-once across Actions runs remains a separate P4.3/J4 acceptance requirement.
 
 **Lifecycle stages (authenticated transitions)**
 

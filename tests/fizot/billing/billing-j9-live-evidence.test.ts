@@ -772,6 +772,140 @@ it("does not re-advance a Test Clock already at the target frozen_time", async (
   expect(second.clock.frozen_time).toBe(2000);
 });
 
+it("blocks reconcile-only when ready but below the committed advance target", async () => {
+  const transport = createFakeStripeTransport();
+  const created = await transport.request("POST", "test_helpers/test_clocks", { frozen_time: "1000", name: "t" });
+  let advances = 0;
+  const original = transport.request.bind(transport);
+  transport.request = async (method, path, params) => {
+    if (method === "POST" && path.endsWith("/advance")) advances += 1;
+    return original(method, path, params);
+  };
+  const result = await ensureTestClockFrozenAt({
+    transport,
+    clockId: String(created.id),
+    targetFrozenTime: 2000,
+    allowAdvance: false,
+    sleepMs: 0,
+    maxAttempts: 3,
+  });
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.reason).toBe("advance_outcome_ambiguous");
+  expect(advances).toBe(0);
+});
+
+it("polls an advancing clock without posting when reconcile-only", async () => {
+  const transport = createFakeStripeTransport();
+  transport.clockAdvanceStatus = "advancing";
+  const created = await transport.request("POST", "test_helpers/test_clocks", { frozen_time: "1000", name: "t" });
+  await transport.request("POST", `test_helpers/test_clocks/${String(created.id)}/advance`, { frozen_time: "2000" });
+  let advances = 0;
+  let gets = 0;
+  const original = transport.request.bind(transport);
+  transport.request = async (method, path, params) => {
+    if (method === "POST" && path.endsWith("/advance")) {
+      advances += 1;
+      throw new Error("unexpected_advance_post");
+    }
+    const out = await original(method, path, params);
+    if (method === "GET" && path.startsWith("test_helpers/test_clocks/")) {
+      gets += 1;
+      if (gets >= 2) return { ...out, status: "ready", frozen_time: 2000 };
+    }
+    return out;
+  };
+  const result = await ensureTestClockFrozenAt({
+    transport,
+    clockId: String(created.id),
+    targetFrozenTime: 2000,
+    allowAdvance: false,
+    sleepMs: 0,
+    maxAttempts: 5,
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.skippedAdvance).toBe(true);
+  expect(advances).toBe(0);
+});
+
+it("reconciles interruption after POST without repeating the advance", async () => {
+  const transport = createFakeStripeTransport();
+  const created = await transport.request("POST", "test_helpers/test_clocks", { frozen_time: "1000", name: "t" });
+  // Simulate: committed intent, POST already sent, clock still advancing toward target.
+  transport.clockAdvanceStatus = "advancing";
+  await transport.request("POST", `test_helpers/test_clocks/${String(created.id)}/advance`, { frozen_time: "2000" });
+  let advances = 0;
+  let gets = 0;
+  const original = transport.request.bind(transport);
+  transport.request = async (method, path, params) => {
+    if (method === "POST" && path.endsWith("/advance")) advances += 1;
+    const out = await original(method, path, params);
+    if (method === "GET" && path.startsWith("test_helpers/test_clocks/")) {
+      gets += 1;
+      if (gets >= 2) return { ...out, status: "ready", frozen_time: 2000 };
+    }
+    return out;
+  };
+  const result = await ensureTestClockFrozenAt({
+    transport,
+    clockId: String(created.id),
+    targetFrozenTime: 2000,
+    allowAdvance: false,
+    sleepMs: 0,
+    maxAttempts: 5,
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.skippedAdvance).toBe(true);
+  expect(advances).toBe(0);
+  expect(result.clock.frozen_time).toBe(2000);
+});
+
+it("keeps failure_advance_committed and blocks when Stripe is ready below target", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const prepared = await prepareAndCompleteCheckout(root, transport);
+  const path = artifactFile(root);
+  const loaded = loadJ9RunArtifact(path, hmacSecret);
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) return;
+  const failTarget = loaded.artifact.clock.frozenTime + 86400 + 3600;
+  const committed = persistArtifactUpdate(hmacSecret, path, loaded.artifact, {
+    checkout: { ...loaded.artifact.checkout, subscriptionId: prepared.subscriptionId },
+    resources: {
+      ...loaded.artifact.resources,
+      subscriptions: [...loaded.artifact.resources.subscriptions, prepared.subscriptionId],
+    },
+    clock: {
+      ...loaded.artifact.clock,
+      dunning: {
+        ...loaded.artifact.clock.dunning,
+        phase: "failure_advance_committed",
+        failTargetFrozenTime: failTarget,
+      },
+    },
+  });
+  let advances = 0;
+  const original = transport.request.bind(transport);
+  transport.request = async (method, pathName, params) => {
+    if (method === "POST" && pathName.endsWith("/advance")) advances += 1;
+    return original(method, pathName, params);
+  };
+  const resumed = await runStripeTestClockDunning({
+    transport,
+    artifact: committed,
+    hmacSecret,
+    artifactPath: path,
+    sleepMs: 0,
+  });
+  expect(resumed.scenario.status).toBe("BLOCKED");
+  expect(resumed.scenario.failureReason).toBe("advance_outcome_ambiguous");
+  expect(advances).toBe(0);
+  expect(resumed.artifact.clock.dunning.phase).toBe("failure_advance_committed");
+  expect(resumed.artifact.clock.dunning.failTargetFrozenTime).toBe(failTarget);
+});
+
 it("resumes Test Clock dunning from authenticated checkpoints without repeating advances", async () => {
   const root = repoFixture();
   const transport = createFakeStripeTransport();
@@ -879,7 +1013,7 @@ it("continues dunning after crash between failure confirmation and recovery adva
   expect(resumed.artifact.clock.dunning.recoveryInvoiceId).not.toBe(loaded.artifact.clock.baselineInvoiceId);
 });
 
-it("records checkout credit invoice checkpoint and keeps fake_unit separate from live acceptance", async () => {
+it("records isolated in-memory credit checkpoint evidence without claiming durable cross-run exactly-once", async () => {
   const root = repoFixture();
   const transport = createFakeStripeTransport();
   const prepared = await prepareAndCompleteCheckout(root, transport);
@@ -896,23 +1030,23 @@ it("records checkout credit invoice checkpoint and keeps fake_unit separate from
   });
   expect(resumed.kind).toBe("live_j9");
   expect(resumed.liveAcceptance).toBe(true);
-  const after = loadJ9RunArtifact(artifactFile(root), hmacSecret);
-  // Completed cleanup clears ids; credit checkpoint is observed during resume via scenario evidence.
-  expect(resumed.scenarios.find((row) => row.scenario === "subscription_payment_and_credit")?.evidence).toContain("credit_checkpoint=");
+  const credit = resumed.scenarios.find((row) => row.scenario === "subscription_payment_and_credit");
+  // In-memory billing-logic evidence only; durable ledger exactly-once stays P4.3/J4.
+  expect(credit?.evidence).toContain("credit_checkpoint=");
+  expect(credit?.evidence).toContain("credit_evidence=isolated_in_memory_billing_logic");
 
   const fake = await runJ9({
     env: {
       STRIPE_J9_MODE: "test",
-      STRIPE_J9_TRANSPORT: "fake",
       STRIPE_TEST_API_KEY: "sk_test_FAKE_KEY_DO_NOT_LEAK_OR_PRINT",
       STRIPE_TEST_WEBHOOK_SECRET: secret,
       STRIPE_J9_PRICE_HOME: "price_j9_test_home",
+      STRIPE_J9_TRANSPORT: "fake",
     },
     transport: createFakeStripeTransport(),
   });
   expect(fake.kind).toBe("fake_unit");
   expect(fake.liveAcceptance).toBe(false);
-  void after;
 });
 
 it("tracks resources on mid-prepare failure for later cleanup", async () => {

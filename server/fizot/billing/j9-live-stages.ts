@@ -696,7 +696,9 @@ export async function runStripeTestClockDunning(input: {
     || dunning.phase === "failure_advanced"
   ) {
     const failTarget = dunning.failTargetFrozenTime!;
-    if (dunning.phase === "fail_pm_set") {
+    // Fresh POST only in the same turn that records the committed intent.
+    const freshFailureAdvance = dunning.phase === "fail_pm_set";
+    if (freshFailureAdvance) {
       dunning = { ...dunning, phase: "failure_advance_committed" };
       persist(dunning);
     }
@@ -704,10 +706,13 @@ export async function runStripeTestClockDunning(input: {
       transport: input.transport,
       clockId,
       targetFrozenTime: failTarget,
+      allowAdvance: freshFailureAdvance,
       ...poll,
     });
     if (!advanced.ok) {
-      const isBlocked = advanced.reason.includes("internal_failure") || advanced.reason.includes("timeout");
+      const isBlocked = advanced.reason.includes("internal_failure")
+        || advanced.reason.includes("timeout")
+        || advanced.reason === "advance_outcome_ambiguous";
       return isBlocked ? blocked(advanced.reason, advanced.reason) : failed(advanced.reason, advanced.reason);
     }
     dunning = { ...dunning, phase: "failure_advanced" };
@@ -777,7 +782,9 @@ export async function runStripeTestClockDunning(input: {
     if (recoverTarget == null) {
       return blocked("recovery_target_missing", "Cannot establish recovery advance target from checkpoint or Stripe state");
     }
-    if (dunning.phase === "recover_pm_set") {
+    // Fresh POST only in the same turn that records the committed intent.
+    const freshRecoveryAdvance = dunning.phase === "recover_pm_set";
+    if (freshRecoveryAdvance) {
       dunning = { ...dunning, phase: "recovery_advance_committed" };
       persist(dunning);
     }
@@ -785,6 +792,7 @@ export async function runStripeTestClockDunning(input: {
       transport: input.transport,
       clockId,
       targetFrozenTime: recoverTarget,
+      allowAdvance: freshRecoveryAdvance,
       ...poll,
     });
     if (!recoveredClock.ok) {
