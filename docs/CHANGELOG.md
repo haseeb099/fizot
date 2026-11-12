@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-57 J9 live integration: invoice ownership, capture upload, clock PM/time (P4.4 / FZ-27)
+
+- Why we changed it: Real Stripe `invoice.paid` events lack Checkout run metadata on the invoice; capture upload had no operator path; Test Clock failure ignored subscription-level PM precedence; fixed Jan-2026 frozen time was unjustified.
+- How it works: Fail-closed ownership proves Session + Subscription `fizot_j9_run_id` (legacy or `parent.subscription_details` invoice association). Pack script + `upload_capture` stage publish `j9-webhook-capture` (7-day retention). Dunning updates subscription `default_payment_method`. Frozen time starts near now; checkpoints/ambiguous-advance safeguards retained.
+- Why it is necessary: Credentialed live J9 cannot PASS without these integrations.
+- Impact: No secrets configured, no Stripe resources created, no live dispatch in this PR.
+- Rollback? Revert the CL-57 commit(s) on `fz-27-j9-live-integration-fixes`.
+- Files / Patch IDs: PATCH-48.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-56 J9 ambiguous Test Clock advance + credit evidence label (P4.4 / FZ-27)
 
 - Why we changed it: Resume of `*_advance_committed` could silently re-POST `/advance` when Stripe was still ready below target, and harness credit checks overstated durable exactly-once grants.

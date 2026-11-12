@@ -20,6 +20,18 @@ export type FakeStripeTransport = J9StripeTransport & {
   markCheckoutComplete(sessionId: string): void;
   /** Fake-only: emit a Stripe-shaped event for Events API correlation tests. */
   pushEvent(event: Record<string, unknown>): void;
+  /**
+   * Fake-only: register Session/Subscription/Invoice objects for capture ownership proofs.
+   * Invoice metadata may be empty; run id lives on Session + Subscription.
+   */
+  seedOwnedCaptureJourney(input: {
+    runId: string;
+    customerId: string;
+    subscriptionId: string;
+    sessionId: string;
+    invoiceId: string;
+    invoiceAssociation?: "legacy" | "parent";
+  }): void;
   /** Fake-only: set clock status after advance (ready|advancing|internal_failure). */
   clockAdvanceStatus: "ready" | "advancing" | "internal_failure";
   /** Test hook: refuse quantity updates so Stripe stays at 1. */
@@ -150,13 +162,66 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
           customer,
           subscription: subId,
           amount_paid: 2399,
-          metadata: { ...metadata },
+          metadata: {},
         });
         (session as { latest_invoice_id?: string }).latest_invoice_id = invoiceId;
       }
     },
     pushEvent(event) {
       events.push(event);
+    },
+    seedOwnedCaptureJourney(input) {
+      if (!customers.includes(input.customerId)) customers.push(input.customerId);
+      if (!customerObjects.has(input.customerId)) {
+        customerObjects.set(input.customerId, {
+          id: input.customerId,
+          object: "customer",
+          livemode: false,
+          email: "j9-capture@example.invalid",
+          invoice_settings: { default_payment_method: null },
+          metadata: { fizot_j9_run_id: input.runId },
+        });
+      }
+      if (!subscriptions.includes(input.subscriptionId)) subscriptions.push(input.subscriptionId);
+      subItems.set(input.subscriptionId, {
+        id: `si_${input.subscriptionId}`,
+        price: "price_j9_test_home",
+        quantity: 1,
+        customer: input.customerId,
+        metadata: { fizot_j9_run_id: input.runId, plan: "home", workspace_id: "ws_capture" },
+        defaultPaymentMethod: "pm_card_visa",
+      });
+      if (!checkoutSessions.includes(input.sessionId)) checkoutSessions.push(input.sessionId);
+      sessions.set(input.sessionId, {
+        id: input.sessionId,
+        object: "checkout.session",
+        livemode: false,
+        mode: "subscription",
+        status: "complete",
+        payment_status: "paid",
+        customer: input.customerId,
+        subscription: input.subscriptionId,
+        metadata: { fizot_j9_run_id: input.runId },
+      });
+      const invoice: Record<string, unknown> = {
+        id: input.invoiceId,
+        object: "invoice",
+        livemode: false,
+        status: "paid",
+        paid: true,
+        customer: input.customerId,
+        amount_paid: 2399,
+        metadata: {},
+      };
+      if (input.invoiceAssociation === "parent") {
+        invoice.parent = {
+          type: "subscription_details",
+          subscription_details: { subscription: input.subscriptionId, metadata: { fizot_j9_run_id: input.runId } },
+        };
+      } else {
+        invoice.subscription = input.subscriptionId;
+      }
+      invoices.set(input.invoiceId, invoice);
     },
     async request(method, path, params = null) {
       seq += 1;
@@ -199,8 +264,9 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
           for (const [subId, item] of subItems) {
             const customer = customerObjects.get(item.customer);
             if (!customer || customer.test_clock !== id) continue;
-            const defaultPm = (customer.invoice_settings as { default_payment_method: string | null } | undefined)?.default_payment_method
-              ?? item.defaultPaymentMethod;
+            // Stripe precedence: subscription default_payment_method before customer invoice_settings.
+            const defaultPm = item.defaultPaymentMethod
+              ?? (customer.invoice_settings as { default_payment_method: string | null } | undefined)?.default_payment_method;
             seq += 1;
             const invoiceId = `in_clock_${seq}`;
             if (defaultPm === "pm_card_chargeCustomerFail") {
@@ -442,7 +508,7 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
           customer,
           subscription: id,
           amount_paid: invoiceStatus === "paid" ? 2399 : 0,
-          metadata: { ...metadata },
+          metadata: {},
         };
         invoices.set(invoiceId, invoice);
         const expandInvoice = params?.["expand[]"] === "latest_invoice" || params?.["expand[0]"] === "latest_invoice";
@@ -466,23 +532,36 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
         }
         return { ...invoice };
       }
-      if (method === "POST" && /^subscriptions\/[^/]+$/.test(path) && params?.["items[0][quantity]"]) {
+      if (method === "POST" && /^subscriptions\/[^/]+$/.test(path)) {
         const id = path.split("/")[1]!;
         if (deletedSubs.has(id)) {
           throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:subscription_missing" });
         }
         const item = subItems.get(id);
-        const itemId = params["items[0][id]"];
-        if (!item || !itemId || itemId !== item.id) {
-          throw new J9StripeError({ status: 400, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_400:subscription_item_mismatch" });
+        if (!item) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:subscription_missing" });
         }
-        if (!transport.freezeQuantity) {
-          item.quantity = Number(params["items[0][quantity]"]);
-          quantities.push({ subscriptionId: id, quantity: item.quantity });
+        if (params?.["items[0][quantity]"]) {
+          const itemId = params["items[0][id]"];
+          if (!itemId || itemId !== item.id) {
+            throw new J9StripeError({ status: 400, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_400:subscription_item_mismatch" });
+          }
+          if (!transport.freezeQuantity) {
+            item.quantity = Number(params["items[0][quantity]"]);
+            quantities.push({ subscriptionId: id, quantity: item.quantity });
+          }
+        }
+        if (params?.default_payment_method) {
+          item.defaultPaymentMethod = params.default_payment_method;
         }
         return {
           id,
           object: "subscription",
+          livemode: false,
+          status: "active",
+          customer: item.customer,
+          metadata: item.metadata,
+          default_payment_method: item.defaultPaymentMethod,
           items: { data: [{ id: item.id, quantity: item.quantity, price: { id: item.price } }] },
         };
       }

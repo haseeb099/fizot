@@ -67,11 +67,11 @@ function writeSignedCapture(
     subscriptionId: string;
     sessionId: string;
     omitRunMetadata?: boolean;
+    invoiceAssociation?: "legacy" | "parent";
   },
 ): void {
   const created = Math.floor(Date.now() / 1000) - 10;
   const sessionMeta = input.omitRunMetadata ? {} : { fizot_j9_run_id: input.runId };
-  const paidMeta = input.omitRunMetadata ? {} : { fizot_j9_run_id: input.runId };
   const sessionObj = {
     id: input.sessionId,
     object: "checkout.session",
@@ -79,13 +79,21 @@ function writeSignedCapture(
     subscription: input.subscriptionId,
     metadata: sessionMeta,
   };
-  const invoiceObj = {
+  // Realistic Stripe invoices often have empty metadata; ownership is on Session/Subscription.
+  const invoiceObj: Record<string, unknown> = {
     id: "in_capture_paid",
     object: "invoice",
     customer: input.customerId,
-    subscription: input.subscriptionId,
-    metadata: paidMeta,
+    metadata: {},
   };
+  if (input.invoiceAssociation === "parent") {
+    invoiceObj.parent = {
+      type: "subscription_details",
+      subscription_details: { subscription: input.subscriptionId },
+    };
+  } else {
+    invoiceObj.subscription = input.subscriptionId;
+  }
   const sessionEvent = {
     id: "evt_capture_session",
     object: "event",
@@ -102,6 +110,16 @@ function writeSignedCapture(
     livemode: false,
     data: { object: invoiceObj },
   };
+  if (!input.omitRunMetadata) {
+    transport.seedOwnedCaptureJourney({
+      runId: input.runId,
+      customerId: input.customerId,
+      subscriptionId: input.subscriptionId,
+      sessionId: input.sessionId,
+      invoiceId: "in_capture_paid",
+      invoiceAssociation: input.invoiceAssociation ?? "legacy",
+    });
+  }
   transport.pushEvent(sessionEvent);
   transport.pushEvent(paidEvent);
   const sessionBody = JSON.stringify(sessionEvent);
@@ -445,7 +463,7 @@ it("excludes baseline invoice.paid from recovery evidence", () => {
   expect(matched.matched.map((row) => row.id)).toEqual(["evt_recover"]);
 });
 
-it("verifies webhook signatures separately from Stripe-origin and rejects missing run metadata", async () => {
+it("verifies webhook signatures separately from Stripe-origin and rejects missing Session run metadata", async () => {
   const transport = createFakeStripeTransport();
   const runId = createRunId();
   const created = Math.floor(Date.now() / 1000) - 10;
@@ -463,7 +481,14 @@ it("verifies webhook signatures separately from Stripe-origin and rejects missin
     type: "invoice.paid",
     created: created + 1,
     livemode: false,
-    data: { object: { id: "in_1", object: "invoice", customer: "cus_1", subscription: "sub_1", metadata: { fizot_j9_run_id: runId } } },
+    data: { object: { id: "in_1", object: "invoice", customer: "cus_1", subscription: "sub_1", metadata: {} } },
+  });
+  transport.seedOwnedCaptureJourney({
+    runId,
+    customerId: "cus_1",
+    subscriptionId: "sub_1",
+    sessionId: "cs_1",
+    invoiceId: "in_1",
   });
   transport.pushEvent(JSON.parse(sessionBody));
   transport.pushEvent(JSON.parse(paidBody));
@@ -513,6 +538,7 @@ it("verifies webhook signatures separately from Stripe-origin and rejects missin
   expect(live.ok).toBe(true);
   if (live.ok) {
     expect(live.checks.stripeOriginVerified).toBe(true);
+    expect(live.checks.ownershipVerified).toBe(true);
     expect(live.checks.provenanceIsOperatorClaimOnly).toBe(true);
   }
 
@@ -549,7 +575,7 @@ it("verifies webhook signatures separately from Stripe-origin and rejects missin
     type: "invoice.paid",
     created: created + 1,
     livemode: false,
-    data: { object: { id: "in_1", object: "invoice", customer: "cus_1", subscription: "sub_other", metadata: { fizot_j9_run_id: runId } } },
+    data: { object: { id: "in_1", object: "invoice", customer: "cus_1", subscription: "sub_other", metadata: {} } },
   });
   const wrongSub = verifyWebhookCaptureSignatures({
     capture: {
@@ -612,6 +638,139 @@ it("verifies webhook signatures separately from Stripe-origin and rejects missin
     expect(missingOrigin.checks.signatureVerified).toBe(true);
     expect(missingOrigin.checks.stripeOriginVerified).toBe(false);
   }
+});
+
+it("accepts invoice.paid with empty invoice metadata via modern parent.subscription_details", async () => {
+  const transport = createFakeStripeTransport();
+  const runId = createRunId();
+  const created = Math.floor(Date.now() / 1000) - 10;
+  const sessionBody = JSON.stringify({
+    id: "evt_s_parent",
+    object: "event",
+    type: "checkout.session.completed",
+    created,
+    livemode: false,
+    data: { object: { id: "cs_p", object: "checkout.session", customer: "cus_p", subscription: "sub_p", metadata: { fizot_j9_run_id: runId } } },
+  });
+  const paidBody = JSON.stringify({
+    id: "evt_p_parent",
+    object: "event",
+    type: "invoice.paid",
+    created: created + 1,
+    livemode: false,
+    data: {
+      object: {
+        id: "in_p",
+        object: "invoice",
+        customer: "cus_p",
+        metadata: {},
+        parent: { type: "subscription_details", subscription_details: { subscription: "sub_p" } },
+      },
+    },
+  });
+  transport.seedOwnedCaptureJourney({
+    runId,
+    customerId: "cus_p",
+    subscriptionId: "sub_p",
+    sessionId: "cs_p",
+    invoiceId: "in_p",
+    invoiceAssociation: "parent",
+  });
+  transport.pushEvent(JSON.parse(sessionBody));
+  transport.pushEvent(JSON.parse(paidBody));
+  const live = await verifyWebhookCapture({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader(secret, sessionBody, created), provenance: "stripe_cli_listen" },
+        { body: paidBody, stripeSignatureHeader: signStripeHeader(secret, paidBody, created + 1), provenance: "stripe_cli_listen" },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_p",
+    expectedSubscriptionId: "sub_p",
+    expectedSessionId: "cs_p",
+    webhookSecret: secret,
+    transport,
+  });
+  expect(live.ok).toBe(true);
+});
+
+it("rejects invoice.paid that only matches customer without Checkout subscription ownership", async () => {
+  const runId = createRunId();
+  const created = Math.floor(Date.now() / 1000) - 10;
+  const sessionBody = JSON.stringify({
+    id: "evt_s_foreign",
+    object: "event",
+    type: "checkout.session.completed",
+    created,
+    livemode: false,
+    data: { object: { id: "cs_own", object: "checkout.session", customer: "cus_same", subscription: "sub_own", metadata: { fizot_j9_run_id: runId } } },
+  });
+  const paidBody = JSON.stringify({
+    id: "evt_p_foreign",
+    object: "event",
+    type: "invoice.paid",
+    created: created + 1,
+    livemode: false,
+    data: { object: { id: "in_foreign", object: "invoice", customer: "cus_same", subscription: "sub_foreign", metadata: {} } },
+  });
+  const signed = verifyWebhookCaptureSignatures({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader(secret, sessionBody, created), provenance: "stripe_cli_listen" },
+        { body: paidBody, stripeSignatureHeader: signStripeHeader(secret, paidBody, created + 1), provenance: "stripe_cli_listen" },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_same",
+    expectedSubscriptionId: "sub_own",
+    expectedSessionId: "cs_own",
+    webhookSecret: secret,
+  });
+  expect(signed.ok).toBe(false);
+  if (!signed.ok) expect(signed.reason).toBe("capture_event_subscription_mismatch");
+});
+
+it("updates subscription-level default_payment_method for Test Clock failure and recovery", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const prepared = await prepareAndCompleteCheckout(root, transport);
+  const path = artifactFile(root);
+  const loaded = loadJ9RunArtifact(path, hmacSecret);
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) return;
+  const withSub = persistArtifactUpdate(hmacSecret, path, loaded.artifact, {
+    checkout: { ...loaded.artifact.checkout, subscriptionId: prepared.subscriptionId },
+    resources: {
+      ...loaded.artifact.resources,
+      subscriptions: [...loaded.artifact.resources.subscriptions, prepared.subscriptionId],
+    },
+  });
+  const clockSubId = loaded.artifact.clock.subscriptionId!;
+  const before = await transport.request("GET", `subscriptions/${clockSubId}`, null);
+  expect(before.default_payment_method).toBe("pm_card_visa");
+
+  const mid = await runStripeTestClockDunning({
+    transport,
+    artifact: withSub,
+    hmacSecret,
+    artifactPath: path,
+    sleepMs: 0,
+  });
+  expect(mid.scenario.status).toBe("PASS");
+  const after = await transport.request("GET", `subscriptions/${clockSubId}`, null);
+  expect(after.default_payment_method).toBe("pm_card_visa");
+  expect(mid.artifact.clock.dunning.failureInvoiceId).toBeTruthy();
+  expect(mid.artifact.clock.dunning.recoveryInvoiceId).toBeTruthy();
+  expect(mid.artifact.clock.dunning.recoveryInvoiceId).not.toBe(loaded.artifact.clock.baselineInvoiceId);
 });
 
 it("refuses abandoned cleanup without matching confirm and ownership", async () => {

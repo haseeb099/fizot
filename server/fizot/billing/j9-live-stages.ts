@@ -73,7 +73,9 @@ export async function prepareLiveJ9(input: {
   const scenarios: StageScenario[] = [];
   const runId = createRunId();
   const workspaceId = `ws_j9_${runId.slice(6, 18)}`;
-  const frozenTime = input.frozenTime ?? Math.floor(Date.UTC(2026, 0, 1) / 1000);
+  // Stripe allows past frozen times; start near "now" so advances stay within
+  // the documented max window (≤ two shortest billing periods).
+  const frozenTime = input.frozenTime ?? Math.floor(Date.now() / 1000) - 3600;
   const createdAt = new Date().toISOString();
   const resources = emptyResources();
 
@@ -682,9 +684,13 @@ export async function runStripeTestClockDunning(input: {
   }
 
   if (dunning.phase === "baseline") {
+    // Subscription.default_payment_method takes precedence over customer invoice_settings.
     await input.transport.request("POST", "payment_methods/pm_card_chargeCustomerFail/attach", { customer: customerId });
     await input.transport.request("POST", `customers/${customerId}`, {
       "invoice_settings[default_payment_method]": "pm_card_chargeCustomerFail",
+    });
+    await input.transport.request("POST", `subscriptions/${subscriptionId}`, {
+      default_payment_method: "pm_card_chargeCustomerFail",
     });
     dunning = { ...dunning, phase: "fail_pm_set" };
     persist(dunning);
@@ -762,6 +768,9 @@ export async function runStripeTestClockDunning(input: {
     await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: customerId });
     await input.transport.request("POST", `customers/${customerId}`, {
       "invoice_settings[default_payment_method]": "pm_card_visa",
+    });
+    await input.transport.request("POST", `subscriptions/${subscriptionId}`, {
+      default_payment_method: "pm_card_visa",
     });
     const live = await retrieveTestClock(input.transport, clockId);
     if (!live.ok) return failed(live.reason, live.reason);

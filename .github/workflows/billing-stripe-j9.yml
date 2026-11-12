@@ -4,9 +4,12 @@
 # Operator journey (same run, latest artifact):
 # 1) Dispatch stage=prepare. Note github.run_id from the run URL and printed j9run_….
 # 2) Open Checkout URL; pay with a Stripe test card.
-# 3) Capture signed webhooks into artifacts/j9/webhook-capture.json (schema v2) and
-#    upload as artifact name j9-webhook-capture (helper run or local file before resume).
-# 4) First resume: artifact_run_id=<prepare github.run_id>, capture_run_id=<capture upload run>.
+# 3) Locally: stripe listen → save unmodified body + Stripe-Signature header files →
+#    node --experimental-strip-types scripts/fizot/j9-pack-webhook-capture.mjs …
+#    → artifacts/j9/webhook-capture.json. Put ONLY that file on a throwaway branch,
+#    dispatch stage=upload_capture on that ref, note github.run_id as capture_run_id,
+#    then delete the throwaway branch. Artifacts retain 7 days; never include secrets/cards.
+# 4) First resume: artifact_run_id=<prepare github.run_id>, capture_run_id=<upload_capture run>.
 # 5) If resume is BLOCKED/FAIL and resources were retained, download the artifact uploaded
 #    by THAT resume run and set artifact_run_id=<that resume run id> for the next resume.
 #    Never re-download a stale prepare artifact after lifecycle has advanced.
@@ -21,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "prepare | resume | cleanup | full"
+        description: "prepare | resume | cleanup | upload_capture | full"
         required: true
         default: prepare
         type: choice
@@ -29,6 +32,7 @@ on:
           - prepare
           - resume
           - cleanup
+          - upload_capture
           - full
       artifact_run_id:
         description: "GitHub Actions run id that uploaded the LATEST j9-run-artifact (digits)."
@@ -82,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$STAGE" in
-            prepare|resume|cleanup|full) ;;
+            prepare|resume|cleanup|upload_capture|full) ;;
             *) echo "invalid stage"; exit 1 ;;
           esac
           HANDOFF="${ARTIFACT_RUN_ID:-$PREPARE_RUN_ID}"
@@ -96,6 +100,34 @@ jobs:
             [[ "$CLEANUP_CONFIRM" =~ ^j9run_[0-9a-f]+$ ]] || { echo "cleanup_confirm must be j9run_…"; exit 1; }
           fi
           echo "run_id=$HANDOFF" >> "$GITHUB_OUTPUT"
+
+      - name: Validate and upload webhook capture only
+        if: ${{ inputs.stage == 'upload_capture' }}
+        run: |
+          set -euo pipefail
+          test -f artifacts/j9/webhook-capture.json
+          node --experimental-strip-types -e "
+            import { readFileSync } from 'node:fs';
+            const raw = JSON.parse(readFileSync('artifacts/j9/webhook-capture.json','utf8'));
+            if (raw.schemaVersion !== 2 || raw.kind !== 'stripe_cli_signed_capture') throw new Error('schema');
+            if (typeof raw.runId !== 'string' || !raw.runId.startsWith('j9run_')) throw new Error('runId');
+            if (!Array.isArray(raw.deliveries) || raw.deliveries.length < 1) throw new Error('deliveries');
+            for (const d of raw.deliveries) {
+              if (typeof d.body !== 'string' || !d.body) throw new Error('body');
+              if (typeof d.stripeSignatureHeader !== 'string' || !d.stripeSignatureHeader.includes('v1=')) throw new Error('sig');
+              if (d.body.includes('sk_test_') || d.body.includes('sk_live_') || d.body.includes('whsec_')) throw new Error('secret');
+            }
+            console.log('j9_upload_capture ok runId=' + raw.runId + ' deliveries=' + raw.deliveries.length);
+          "
+
+      - name: Upload j9-webhook-capture artifact
+        if: ${{ inputs.stage == 'upload_capture' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: j9-webhook-capture
+          path: artifacts/j9/webhook-capture.json
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Download latest J9 run artifact
         if: ${{ inputs.stage == 'resume' || inputs.stage == 'cleanup' }}
@@ -116,6 +148,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Run J9 stage
+        if: ${{ inputs.stage != 'upload_capture' }}
         env:
           STRIPE_J9_MODE: test
           STRIPE_J9_TRANSPORT: live
@@ -133,9 +166,10 @@ jobs:
         run: node --experimental-strip-types scripts/fizot/billing-j9.mjs
 
       - name: Upload latest non-secret J9 run artifact
-        if: always()
+        if: ${{ always() && inputs.stage != 'upload_capture' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: j9-run-artifact
           path: artifacts/j9/run.json
+          retention-days: 7
           if-no-files-found: ignore
