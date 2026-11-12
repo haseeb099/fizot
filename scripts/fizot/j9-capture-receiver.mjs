@@ -7,17 +7,20 @@
  *     --events checkout.session.completed,invoice.paid
  *
  * Writes unmodified raw bodies + Stripe-Signature headers under
- * artifacts/j9/inbox/ (gitignored). Never prints bodies or signatures.
- * Pack with j9-pack-webhook-capture.mjs when both required events arrive.
+ * artifacts/j9/inbox/ (gitignored, mode 0700/0600 when the OS supports it).
+ * Never prints bodies or signatures. Delete inbox after packing/verification.
  */
 import { createServer } from "node:http";
-import { mkdirSync, writeFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import {
+  ensureCaptureInbox,
+  writeRestrictedFile,
+} from "../../server/fizot/billing/j9-capture-transfer.ts";
 
 const host = "127.0.0.1";
 const port = Number(process.env.J9_CAPTURE_PORT ?? 18787);
-const inbox = resolve(process.cwd(), "artifacts", "j9", "inbox");
-mkdirSync(inbox, { recursive: true });
+const inbox = ensureCaptureInbox(process.cwd());
 
 let seq = 0;
 const server = createServer(async (req, res) => {
@@ -48,8 +51,8 @@ const server = createServer(async (req, res) => {
   seq += 1;
   const stamp = `${Date.now()}_${seq}`;
   const base = join(inbox, `${stamp}_${type}`);
-  writeFileSync(`${base}.body.json`, bodyBuf);
-  writeFileSync(`${base}.sig.txt`, `${signature}\n`);
+  writeRestrictedFile(`${base}.body.json`, bodyBuf);
+  writeRestrictedFile(`${base}.sig.txt`, `${signature}\n`);
   const files = readdirSync(inbox).filter((name) => name.endsWith(".body.json"));
   console.error(`j9_capture_receiver saved type=${type} inbox_files=${files.length} (body redacted)`);
   res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
@@ -59,4 +62,5 @@ server.listen(port, host, () => {
   console.error(`j9_capture_receiver listening http://${host}:${port}/stripe`);
   console.error("j9_capture_receiver forward: stripe listen --forward-to http://127.0.0.1:" + port + "/stripe");
   console.error("j9_capture_receiver inbox=" + inbox);
+  console.error("j9_capture_receiver cleanup: delete artifacts/j9/inbox and webhook-capture.json after verification");
 });

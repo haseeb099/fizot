@@ -10,14 +10,15 @@
 #        --events checkout.session.completed,invoice.paid
 #      node --experimental-strip-types scripts/fizot/j9-pack-webhook-capture.mjs \
 #        --run-id=j9run_… --from-inbox
-#    Output is gitignored at artifacts/j9/webhook-capture.json.
-# 4) Actions handoff (optional): host that file on a short-lived HTTPS URL you control
-#    (presigned object storage, etc.). Dispatch stage=upload_capture with
-#    capture_transfer_url=<https://…>. Note github.run_id as capture_run_id.
-#    Missing URL → BLOCKED (no git fallback). Artifact retention 7 days.
+#    Output is gitignored at artifacts/j9/webhook-capture.json (mode 0600 when supported).
+# 4) Actions handoff (optional): host the file on a short-lived HTTPS URL you control.
+#    Set Actions secret STRIPE_J9_CAPTURE_TRANSFER_URL to that URL (NOT a workflow input).
+#    Dispatch stage=upload_capture. Note github.run_id as capture_run_id.
+#    Clear/rotate the secret immediately after. Missing secret → BLOCKED (no git fallback).
 #    Or resume locally with the capture file on disk (no upload_capture).
 # 5) Resume: artifact_run_id=<prepare run> (+ capture_run_id if Actions).
 # 6) Cleanup: stage=cleanup, artifact_run_id=<latest>, cleanup_confirm=<j9run_…>.
+#    Manually delete inbox/, packaged capture, transfer object, and expire Actions artifacts.
 #
 # Paths are fixed under artifacts/j9/. Never put Stripe secrets or card data in artifacts.
 # Capture bodies may contain customer email / ids — delete after verification.
@@ -48,11 +49,6 @@ on:
         type: string
       capture_run_id:
         description: "GitHub Actions run id that uploaded j9-webhook-capture (digits)."
-        required: false
-        default: ""
-        type: string
-      capture_transfer_url:
-        description: "HTTPS URL to schema-v2 webhook-capture.json for upload_capture (short-lived). Never commit captures to git."
         required: false
         default: ""
         type: string
@@ -89,7 +85,6 @@ jobs:
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
           PREPARE_RUN_ID: ${{ inputs.prepare_run_id }}
           CAPTURE_RUN_ID: ${{ inputs.capture_run_id }}
-          CAPTURE_TRANSFER_URL: ${{ inputs.capture_transfer_url }}
           CLEANUP_CONFIRM: ${{ inputs.cleanup_confirm }}
         run: |
           set -euo pipefail
@@ -107,29 +102,20 @@ jobs:
           if [[ "$STAGE" == "cleanup" ]]; then
             [[ "$CLEANUP_CONFIRM" =~ ^j9run_[0-9a-f]+$ ]] || { echo "cleanup_confirm must be j9run_…"; exit 1; }
           fi
-          if [[ "$STAGE" == "upload_capture" ]]; then
-            if [[ -z "$CAPTURE_TRANSFER_URL" ]]; then
-              echo "BLOCKED: capture_transfer_url required for upload_capture; do not commit captures to git"
-              exit 2
-            fi
-            case "$CAPTURE_TRANSFER_URL" in
-              https://*) ;;
-              *) echo "BLOCKED: capture_transfer_url must be https://"; exit 2 ;;
-            esac
-          fi
           echo "run_id=$HANDOFF" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch capture from short-lived HTTPS transfer URL
+      - name: Fetch capture via short-lived Actions secret URL
         if: ${{ inputs.stage == 'upload_capture' }}
         env:
-          CAPTURE_TRANSFER_URL: ${{ inputs.capture_transfer_url }}
+          STRIPE_J9_CAPTURE_TRANSFER_URL: ${{ secrets.STRIPE_J9_CAPTURE_TRANSFER_URL }}
         run: |
           set -euo pipefail
-          mkdir -p artifacts/j9
-          # Do not print the URL query string or file contents.
-          curl -fsSL --max-time 60 "$CAPTURE_TRANSFER_URL" -o artifacts/j9/webhook-capture.json
+          # Secret is a bearer URL — never echo it. No workflow_dispatch URL input (metadata leak).
+          # No git commit fallback.
+          node --experimental-strip-types scripts/fizot/j9-fetch-capture-transfer.mjs
           node --experimental-strip-types scripts/fizot/j9-validate-capture.mjs artifacts/j9/webhook-capture.json
           echo "j9_upload_capture fetched_and_validated=true artifact=j9-webhook-capture"
+          echo "j9_upload_capture reminder=clear_STRIPE_J9_CAPTURE_TRANSFER_URL_secret_after_run"
 
       - name: Upload j9-webhook-capture artifact
         if: ${{ inputs.stage == 'upload_capture' }}

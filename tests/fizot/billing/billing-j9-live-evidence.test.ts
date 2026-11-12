@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { signStripeHeader } from "../../../server/fizot/admin/webhooks.ts";
@@ -30,6 +30,14 @@ import {
   J9_WEBHOOK_CAPTURE_ARTIFACT_NAME,
   J9_WEBHOOK_CAPTURE_RELATIVE,
 } from "../../../server/fizot/billing/j9-capture-policy.ts";
+import {
+  ensureCaptureInbox,
+  fetchCaptureFromTransferUrl,
+  isBlockedIpAddress,
+  isBlockedTransferHostname,
+  J9_CAPTURE_TRANSFER_SECRET_NAME,
+  writeRestrictedFile,
+} from "../../../server/fizot/billing/j9-capture-transfer.ts";
 import {
   verifyWebhookCapture,
   verifyWebhookCaptureSignatures,
@@ -1219,6 +1227,7 @@ it("records isolated in-memory credit checkpoint evidence without claiming durab
 it("documents capture artifact name/path and rejects unsafe transfer URLs", () => {
   expect(J9_WEBHOOK_CAPTURE_ARTIFACT_NAME).toBe("j9-webhook-capture");
   expect(J9_WEBHOOK_CAPTURE_RELATIVE.replace(/\\/g, "/")).toBe("artifacts/j9/webhook-capture.json");
+  expect(J9_CAPTURE_TRANSFER_SECRET_NAME).toBe("STRIPE_J9_CAPTURE_TRANSFER_URL");
   expect(assertHttpsTransferUrl("").ok).toBe(false);
   expect(assertHttpsTransferUrl("http://example.invalid/cap.json").ok).toBe(false);
   expect(assertHttpsTransferUrl("https://user:pass@example.invalid/cap.json").ok).toBe(false);
@@ -1226,6 +1235,202 @@ it("documents capture artifact name/path and rejects unsafe transfer URLs", () =
   expect(captureBodyLooksSensitive('{"id":"evt_1"}')).toBe(false);
   expect(captureBodyLooksSensitive('{"x":"sk_test_leak"}')).toBe(true);
   expect(captureBodyLooksSensitive('{"number":"4242424242424242"}')).toBe(true);
+  expect(isBlockedTransferHostname("localhost")).toBe(true);
+  expect(isBlockedTransferHostname("127.0.0.1")).toBe(true);
+  expect(isBlockedTransferHostname("metadata.google.internal")).toBe(true);
+  expect(isBlockedIpAddress("10.0.0.1")).toBe(true);
+  expect(isBlockedIpAddress("169.254.169.254")).toBe(true);
+  expect(isBlockedIpAddress("192.168.1.1")).toBe(true);
+  expect(isBlockedIpAddress("8.8.8.8")).toBe(false);
+});
+
+const publicDnsLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+
+it("rejects missing transfer credentials and never falls back to git commit paths", async () => {
+  const root = repoFixture();
+  const missing = await fetchCaptureFromTransferUrl({
+    url: "",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async () => {
+      throw new Error("fetch_must_not_run");
+    },
+  });
+  expect(missing.ok).toBe(false);
+  if (!missing.ok) expect(missing.reason).toBe("capture_transfer_url_missing");
+  expect(existsSync(join(root, J9_WEBHOOK_CAPTURE_RELATIVE))).toBe(false);
+
+  const embedded = await fetchCaptureFromTransferUrl({
+    url: "https://token:secret@example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async () => {
+      throw new Error("fetch_must_not_run");
+    },
+  });
+  expect(embedded.ok).toBe(false);
+  if (!embedded.ok) expect(embedded.reason).toBe("capture_transfer_url_must_not_embed_credentials");
+
+  // Workflow must not expose the bearer URL as a dispatch input; local pack stays gitignored.
+  const workflow = readFileSync(join(process.cwd(), ".github/workflows/billing-stripe-j9.yml"), "utf8");
+  expect(workflow).not.toMatch(/capture_transfer_url:/);
+  expect(workflow).toContain("secrets.STRIPE_J9_CAPTURE_TRANSFER_URL");
+  expect(workflow).toContain("j9-fetch-capture-transfer.mjs");
+  expect(workflow).toMatch(/No git commit fallback/i);
+  const gitignore = readFileSync(join(process.cwd(), ".gitignore"), "utf8");
+  expect(gitignore).toContain("artifacts/j9/webhook-capture.json");
+  expect(gitignore).toContain("artifacts/j9/inbox/");
+});
+
+it("enforces HTTPS-only transfer, blocks private destinations, and rejects oversized or invalid capture payloads", async () => {
+  const root = repoFixture();
+  const capturePath = join(root, J9_WEBHOOK_CAPTURE_RELATIVE);
+  writeFileSync(capturePath, '{"stale":true}\n');
+
+  const httpOnly = await fetchCaptureFromTransferUrl({
+    url: "http://example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async () => {
+      throw new Error("fetch_must_not_run");
+    },
+  });
+  expect(httpOnly.ok).toBe(false);
+  if (!httpOnly.ok) expect(httpOnly.reason).toBe("capture_transfer_url_must_be_https");
+  expect(existsSync(capturePath)).toBe(false);
+
+  const loopback = await fetchCaptureFromTransferUrl({
+    url: "https://127.0.0.1/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async () => {
+      throw new Error("fetch_must_not_run");
+    },
+  });
+  expect(loopback.ok).toBe(false);
+  if (!loopback.ok) expect(loopback.reason).toBe("capture_transfer_host_blocked");
+
+  const privateResolved = await fetchCaptureFromTransferUrl({
+    url: "https://example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: async () => [{ address: "10.1.2.3", family: 4 }],
+    fetchImpl: async () => {
+      throw new Error("fetch_must_not_run");
+    },
+  });
+  expect(privateResolved.ok).toBe(false);
+  if (!privateResolved.ok) expect(privateResolved.reason).toBe("capture_transfer_resolved_address_blocked");
+
+  const redirectError = await fetchCaptureFromTransferUrl({
+    url: "https://example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async (_url, init) => {
+      expect(init?.redirect).toBe("error");
+      throw Object.assign(new Error("redirect"), { name: "TypeError" });
+    },
+  });
+  expect(redirectError.ok).toBe(false);
+  if (!redirectError.ok) expect(redirectError.reason).toBe("capture_transfer_fetch_failed");
+  expect(existsSync(capturePath)).toBe(false);
+
+  const oversized = await fetchCaptureFromTransferUrl({
+    url: "https://example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    maxBytes: 32,
+    fetchImpl: async () =>
+      new Response("x".repeat(64), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  expect(oversized.ok).toBe(false);
+  if (!oversized.ok) expect(oversized.reason).toBe("capture_transfer_too_large");
+  expect(existsSync(capturePath)).toBe(false);
+
+  const invalidSchema = await fetchCaptureFromTransferUrl({
+    url: "https://example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ schemaVersion: 1, kind: "nope" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  expect(invalidSchema.ok).toBe(false);
+  if (!invalidSchema.ok) expect(invalidSchema.reason).toBe("capture_transfer_schema_invalid");
+  expect(existsSync(capturePath)).toBe(false);
+
+  const sensitive = await fetchCaptureFromTransferUrl({
+    url: "https://example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async () =>
+      new Response(JSON.stringify({
+        schemaVersion: 2,
+        kind: "stripe_cli_signed_capture",
+        runId: "j9run_abc",
+        deliveries: [{ body: "sk_test_leaked", stripeSignatureHeader: "t=1,v1=x" }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  expect(sensitive.ok).toBe(false);
+  if (!sensitive.ok) expect(sensitive.reason).toBe("capture_transfer_sensitive_material");
+  expect(existsSync(capturePath)).toBe(false);
+});
+
+it("writes restricted local capture paths and resumes after a successful secure transfer", async () => {
+  const root = repoFixture();
+  const inbox = ensureCaptureInbox(root);
+  if (process.platform !== "win32") {
+    expect(statSync(inbox).mode & 0o777).toBe(0o700);
+  }
+  const bodyPath = join(inbox, "sample.body.json");
+  writeRestrictedFile(bodyPath, '{"ok":true}\n');
+  if (process.platform !== "win32") {
+    expect(statSync(bodyPath).mode & 0o777).toBe(0o600);
+  }
+
+  const transport = createFakeStripeTransport();
+  const prepared = await prepareAndCompleteCheckout(root, transport);
+  writeSignedCapture(captureFile(root), transport, {
+    runId: prepared.artifact.runId,
+    customerId: prepared.customerId,
+    subscriptionId: prepared.subscriptionId,
+    sessionId: prepared.sessionId,
+  });
+  const rawCapture = readFileSync(captureFile(root), "utf8");
+  const payload = rawCapture.endsWith("\n") ? rawCapture : `${rawCapture}\n`;
+  // Simulate operator clearing local disk before Actions fetch.
+  writeFileSync(captureFile(root), '{"stale_local":true}\n');
+
+  const fetched = await fetchCaptureFromTransferUrl({
+    url: "https://example.invalid/j9-capture.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    fetchImpl: async (url, init) => {
+      expect(String(url)).toBe("https://example.invalid/j9-capture.json");
+      expect(init?.redirect).toBe("error");
+      expect(init?.method).toBe("GET");
+      return new Response(payload, { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  expect(fetched.ok).toBe(true);
+  if (!fetched.ok) return;
+  expect(fetched.bytes).toBe(Buffer.byteLength(payload));
+  expect(existsSync(join(root, J9_WEBHOOK_CAPTURE_RELATIVE))).toBe(true);
+  if (process.platform !== "win32") {
+    expect(statSync(join(root, J9_WEBHOOK_CAPTURE_RELATIVE)).mode & 0o777).toBe(0o600);
+  }
+
+  const resumed = await runJ9({
+    env: liveEnv(root, { STRIPE_J9_STAGE: "resume" }),
+    transport,
+    repoRoot: root,
+  });
+  expect(resumed.kind).toBe("live_j9");
+  expect(resumed.liveAcceptance).toBe(true);
 });
 
 it("accepts staged captures aged 5m/30m/several hours and rejects beyond 48h or future t=", () => {

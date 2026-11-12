@@ -78,9 +78,9 @@ Incomplete resume **never** auto-deletes. Auto-cleanup runs only after every man
 1. Dispatch `billing-stripe-j9.yml` with `stage=prepare`. Note `github.run_id` and printed `runId` (`j9run_…`).
 2. Open Checkout URL; pay with a Stripe **test** card.
 3. **Local capture receiver (required for raw HTTP fidelity):** run `scripts/fizot/j9-capture-receiver.mjs` on loopback, `stripe listen --forward-to http://127.0.0.1:18787/stripe`, then `j9-pack-webhook-capture.mjs --run-id=… --from-inbox`. Output is gitignored (`artifacts/j9/webhook-capture.json`). **Never commit captures to Git.**
-4. **Actions handoff (optional):** host the packed file on a short-lived **HTTPS** URL you control; dispatch `stage=upload_capture` with `capture_transfer_url`. Missing URL → **BLOCKED** (no git fallback). Note run id as `capture_run_id`. Artifact retention **7 days**. Or resume locally with the capture on disk. Capture may include customer email/ids — delete after verification.
+4. **Actions handoff (optional):** host the packed file on a short-lived **HTTPS** URL you control (no redirects; public-network only). Set repository Actions secret `STRIPE_J9_CAPTURE_TRANSFER_URL` to that URL (**never** a `workflow_dispatch` input — the URL is a bearer credential). Dispatch `stage=upload_capture`. Missing/empty secret → **BLOCKED** (no git fallback). Note run id as `capture_run_id`. **Clear/rotate the secret immediately after.** Artifact retention **7 days**. Or skip Actions upload and resume locally with the capture on disk. Capture may include customer email/ids — never print bodies in CI logs.
 5. Resume: `artifact_run_id=<prepare github.run_id>` (+ `capture_run_id` if Actions). Capture signature `t=` may be up to **48 hours** old (staged-capture policy); production webhook skew stays 300s.
-6. Confirmed cleanup: `stage=cleanup`, `artifact_run_id=<latest upload run>`, `cleanup_confirm=<runId>`.
+6. Confirmed cleanup: `stage=cleanup`, `artifact_run_id=<latest upload run>`, `cleanup_confirm=<runId>`. Manually delete `artifacts/j9/inbox/`, `artifacts/j9/webhook-capture.json`, any transfer-host object, and expire or delete Actions artifacts after verification.
 
 **Local stages**
 
@@ -104,6 +104,7 @@ Required configuration:
 | `STRIPE_J9_ARTIFACT_RUN_ID` | env | Digits-only GitHub Actions run id that uploaded the **latest** `j9-run-artifact` |
 | `STRIPE_J9_PREPARE_RUN_ID` | env | Deprecated alias for `STRIPE_J9_ARTIFACT_RUN_ID` |
 | `STRIPE_J9_CLEANUP_CONFIRM` | env | Must equal artifact `runId` for abandoned/expired confirmed cleanup |
+| `STRIPE_J9_CAPTURE_TRANSFER_URL` | secret | Optional; short-lived HTTPS capture URL for `upload_capture` only. Bearer credential — never a workflow input. Clear after use. |
 
 Shared scenarios: `secure_startup`, `checkout_session_created`, `checkout_completed`, `subscription_payment_and_credit`, `webhook_lifecycle`, `simulated_failed_payment_lifecycle`, `simulated_recovery`, `tax_and_seats`, `cleanup`. Live also requires `stripe_dunning_recovery`. Any required `FAIL`, `BLOCKED` or `NOT_RUN` prevents overall PASS and sets `live_acceptance=false`. Fake-unit PASS never becomes live acceptance.
 

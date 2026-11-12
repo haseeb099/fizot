@@ -10,12 +10,14 @@
  * Or explicit pairs:
  *   --delivery=path/to/body.json,path/to/sig.txt
  *
- * Output is gitignored. Never commit captures. For Actions handoff, host the
- * file on a short-lived HTTPS URL and dispatch stage=upload_capture with
- * capture_transfer_url (never a git branch).
+ * Output is gitignored (mode 0600 when the OS supports it). Never commit captures.
+ * For Actions handoff: host on a short-lived HTTPS URL, set Actions secret
+ * STRIPE_J9_CAPTURE_TRANSFER_URL, dispatch stage=upload_capture, then clear the secret.
+ * Never use workflow_dispatch URL inputs or git commits.
  */
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { writeRestrictedFile } from "../../server/fizot/billing/j9-capture-transfer.ts";
 
 function argValues(name) {
   const prefix = `--${name}=`;
@@ -105,7 +107,7 @@ const capture = {
   deliveries,
 };
 
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, `${JSON.stringify(capture, null, 2)}\n`);
+writeRestrictedFile(outPath, `${JSON.stringify(capture, null, 2)}\n`);
 console.log(`j9_pack_capture ok path=${outRel} deliveries=${deliveries.length} runId=${runId}`);
-console.log("j9_pack_capture next: do NOT commit this file. Local resume may use it on disk. For Actions, host on a short-lived HTTPS URL and dispatch stage=upload_capture with capture_transfer_url.");
+console.log("j9_pack_capture next: do NOT commit this file. Local resume may use it on disk. For Actions, set secret STRIPE_J9_CAPTURE_TRANSFER_URL then stage=upload_capture; clear the secret after.");
+console.log("j9_pack_capture cleanup: delete artifacts/j9/inbox, webhook-capture.json, transfer storage, and expire Actions artifacts after verification.");
