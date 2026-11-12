@@ -9,12 +9,15 @@
  * Writes unmodified raw bodies + Stripe-Signature headers under
  * artifacts/j9/inbox/ (gitignored, mode 0700/0600 when the OS supports it).
  * Never prints bodies or signatures. Delete inbox after packing/verification.
+ * Oversized bodies (>2 MiB) are rejected and never written.
  */
 import { createServer } from "node:http";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   ensureCaptureInbox,
+  J9_CAPTURE_MAX_BYTES,
+  readIncomingMessageBounded,
   writeRestrictedFile,
 } from "../../server/fizot/billing/j9-capture-transfer.ts";
 
@@ -28,9 +31,13 @@ const server = createServer(async (req, res) => {
     res.writeHead(404).end("not_found");
     return;
   }
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const bodyBuf = Buffer.concat(chunks);
+  const bodyRead = await readIncomingMessageBounded(req, J9_CAPTURE_MAX_BYTES);
+  if (!bodyRead.ok) {
+    const status = bodyRead.reason === "capture_transfer_too_large" ? 413 : 400;
+    res.writeHead(status).end(bodyRead.reason);
+    return;
+  }
+  const bodyBuf = bodyRead.buffer;
   const body = bodyBuf.toString("utf8");
   const signature = String(req.headers["stripe-signature"] ?? "");
   if (!signature.includes("v1=")) {
@@ -62,5 +69,6 @@ server.listen(port, host, () => {
   console.error(`j9_capture_receiver listening http://${host}:${port}/stripe`);
   console.error("j9_capture_receiver forward: stripe listen --forward-to http://127.0.0.1:" + port + "/stripe");
   console.error("j9_capture_receiver inbox=" + inbox);
+  console.error("j9_capture_receiver max_body_bytes=" + J9_CAPTURE_MAX_BYTES);
   console.error("j9_capture_receiver cleanup: delete artifacts/j9/inbox and webhook-capture.json after verification");
 });

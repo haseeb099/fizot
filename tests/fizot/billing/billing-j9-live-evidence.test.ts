@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import type { IncomingMessage } from "node:http";
 import { signStripeHeader } from "../../../server/fizot/admin/webhooks.ts";
 import { runJ9 } from "../../../server/fizot/billing/j9-driver.ts";
 import { assertCompletedCheckoutSession } from "../../../server/fizot/billing/j9-checkout-evidence.ts";
@@ -31,11 +33,18 @@ import {
   J9_WEBHOOK_CAPTURE_RELATIVE,
 } from "../../../server/fizot/billing/j9-capture-policy.ts";
 import {
+  createPinnedTransferDispatcher,
   ensureCaptureInbox,
   fetchCaptureFromTransferUrl,
+  ipv4MappedAddress,
   isBlockedIpAddress,
   isBlockedTransferHostname,
+  J9_CAPTURE_MAX_BYTES,
+  J9_CAPTURE_REMOTE_UPLOAD_ENABLED,
   J9_CAPTURE_TRANSFER_SECRET_NAME,
+  readIncomingMessageBounded,
+  readResponseBodyBounded,
+  resolveAllowedTransferDestination,
   writeRestrictedFile,
 } from "../../../server/fizot/billing/j9-capture-transfer.ts";
 import {
@@ -1242,6 +1251,17 @@ it("documents capture artifact name/path and rejects unsafe transfer URLs", () =
   expect(isBlockedIpAddress("169.254.169.254")).toBe(true);
   expect(isBlockedIpAddress("192.168.1.1")).toBe(true);
   expect(isBlockedIpAddress("8.8.8.8")).toBe(false);
+  expect(isBlockedIpAddress("::1")).toBe(true);
+  expect(isBlockedIpAddress("fe80::1")).toBe(true);
+  expect(isBlockedIpAddress("fc00::1")).toBe(true);
+  expect(isBlockedIpAddress("fd12::1")).toBe(true);
+  expect(ipv4MappedAddress("::ffff:127.0.0.1")).toBe("127.0.0.1");
+  expect(isBlockedIpAddress("::ffff:127.0.0.1")).toBe(true);
+  expect(isBlockedIpAddress("::ffff:0a00:0001")).toBe(true); // 10.0.0.1
+  expect(isBlockedIpAddress("::ffff:7f00:1")).toBe(true); // 127.0.0.1
+  expect(isBlockedIpAddress("2001:4860:4860::8888")).toBe(false);
+  expect(J9_CAPTURE_REMOTE_UPLOAD_ENABLED).toBe(true);
+  expect(J9_CAPTURE_MAX_BYTES).toBe(2 * 1024 * 1024);
 });
 
 const publicDnsLookup = async () => [{ address: "93.184.216.34", family: 4 }];
@@ -1346,6 +1366,49 @@ it("enforces HTTPS-only transfer, blocks private destinations, and rejects overs
   if (!oversized.ok) expect(oversized.reason).toBe("capture_transfer_too_large");
   expect(existsSync(capturePath)).toBe(false);
 
+  let streamedChunks = 0;
+  const streamedOversize = await fetchCaptureFromTransferUrl({
+    url: "https://example.invalid/cap.json",
+    repoRoot: root,
+    dnsLookup: publicDnsLookup,
+    maxBytes: 16,
+    fetchImpl: async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          streamedChunks += 1;
+          if (streamedChunks <= 4) {
+            controller.enqueue(new TextEncoder().encode("abcdefgh"));
+          } else {
+            controller.close();
+          }
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  expect(streamedOversize.ok).toBe(false);
+  if (!streamedOversize.ok) expect(streamedOversize.reason).toBe("capture_transfer_too_large");
+  // Abort after exceeding 16 bytes (two 8-byte chunks); a third pull may race cancel.
+  expect(streamedChunks).toBeGreaterThanOrEqual(2);
+  expect(streamedChunks).toBeLessThan(8);
+  expect(existsSync(capturePath)).toBe(false);
+
+  const contentLengthOversize = await readResponseBodyBounded(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{}"));
+        controller.close();
+      },
+    }),
+    8,
+    "999999",
+  );
+  expect(contentLengthOversize.ok).toBe(false);
+  if (!contentLengthOversize.ok) expect(contentLengthOversize.reason).toBe("capture_transfer_too_large");
+
   const invalidSchema = await fetchCaptureFromTransferUrl({
     url: "https://example.invalid/cap.json",
     repoRoot: root,
@@ -1378,6 +1441,87 @@ it("enforces HTTPS-only transfer, blocks private destinations, and rejects overs
   expect(sensitive.ok).toBe(false);
   if (!sensitive.ok) expect(sensitive.reason).toBe("capture_transfer_sensitive_material");
   expect(existsSync(capturePath)).toBe(false);
+});
+
+it("pins transfer connect to validated public addresses and rejects DNS-rebinding / IPv6 bypass", async () => {
+  const publicOnly = await resolveAllowedTransferDestination(
+    "https://example.invalid/cap.json",
+    async () => [{ address: "93.184.216.34", family: 4 }],
+  );
+  expect(publicOnly.ok).toBe(true);
+  if (!publicOnly.ok) return;
+
+  // Rebinding: a later lookup that returns a private address must not be used for connect.
+  let lookups = 0;
+  const rebindingLookup = async () => {
+    lookups += 1;
+    if (lookups === 1) return [{ address: "93.184.216.34", family: 4 }];
+    return [{ address: "169.254.169.254", family: 4 }];
+  };
+  const first = await resolveAllowedTransferDestination("https://example.invalid/cap.json", rebindingLookup);
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.addresses.map((row) => row.address)).toEqual(["93.184.216.34"]);
+  const dispatcher = createPinnedTransferDispatcher(first);
+  // The pinned dispatcher must keep TCP on the validated address even if DNS would flip.
+  expect(first.addresses.every((row) => !isBlockedIpAddress(row.address))).toBe(true);
+  await dispatcher.close();
+
+  const reboundDenied = await resolveAllowedTransferDestination(
+    "https://example.invalid/cap.json",
+    async () => [{ address: "169.254.169.254", family: 4 }],
+  );
+  expect(reboundDenied.ok).toBe(false);
+  if (!reboundDenied.ok) expect(reboundDenied.reason).toBe("capture_transfer_resolved_address_blocked");
+
+  const mappedDenied = await resolveAllowedTransferDestination(
+    "https://example.invalid/cap.json",
+    async () => [{ address: "::ffff:127.0.0.1", family: 6 }],
+  );
+  expect(mappedDenied.ok).toBe(false);
+  if (!mappedDenied.ok) expect(mappedDenied.reason).toBe("capture_transfer_resolved_address_blocked");
+
+  const ulaDenied = await resolveAllowedTransferDestination(
+    "https://example.invalid/cap.json",
+    async () => [{ address: "fd00::1", family: 6 }],
+  );
+  expect(ulaDenied.ok).toBe(false);
+  if (!ulaDenied.ok) expect(ulaDenied.reason).toBe("capture_transfer_resolved_address_blocked");
+
+  const mixedDenied = await resolveAllowedTransferDestination(
+    "https://example.invalid/cap.json",
+    async () => [
+      { address: "93.184.216.34", family: 4 },
+      { address: "10.0.0.8", family: 4 },
+    ],
+  );
+  expect(mixedDenied.ok).toBe(false);
+  if (!mixedDenied.ok) expect(mixedDenied.reason).toBe("capture_transfer_resolved_address_blocked");
+});
+
+it("rejects oversized local webhook deliveries without writing inbox evidence", async () => {
+  const root = repoFixture();
+  const inbox = ensureCaptureInbox(root);
+  const before = readdirSync(inbox);
+  const oversize = Readable.from([Buffer.alloc(64, 0x61)]);
+  const req = oversize as unknown as IncomingMessage;
+  req.headers = { "content-length": "64", "stripe-signature": "t=1,v1=abc" };
+  const read = await readIncomingMessageBounded(req, 16);
+  expect(read.ok).toBe(false);
+  if (!read.ok) expect(read.reason).toBe("capture_transfer_too_large");
+  expect(readdirSync(inbox)).toEqual(before);
+
+  const streamOversize = Readable.from([
+    Buffer.alloc(10, 0x62),
+    Buffer.alloc(10, 0x63),
+    Buffer.alloc(10, 0x64),
+  ]);
+  const req2 = streamOversize as unknown as IncomingMessage;
+  req2.headers = { "stripe-signature": "t=1,v1=abc" };
+  const read2 = await readIncomingMessageBounded(req2, 16);
+  expect(read2.ok).toBe(false);
+  if (!read2.ok) expect(read2.reason).toBe("capture_transfer_too_large");
+  expect(readdirSync(inbox)).toEqual(before);
 });
 
 it("writes restricted local capture paths and resumes after a successful secure transfer", async () => {
