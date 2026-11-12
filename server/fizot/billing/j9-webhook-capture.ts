@@ -7,12 +7,18 @@
 import { readFileSync } from "node:fs";
 import { verifyStripeSignature } from "../admin/webhooks.ts";
 import {
+  checkCaptureSignatureTimestamp,
+  J9_CAPTURE_MAX_AGE_SEC,
+} from "./j9-capture-policy.ts";
+import {
   customerIdFromObject,
   proveInvoiceCheckoutOwnership,
   runIdFromMetadata,
   subscriptionIdFromInvoiceObject,
 } from "./j9-invoice-ownership.ts";
 import type { J9StripeTransport } from "./j9-transport.ts";
+
+export { J9_CAPTURE_MAX_AGE_SEC, J9_CAPTURE_FUTURE_SKEW_SEC } from "./j9-capture-policy.ts";
 
 export const J9_WEBHOOK_CAPTURE_SCHEMA = 2 as const;
 
@@ -205,12 +211,17 @@ export function verifyWebhookCaptureSignatures(input: {
   expectedSessionId: string;
   webhookSecret: string;
   nowMs?: number;
-  historicalMaxSkewSec?: number;
+  /**
+   * Max age for Stripe-Signature `t=` on staged J9 captures (default 48h).
+   * Production admin webhook skew remains 300s and is not changed here.
+   */
+  captureMaxAgeSec?: number;
 }): { ok: true; accepted: ParsedDelivery[]; checks: WebhookCaptureChecks } | { ok: false; reason: string; checks: WebhookCaptureChecks } {
   if (input.capture.runId !== input.expectedRunId) {
     return { ok: false, reason: "capture_run_id_mismatch", checks: emptyChecks() };
   }
   const nowMs = input.nowMs ?? Date.now();
+  const captureMaxAgeSec = input.captureMaxAgeSec ?? J9_CAPTURE_MAX_AGE_SEC;
   const accepted: ParsedDelivery[] = [];
   const seen = new Set<string>();
   for (const delivery of input.capture.deliveries) {
@@ -218,14 +229,21 @@ export function verifyWebhookCaptureSignatures(input: {
     if (deliveryTs == null) {
       return { ok: false, reason: "capture_header_timestamp_missing", checks: emptyChecks() };
     }
-    const isHistorical = delivery.provenance === "historical_export";
-    const maxSkewSec = isHistorical ? (input.historicalMaxSkewSec ?? 7 * 24 * 3600) : 300;
+    // Provenance is an operator claim only; timing bounds apply to all staged captures.
+    const timing = checkCaptureSignatureTimestamp({
+      timestampSec: deliveryTs,
+      nowMs,
+      maxAgeSec: captureMaxAgeSec,
+    });
+    if (!timing.ok) {
+      return { ok: false, reason: timing.reason, checks: emptyChecks() };
+    }
     const verified = verifyStripeSignature({
       secret: input.webhookSecret,
       body: delivery.body,
       header: delivery.stripeSignatureHeader,
       now: () => nowMs,
-      maxSkewSec,
+      maxSkewSec: captureMaxAgeSec,
     });
     if (!verified.ok) {
       return { ok: false, reason: `capture_signature_${verified.error}`, checks: emptyChecks() };
@@ -403,7 +421,7 @@ export async function verifyWebhookCapture(input: {
   webhookSecret: string;
   transport: J9StripeTransport;
   nowMs?: number;
-  historicalMaxSkewSec?: number;
+  captureMaxAgeSec?: number;
 }): Promise<WebhookCaptureResult> {
   const signed = verifyWebhookCaptureSignatures(input);
   if (!signed.ok) {

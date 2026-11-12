@@ -23,6 +23,14 @@ import {
 } from "../../../server/fizot/billing/j9-test-clock.ts";
 import { createFakeStripeTransport, type FakeStripeTransport } from "../../../server/fizot/billing/j9-transport.ts";
 import {
+  assertHttpsTransferUrl,
+  captureBodyLooksSensitive,
+  checkCaptureSignatureTimestamp,
+  J9_CAPTURE_MAX_AGE_SEC,
+  J9_WEBHOOK_CAPTURE_ARTIFACT_NAME,
+  J9_WEBHOOK_CAPTURE_RELATIVE,
+} from "../../../server/fizot/billing/j9-capture-policy.ts";
+import {
   verifyWebhookCapture,
   verifyWebhookCaptureSignatures,
 } from "../../../server/fizot/billing/j9-webhook-capture.ts";
@@ -1206,6 +1214,227 @@ it("records isolated in-memory credit checkpoint evidence without claiming durab
   });
   expect(fake.kind).toBe("fake_unit");
   expect(fake.liveAcceptance).toBe(false);
+});
+
+it("documents capture artifact name/path and rejects unsafe transfer URLs", () => {
+  expect(J9_WEBHOOK_CAPTURE_ARTIFACT_NAME).toBe("j9-webhook-capture");
+  expect(J9_WEBHOOK_CAPTURE_RELATIVE.replace(/\\/g, "/")).toBe("artifacts/j9/webhook-capture.json");
+  expect(assertHttpsTransferUrl("").ok).toBe(false);
+  expect(assertHttpsTransferUrl("http://example.invalid/cap.json").ok).toBe(false);
+  expect(assertHttpsTransferUrl("https://user:pass@example.invalid/cap.json").ok).toBe(false);
+  expect(assertHttpsTransferUrl("https://example.invalid/cap.json?x=1").ok).toBe(true);
+  expect(captureBodyLooksSensitive('{"id":"evt_1"}')).toBe(false);
+  expect(captureBodyLooksSensitive('{"x":"sk_test_leak"}')).toBe(true);
+  expect(captureBodyLooksSensitive('{"number":"4242424242424242"}')).toBe(true);
+});
+
+it("accepts staged captures aged 5m/30m/several hours and rejects beyond 48h or future t=", () => {
+  const runId = createRunId();
+  const baseCreated = Math.floor(Date.now() / 1000) - 10;
+  function pairAt(createdSec: number) {
+    const sessionBody = JSON.stringify({
+      id: `evt_s_${createdSec}`,
+      object: "event",
+      type: "checkout.session.completed",
+      created: createdSec,
+      livemode: false,
+      data: { object: { id: "cs_age", object: "checkout.session", customer: "cus_age", subscription: "sub_age", metadata: { fizot_j9_run_id: runId } } },
+    });
+    const paidBody = JSON.stringify({
+      id: `evt_p_${createdSec}`,
+      object: "event",
+      type: "invoice.paid",
+      created: createdSec + 1,
+      livemode: false,
+      data: { object: { id: "in_age", object: "invoice", customer: "cus_age", subscription: "sub_age", metadata: {} } },
+    });
+    return {
+      schemaVersion: 2 as const,
+      kind: "stripe_cli_signed_capture" as const,
+      runId,
+      capturedAt: new Date(createdSec * 1000).toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader(secret, sessionBody, createdSec), provenance: "stripe_cli_listen" as const },
+        { body: paidBody, stripeSignatureHeader: signStripeHeader(secret, paidBody, createdSec + 1), provenance: "stripe_cli_listen" as const },
+      ],
+    };
+  }
+  const ages = [
+    { label: "5m", ageSec: 5 * 60, expectOk: true },
+    { label: "30m", ageSec: 30 * 60, expectOk: true },
+    { label: "6h", ageSec: 6 * 60 * 60, expectOk: true },
+    { label: "beyond_48h", ageSec: J9_CAPTURE_MAX_AGE_SEC + 120, expectOk: false },
+  ];
+  for (const row of ages) {
+    const createdSec = baseCreated - row.ageSec;
+    const nowMs = (baseCreated + 10) * 1000;
+    const signed = verifyWebhookCaptureSignatures({
+      capture: pairAt(createdSec),
+      expectedRunId: runId,
+      expectedCustomerId: "cus_age",
+      expectedSubscriptionId: "sub_age",
+      expectedSessionId: "cs_age",
+      webhookSecret: secret,
+      nowMs,
+    });
+    expect(signed.ok).toBe(row.expectOk);
+    if (!row.expectOk && !signed.ok) {
+      expect(signed.reason).toBe("capture_signature_expired");
+    }
+  }
+  const future = checkCaptureSignatureTimestamp({
+    timestampSec: Math.floor(Date.now() / 1000) + 3600,
+    nowMs: Date.now(),
+  });
+  expect(future.ok).toBe(false);
+  if (!future.ok) expect(future.reason).toBe("capture_timestamp_in_future");
+});
+
+it("resumes verification with a several-hour-old valid capture bound to the run", async () => {
+  const transport = createFakeStripeTransport();
+  const runId = createRunId();
+  const created = Math.floor(Date.now() / 1000) - 3 * 60 * 60;
+  const sessionBody = JSON.stringify({
+    id: "evt_old_s",
+    object: "event",
+    type: "checkout.session.completed",
+    created,
+    livemode: false,
+    data: { object: { id: "cs_old", object: "checkout.session", customer: "cus_old", subscription: "sub_old", metadata: { fizot_j9_run_id: runId } } },
+  });
+  const paidBody = JSON.stringify({
+    id: "evt_old_p",
+    object: "event",
+    type: "invoice.paid",
+    created: created + 1,
+    livemode: false,
+    data: { object: { id: "in_old", object: "invoice", customer: "cus_old", subscription: "sub_old", metadata: {} } },
+  });
+  transport.seedOwnedCaptureJourney({
+    runId,
+    customerId: "cus_old",
+    subscriptionId: "sub_old",
+    sessionId: "cs_old",
+    invoiceId: "in_old",
+  });
+  transport.pushEvent(JSON.parse(sessionBody));
+  transport.pushEvent(JSON.parse(paidBody));
+  const live = await verifyWebhookCapture({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date(created * 1000).toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader(secret, sessionBody, created), provenance: "stripe_cli_listen" },
+        { body: paidBody, stripeSignatureHeader: signStripeHeader(secret, paidBody, created + 1), provenance: "stripe_cli_listen" },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_old",
+    expectedSubscriptionId: "sub_old",
+    expectedSessionId: "cs_old",
+    webhookSecret: secret,
+    transport,
+    nowMs: Date.now(),
+  });
+  expect(live.ok).toBe(true);
+  if (live.ok) {
+    expect(live.checks.signatureVerified).toBe(true);
+    expect(live.checks.stripeOriginVerified).toBe(true);
+    expect(live.checks.ownershipVerified).toBe(true);
+    expect(live.checks.provenanceIsOperatorClaimOnly).toBe(true);
+  }
+});
+
+it("rejects invalid HMAC, wrong subscription, and missing Stripe Event origin for captures", async () => {
+  const runId = createRunId();
+  const created = Math.floor(Date.now() / 1000) - 600;
+  const sessionBody = JSON.stringify({
+    id: "evt_bad_s",
+    object: "event",
+    type: "checkout.session.completed",
+    created,
+    livemode: false,
+    data: { object: { id: "cs_bad", object: "checkout.session", customer: "cus_bad", subscription: "sub_bad", metadata: { fizot_j9_run_id: runId } } },
+  });
+  const paidBody = JSON.stringify({
+    id: "evt_bad_p",
+    object: "event",
+    type: "invoice.paid",
+    created: created + 1,
+    livemode: false,
+    data: { object: { id: "in_bad", object: "invoice", customer: "cus_bad", subscription: "sub_bad", metadata: {} } },
+  });
+  const badHmac = verifyWebhookCaptureSignatures({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader("whsec_wrong", sessionBody, created), provenance: "stripe_cli_listen" },
+        { body: paidBody, stripeSignatureHeader: signStripeHeader(secret, paidBody, created + 1), provenance: "stripe_cli_listen" },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_bad",
+    expectedSubscriptionId: "sub_bad",
+    expectedSessionId: "cs_bad",
+    webhookSecret: secret,
+  });
+  expect(badHmac.ok).toBe(false);
+
+  const wrongSubBody = JSON.stringify({
+    id: "evt_bad_p2",
+    object: "event",
+    type: "invoice.paid",
+    created: created + 1,
+    livemode: false,
+    data: { object: { id: "in_bad2", object: "invoice", customer: "cus_bad", subscription: "sub_other", metadata: {} } },
+  });
+  const wrongSub = verifyWebhookCaptureSignatures({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader(secret, sessionBody, created), provenance: "stripe_cli_listen" },
+        { body: wrongSubBody, stripeSignatureHeader: signStripeHeader(secret, wrongSubBody, created + 1), provenance: "stripe_cli_listen" },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_bad",
+    expectedSubscriptionId: "sub_bad",
+    expectedSessionId: "cs_bad",
+    webhookSecret: secret,
+  });
+  expect(wrongSub.ok).toBe(false);
+
+  const missingOrigin = await verifyWebhookCapture({
+    capture: {
+      schemaVersion: 2,
+      kind: "stripe_cli_signed_capture",
+      runId,
+      capturedAt: new Date().toISOString(),
+      deliveries: [
+        { body: sessionBody, stripeSignatureHeader: signStripeHeader(secret, sessionBody, created), provenance: "stripe_cli_listen" },
+        { body: paidBody, stripeSignatureHeader: signStripeHeader(secret, paidBody, created + 1), provenance: "stripe_cli_listen" },
+      ],
+    },
+    expectedRunId: runId,
+    expectedCustomerId: "cus_bad",
+    expectedSubscriptionId: "sub_bad",
+    expectedSessionId: "cs_bad",
+    webhookSecret: secret,
+    transport: createFakeStripeTransport(),
+  });
+  expect(missingOrigin.ok).toBe(false);
+  if (!missingOrigin.ok) {
+    expect(missingOrigin.blocked).toBe(true);
+    expect(missingOrigin.checks.stripeOriginVerified).toBe(false);
+  }
 });
 
 it("tracks resources on mid-prepare failure for later cleanup", async () => {

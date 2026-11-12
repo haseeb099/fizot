@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-58 J9 capture: git-free transfer, receiver, 48h staged verification (P4.4 / FZ-27)
+
+- Why we changed it: Capture transfer via throwaway git branches put raw webhook material in history; 300s signature skew blocked prepare→resume; packer alone was not a receiver.
+- How it works: Loopback capture receiver + gitignored pack path; Actions `upload_capture` fetches a short-lived HTTPS `capture_transfer_url` (missing URL BLOCKED, no git fallback). Staged capture signature age bound 48h with future-timestamp rejection; production webhook skew unchanged. Validate script never prints bodies.
+- Why it is necessary: Safe operator capture handoff and usable historical verification for the staged journey.
+- Impact: No secrets configured; no live Stripe dispatch.
+- Rollback? Revert the CL-58 commit(s) on `fz-27-j9-live-integration-fixes` / PR #25.
+- Files / Patch IDs: PATCH-49.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-57 J9 live integration: invoice ownership, capture upload, clock PM/time (P4.4 / FZ-27)
 
 - Why we changed it: Real Stripe `invoice.paid` events lack Checkout run metadata on the invoice; capture upload had no operator path; Test Clock failure ignored subscription-level PM precedence; fixed Jan-2026 frozen time was unjustified.
