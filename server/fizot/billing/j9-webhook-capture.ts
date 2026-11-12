@@ -2,10 +2,23 @@
  * Stripe CLI signed webhook capture. Signature freshness uses the Stripe-Signature
  * header `t=` value, never the untrusted event body `created` field.
  * Capture `provenance` is an operator claim only — never live acceptance by itself.
+ * Invoice.paid ownership is proven via Session + Subscription metadata, not invoice metadata.
  */
 import { readFileSync } from "node:fs";
 import { verifyStripeSignature } from "../admin/webhooks.ts";
+import {
+  checkCaptureSignatureTimestamp,
+  J9_CAPTURE_MAX_AGE_SEC,
+} from "./j9-capture-policy.ts";
+import {
+  customerIdFromObject,
+  proveInvoiceCheckoutOwnership,
+  runIdFromMetadata,
+  subscriptionIdFromInvoiceObject,
+} from "./j9-invoice-ownership.ts";
 import type { J9StripeTransport } from "./j9-transport.ts";
+
+export { J9_CAPTURE_MAX_AGE_SEC, J9_CAPTURE_FUTURE_SKEW_SEC } from "./j9-capture-policy.ts";
 
 export const J9_WEBHOOK_CAPTURE_SCHEMA = 2 as const;
 
@@ -163,30 +176,14 @@ export function loadWebhookCapture(path: string): { ok: true; capture: J9Webhook
   return parseCapture(parsed);
 }
 
-function objectIds(obj: Record<string, unknown>): {
-  customerId: string | null;
-  subscriptionId: string | null;
-  sessionId: string | null;
-  runId: string | null;
-} {
-  const customerId = typeof obj.customer === "string" && obj.customer.startsWith("cus_")
-    ? obj.customer
-    : typeof obj.id === "string" && obj.object === "customer" && obj.id.startsWith("cus_")
-      ? obj.id
-      : null;
-  const subscriptionId = typeof obj.subscription === "string" && obj.subscription.startsWith("sub_")
-    ? obj.subscription
-    : typeof obj.id === "string" && obj.object === "subscription" && obj.id.startsWith("sub_")
-      ? obj.id
-      : null;
-  const sessionId = typeof obj.id === "string" && obj.object === "checkout.session" && obj.id.startsWith("cs_")
-    ? obj.id
-    : typeof obj.checkout_session === "string" && obj.checkout_session.startsWith("cs_")
-      ? obj.checkout_session
-      : null;
-  const metadata = obj.metadata as Record<string, unknown> | undefined;
-  const runId = typeof metadata?.fizot_j9_run_id === "string" ? metadata.fizot_j9_run_id : null;
-  return { customerId, subscriptionId, sessionId, runId };
+function sessionIdFromObject(obj: Record<string, unknown>): string | null {
+  if (typeof obj.id === "string" && obj.object === "checkout.session" && obj.id.startsWith("cs_")) {
+    return obj.id;
+  }
+  if (typeof obj.checkout_session === "string" && obj.checkout_session.startsWith("cs_")) {
+    return obj.checkout_session;
+  }
+  return null;
 }
 
 type ParsedDelivery = {
@@ -198,13 +195,13 @@ type ParsedDelivery = {
   customerId: string;
   subscriptionId: string | null;
   sessionId: string | null;
-  runId: string;
   dataObject: Record<string, unknown>;
 };
 
 /**
- * Cryptographic signature verification only. Does not establish Stripe-origin
- * business state or live acceptance.
+ * Cryptographic signature verification and structural id checks only.
+ * Does not establish Stripe-origin business state or live acceptance.
+ * Session events require fizot_j9_run_id on the Session; invoices do not require invoice metadata.
  */
 export function verifyWebhookCaptureSignatures(input: {
   capture: J9WebhookCapture;
@@ -214,12 +211,17 @@ export function verifyWebhookCaptureSignatures(input: {
   expectedSessionId: string;
   webhookSecret: string;
   nowMs?: number;
-  historicalMaxSkewSec?: number;
+  /**
+   * Max age for Stripe-Signature `t=` on staged J9 captures (default 48h).
+   * Production admin webhook skew remains 300s and is not changed here.
+   */
+  captureMaxAgeSec?: number;
 }): { ok: true; accepted: ParsedDelivery[]; checks: WebhookCaptureChecks } | { ok: false; reason: string; checks: WebhookCaptureChecks } {
   if (input.capture.runId !== input.expectedRunId) {
     return { ok: false, reason: "capture_run_id_mismatch", checks: emptyChecks() };
   }
   const nowMs = input.nowMs ?? Date.now();
+  const captureMaxAgeSec = input.captureMaxAgeSec ?? J9_CAPTURE_MAX_AGE_SEC;
   const accepted: ParsedDelivery[] = [];
   const seen = new Set<string>();
   for (const delivery of input.capture.deliveries) {
@@ -227,14 +229,21 @@ export function verifyWebhookCaptureSignatures(input: {
     if (deliveryTs == null) {
       return { ok: false, reason: "capture_header_timestamp_missing", checks: emptyChecks() };
     }
-    const isHistorical = delivery.provenance === "historical_export";
-    const maxSkewSec = isHistorical ? (input.historicalMaxSkewSec ?? 7 * 24 * 3600) : 300;
+    // Provenance is an operator claim only; timing bounds apply to all staged captures.
+    const timing = checkCaptureSignatureTimestamp({
+      timestampSec: deliveryTs,
+      nowMs,
+      maxAgeSec: captureMaxAgeSec,
+    });
+    if (!timing.ok) {
+      return { ok: false, reason: timing.reason, checks: emptyChecks() };
+    }
     const verified = verifyStripeSignature({
       secret: input.webhookSecret,
       body: delivery.body,
       header: delivery.stripeSignatureHeader,
       now: () => nowMs,
-      maxSkewSec,
+      maxSkewSec: captureMaxAgeSec,
     });
     if (!verified.ok) {
       return { ok: false, reason: `capture_signature_${verified.error}`, checks: emptyChecks() };
@@ -262,74 +271,91 @@ export function verifyWebhookCaptureSignatures(input: {
     if (!dataObj || typeof dataObj !== "object" || Array.isArray(dataObj)) {
       return { ok: false, reason: "capture_event_object_missing", checks: emptyChecks() };
     }
-    const ids = objectIds(dataObj as Record<string, unknown>);
-    // Explicit ownership: missing run metadata is not verified ownership.
-    if (!ids.runId) {
-      return {
-        ok: false,
-        reason: "capture_event_run_metadata_missing",
-        checks: emptyChecks({ signatureVerified: true }),
-      };
-    }
-    if (ids.runId !== input.expectedRunId) {
-      return {
-        ok: false,
-        reason: "capture_event_run_mismatch",
-        checks: emptyChecks({ signatureVerified: true }),
-      };
-    }
-    if (!ids.customerId) {
+    const obj = dataObj as Record<string, unknown>;
+    const customerId = customerIdFromObject(obj);
+    if (!customerId) {
       return {
         ok: false,
         reason: "capture_event_customer_missing",
         checks: emptyChecks({ signatureVerified: true }),
       };
     }
-    if (ids.customerId !== input.expectedCustomerId) {
+    if (customerId !== input.expectedCustomerId) {
       return {
         ok: false,
         reason: "capture_event_customer_mismatch",
         checks: emptyChecks({ signatureVerified: true }),
       };
     }
+
+    let subscriptionId: string | null = null;
+    let sessionId: string | null = null;
+
     if (parsed.type === "checkout.session.completed") {
-      if (!ids.sessionId || ids.sessionId !== input.expectedSessionId) {
+      sessionId = sessionIdFromObject(obj);
+      if (!sessionId || sessionId !== input.expectedSessionId) {
         return {
           ok: false,
           reason: "capture_session_mismatch",
           checks: emptyChecks({ signatureVerified: true }),
         };
       }
-      if (!ids.subscriptionId || ids.subscriptionId !== input.expectedSubscriptionId) {
+      const sessionRunId = runIdFromMetadata(obj);
+      if (!sessionRunId) {
+        return {
+          ok: false,
+          reason: "capture_event_run_metadata_missing",
+          checks: emptyChecks({ signatureVerified: true }),
+        };
+      }
+      if (sessionRunId !== input.expectedRunId) {
+        return {
+          ok: false,
+          reason: "capture_event_run_mismatch",
+          checks: emptyChecks({ signatureVerified: true }),
+        };
+      }
+      subscriptionId = typeof obj.subscription === "string" && obj.subscription.startsWith("sub_")
+        ? obj.subscription
+        : null;
+      if (!subscriptionId || subscriptionId !== input.expectedSubscriptionId) {
         return {
           ok: false,
           reason: "capture_session_subscription_mismatch",
           checks: emptyChecks({ signatureVerified: true }),
         };
       }
-    }
-    if (parsed.type === "invoice.paid") {
-      if (!ids.subscriptionId) {
+    } else if (parsed.type === "invoice.paid") {
+      // Invoice metadata is optional; subscription association is required.
+      subscriptionId = subscriptionIdFromInvoiceObject(obj);
+      if (!subscriptionId) {
         return {
           ok: false,
           reason: "capture_required_event_subscription_missing",
           checks: emptyChecks({ signatureVerified: true }),
         };
       }
-      if (ids.subscriptionId !== input.expectedSubscriptionId) {
+      if (subscriptionId !== input.expectedSubscriptionId) {
         return {
           ok: false,
           reason: "capture_event_subscription_mismatch",
           checks: emptyChecks({ signatureVerified: true }),
         };
       }
-    } else if (ids.subscriptionId && ids.subscriptionId !== input.expectedSubscriptionId) {
-      return {
-        ok: false,
-        reason: "capture_event_subscription_mismatch",
-        checks: emptyChecks({ signatureVerified: true }),
-      };
+    } else {
+      subscriptionId = typeof obj.subscription === "string" && obj.subscription.startsWith("sub_")
+        ? obj.subscription
+        : subscriptionIdFromInvoiceObject(obj);
+      if (subscriptionId && subscriptionId !== input.expectedSubscriptionId) {
+        return {
+          ok: false,
+          reason: "capture_event_subscription_mismatch",
+          checks: emptyChecks({ signatureVerified: true }),
+        };
+      }
+      sessionId = sessionIdFromObject(obj);
     }
+
     if (seen.has(parsed.id)) continue;
     seen.add(parsed.id);
     accepted.push({
@@ -338,11 +364,10 @@ export function verifyWebhookCaptureSignatures(input: {
       body: delivery.body,
       deliveryTs,
       provenance: delivery.provenance,
-      customerId: ids.customerId,
-      subscriptionId: ids.subscriptionId,
-      sessionId: ids.sessionId,
-      runId: ids.runId,
-      dataObject: dataObj as Record<string, unknown>,
+      customerId,
+      subscriptionId,
+      sessionId,
+      dataObject: obj,
     });
   }
   if (accepted.length === 0) {
@@ -354,7 +379,7 @@ export function verifyWebhookCaptureSignatures(input: {
     return {
       ok: false,
       reason: `capture_missing_required_types:${missing.join(",")}`,
-      checks: emptyChecks({ signatureVerified: true, ownershipVerified: true }),
+      checks: emptyChecks({ signatureVerified: true }),
     };
   }
   const sessionEvt = accepted.find((row) => row.type === "checkout.session.completed");
@@ -363,14 +388,14 @@ export function verifyWebhookCaptureSignatures(input: {
     return {
       ok: false,
       reason: "capture_required_pair_missing",
-      checks: emptyChecks({ signatureVerified: true, ownershipVerified: true }),
+      checks: emptyChecks({ signatureVerified: true }),
     };
   }
   if (sessionEvt.subscriptionId !== paidEvt.subscriptionId || sessionEvt.customerId !== paidEvt.customerId) {
     return {
       ok: false,
       reason: "capture_checkout_invoice_journey_mismatch",
-      checks: emptyChecks({ signatureVerified: true, ownershipVerified: true }),
+      checks: emptyChecks({ signatureVerified: true }),
     };
   }
   return {
@@ -378,14 +403,13 @@ export function verifyWebhookCaptureSignatures(input: {
     accepted,
     checks: emptyChecks({
       signatureVerified: true,
-      ownershipVerified: true,
       journeyLinked: true,
     }),
   };
 }
 
 /**
- * Full live capture verification: signatures + authenticated Stripe Event retrieval.
+ * Full live capture verification: signatures + Stripe Event API origin + Session/Subscription ownership.
  * Provenance labels remain operator claims and never alone establish acceptance.
  */
 export async function verifyWebhookCapture(input: {
@@ -397,7 +421,7 @@ export async function verifyWebhookCapture(input: {
   webhookSecret: string;
   transport: J9StripeTransport;
   nowMs?: number;
-  historicalMaxSkewSec?: number;
+  captureMaxAgeSec?: number;
 }): Promise<WebhookCaptureResult> {
   const signed = verifyWebhookCaptureSignatures(input);
   if (!signed.ok) {
@@ -452,35 +476,64 @@ export async function verifyWebhookCapture(input: {
         checks: { ...signed.checks, stripeOriginVerified: false },
       };
     }
-    const remoteIds = objectIds(remoteObj as Record<string, unknown>);
-    if (remoteIds.runId !== input.expectedRunId) {
-      return {
-        ok: false,
-        reason: "capture_stripe_event_run_mismatch",
-        checks: { ...signed.checks, stripeOriginVerified: false },
-      };
-    }
-    if (remoteIds.customerId !== input.expectedCustomerId) {
+    const remoteRecord = remoteObj as Record<string, unknown>;
+    const remoteCustomer = customerIdFromObject(remoteRecord);
+    if (remoteCustomer !== input.expectedCustomerId) {
       return {
         ok: false,
         reason: "capture_stripe_event_customer_mismatch",
         checks: { ...signed.checks, stripeOriginVerified: false },
       };
     }
-    if (row.type === "checkout.session.completed" && remoteIds.sessionId !== input.expectedSessionId) {
-      return {
-        ok: false,
-        reason: "capture_stripe_event_session_mismatch",
-        checks: { ...signed.checks, stripeOriginVerified: false },
-      };
+
+    if (row.type === "checkout.session.completed") {
+      const sessionId = sessionIdFromObject(remoteRecord);
+      if (sessionId !== input.expectedSessionId) {
+        return {
+          ok: false,
+          reason: "capture_stripe_event_session_mismatch",
+          checks: { ...signed.checks, stripeOriginVerified: false },
+        };
+      }
+      const sessionRunId = runIdFromMetadata(remoteRecord);
+      if (!sessionRunId || sessionRunId !== input.expectedRunId) {
+        return {
+          ok: false,
+          reason: "capture_stripe_event_run_mismatch",
+          checks: { ...signed.checks, stripeOriginVerified: false, ownershipVerified: false },
+        };
+      }
+      const sessionSub = typeof remoteRecord.subscription === "string" ? remoteRecord.subscription : null;
+      if (sessionSub !== input.expectedSubscriptionId) {
+        return {
+          ok: false,
+          reason: "capture_stripe_event_subscription_mismatch",
+          checks: { ...signed.checks, stripeOriginVerified: false },
+        };
+      }
+    } else if (row.type === "invoice.paid") {
+      const owned = await proveInvoiceCheckoutOwnership({
+        transport: input.transport,
+        invoiceObject: remoteRecord,
+        expectedRunId: input.expectedRunId,
+        expectedCustomerId: input.expectedCustomerId,
+        expectedSubscriptionId: input.expectedSubscriptionId,
+        expectedSessionId: input.expectedSessionId,
+      });
+      if (!owned.ok) {
+        return {
+          ok: false,
+          reason: owned.reason,
+          blocked: owned.reason.includes("retrieve_failed"),
+          checks: {
+            ...signed.checks,
+            stripeOriginVerified: true,
+            ownershipVerified: false,
+          },
+        };
+      }
     }
-    if (row.type === "invoice.paid" && remoteIds.subscriptionId !== input.expectedSubscriptionId) {
-      return {
-        ok: false,
-        reason: "capture_stripe_event_subscription_mismatch",
-        checks: { ...signed.checks, stripeOriginVerified: false },
-      };
-    }
+
     accepted.push({
       eventId: row.eventId,
       type: row.type,

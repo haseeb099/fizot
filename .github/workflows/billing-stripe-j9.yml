@@ -1,27 +1,33 @@
 # J9 billing lifecycle against Stripe test mode. Not on the daily gate.
 # Transport must stay live. Fake-unit PASS is not live acceptance.
 #
-# Operator journey (same run, latest artifact):
-# 1) Dispatch stage=prepare. Note github.run_id from the run URL and printed j9run_….
+# Operator journey (never commit webhook captures to Git):
+# 1) Dispatch stage=prepare. Note github.run_id and printed j9run_….
 # 2) Open Checkout URL; pay with a Stripe test card.
-# 3) Capture signed webhooks into artifacts/j9/webhook-capture.json (schema v2) and
-#    upload as artifact name j9-webhook-capture (helper run or local file before resume).
-# 4) First resume: artifact_run_id=<prepare github.run_id>, capture_run_id=<capture upload run>.
-# 5) If resume is BLOCKED/FAIL and resources were retained, download the artifact uploaded
-#    by THAT resume run and set artifact_run_id=<that resume run id> for the next resume.
-#    Never re-download a stale prepare artifact after lifecycle has advanced.
-# 6) Confirmed cleanup (including expired runs): stage=cleanup,
-#    artifact_run_id=<run that uploaded the latest artifact>,
-#    cleanup_confirm=<j9run_…>.
+# 3) Local capture (loopback only):
+#      node --experimental-strip-types scripts/fizot/j9-capture-receiver.mjs
+#      stripe listen --forward-to http://127.0.0.1:18787/stripe \
+#        --events checkout.session.completed,invoice.paid
+#      node --experimental-strip-types scripts/fizot/j9-pack-webhook-capture.mjs \
+#        --run-id=j9run_… --from-inbox
+#    Output is gitignored at artifacts/j9/webhook-capture.json (mode 0600 when supported).
+# 4) Actions handoff (optional): host the file on a short-lived HTTPS URL you control.
+#    Set Actions secret STRIPE_J9_CAPTURE_TRANSFER_URL to that URL (NOT a workflow input).
+#    Dispatch stage=upload_capture. Note github.run_id as capture_run_id.
+#    Clear/rotate the secret immediately after. Missing secret → BLOCKED (no git fallback).
+#    Or resume locally with the capture file on disk (no upload_capture).
+# 5) Resume: artifact_run_id=<prepare run> (+ capture_run_id if Actions).
+# 6) Cleanup: stage=cleanup, artifact_run_id=<latest>, cleanup_confirm=<j9run_…>.
+#    Manually delete inbox/, packaged capture, transfer object, and expire Actions artifacts.
 #
-# Paths are fixed under artifacts/j9/. Workflow inputs are never used as shell paths.
-# Never put Stripe secrets, webhook secrets, or card details in artifacts.
+# Paths are fixed under artifacts/j9/. Never put Stripe secrets or card data in artifacts.
+# Capture bodies may contain customer email / ids — delete after verification.
 name: Fizot billing Stripe test mode (J9)
 on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "prepare | resume | cleanup | full"
+        description: "prepare | resume | cleanup | upload_capture | full"
         required: true
         default: prepare
         type: choice
@@ -29,6 +35,7 @@ on:
           - prepare
           - resume
           - cleanup
+          - upload_capture
           - full
       artifact_run_id:
         description: "GitHub Actions run id that uploaded the LATEST j9-run-artifact (digits)."
@@ -82,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$STAGE" in
-            prepare|resume|cleanup|full) ;;
+            prepare|resume|cleanup|upload_capture|full) ;;
             *) echo "invalid stage"; exit 1 ;;
           esac
           HANDOFF="${ARTIFACT_RUN_ID:-$PREPARE_RUN_ID}"
@@ -96,6 +103,28 @@ jobs:
             [[ "$CLEANUP_CONFIRM" =~ ^j9run_[0-9a-f]+$ ]] || { echo "cleanup_confirm must be j9run_…"; exit 1; }
           fi
           echo "run_id=$HANDOFF" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch capture via short-lived Actions secret URL
+        if: ${{ inputs.stage == 'upload_capture' }}
+        env:
+          STRIPE_J9_CAPTURE_TRANSFER_URL: ${{ secrets.STRIPE_J9_CAPTURE_TRANSFER_URL }}
+        run: |
+          set -euo pipefail
+          # Secret is a bearer URL — never echo it. No workflow_dispatch URL input (metadata leak).
+          # No git commit fallback.
+          node --experimental-strip-types scripts/fizot/j9-fetch-capture-transfer.mjs
+          node --experimental-strip-types scripts/fizot/j9-validate-capture.mjs artifacts/j9/webhook-capture.json
+          echo "j9_upload_capture fetched_and_validated=true artifact=j9-webhook-capture"
+          echo "j9_upload_capture reminder=clear_STRIPE_J9_CAPTURE_TRANSFER_URL_secret_after_run"
+
+      - name: Upload j9-webhook-capture artifact
+        if: ${{ inputs.stage == 'upload_capture' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: j9-webhook-capture
+          path: artifacts/j9/webhook-capture.json
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Download latest J9 run artifact
         if: ${{ inputs.stage == 'resume' || inputs.stage == 'cleanup' }}
@@ -116,6 +145,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Run J9 stage
+        if: ${{ inputs.stage != 'upload_capture' }}
         env:
           STRIPE_J9_MODE: test
           STRIPE_J9_TRANSPORT: live
@@ -133,9 +163,10 @@ jobs:
         run: node --experimental-strip-types scripts/fizot/billing-j9.mjs
 
       - name: Upload latest non-secret J9 run artifact
-        if: always()
+        if: ${{ always() && inputs.stage != 'upload_capture' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: j9-run-artifact
           path: artifacts/j9/run.json
+          retention-days: 7
           if-no-files-found: ignore

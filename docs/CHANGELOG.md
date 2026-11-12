@@ -6,6 +6,46 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-60 J9 capture transfer: pin connect + stream size cap (P4.4 / FZ-27)
+
+- Why we changed it: DNS preflight alone can be raced (rebinding) against the later fetch connect, and `arrayBuffer()` accepted oversized bodies into memory before rejecting.
+- How it works: Resolve once, reject non-public/loopback/link-local/metadata/IPv4-mapped addresses, pin undici TCP connect to those addresses while preserving TLS hostname/certificate checks, `redirect: error`, stream bodies with an immediate 2 MiB abort, apply the same cap to the loopback receiver, wipe partial capture files on failure. Optional remote upload stays enabled under this pin.
+- Why it is necessary: Close verified transfer SSRF and memory DoS gaps without changing billing ownership/clock/HMAC logic.
+- Impact: No secrets configured; no live Stripe dispatch.
+- Rollback? Revert the CL-60 commit(s) on `fz-27-j9-live-integration-fixes` / PR #25.
+- Files / Patch IDs: PATCH-51.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-59 J9 capture transfer: Actions secret + SSRF/size hardening (P4.4 / FZ-27)
+
+- Why we changed it: A presigned HTTPS transfer URL is a bearer credential; exposing it as a `workflow_dispatch` input leaks it into workflow metadata and ordinary repository readers.
+- How it works: `upload_capture` reads only Actions secret `STRIPE_J9_CAPTURE_TRANSFER_URL` (no URL input). Fetch is HTTPS-only, `redirect: error`, blocks loopback/private/link-local/metadata destinations, enforces 2 MiB / 30s limits, never logs URL/body, wipes partial/stale capture on failure, and writes inbox/pack paths with 0700/0600 when the OS supports it. Missing secret → BLOCKED; no git commit fallback. Local resume unchanged.
+- Why it is necessary: Keep optional Actions handoff usable without credential leakage or SSRF.
+- Impact: No Stripe credentials configured; no live dispatch; operator must set/clear the short-lived transfer secret when using Actions upload.
+- Rollback? Revert the CL-59 commit(s) on `fz-27-j9-live-integration-fixes` / PR #25.
+- Files / Patch IDs: PATCH-50.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-58 J9 capture: git-free transfer, receiver, 48h staged verification (P4.4 / FZ-27)
+
+- Why we changed it: Capture transfer via throwaway git branches put raw webhook material in history; 300s signature skew blocked prepare→resume; packer alone was not a receiver.
+- How it works: Loopback capture receiver + gitignored pack path; Actions `upload_capture` originally took a short-lived HTTPS transfer URL (superseded by CL-59 secret). Staged capture signature age bound 48h with future-timestamp rejection; production webhook skew unchanged. Validate script never prints bodies.
+- Why it is necessary: Safe operator capture handoff and usable historical verification for the staged journey.
+- Impact: No secrets configured; no live Stripe dispatch.
+- Rollback? Revert the CL-58 commit(s) on `fz-27-j9-live-integration-fixes` / PR #25.
+- Files / Patch IDs: PATCH-49.
+- Related tasks: FZ-27 (P4.4).
+
+## CL-57 J9 live integration: invoice ownership, capture upload, clock PM/time (P4.4 / FZ-27)
+
+- Why we changed it: Real Stripe `invoice.paid` events lack Checkout run metadata on the invoice; capture upload had no operator path; Test Clock failure ignored subscription-level PM precedence; fixed Jan-2026 frozen time was unjustified.
+- How it works: Fail-closed ownership proves Session + Subscription `fizot_j9_run_id` (legacy or `parent.subscription_details` invoice association). Pack script + `upload_capture` stage publish `j9-webhook-capture` (7-day retention). Dunning updates subscription `default_payment_method`. Frozen time starts near now; checkpoints/ambiguous-advance safeguards retained.
+- Why it is necessary: Credentialed live J9 cannot PASS without these integrations.
+- Impact: No secrets configured, no Stripe resources created, no live dispatch in this PR.
+- Rollback? Revert the CL-57 commit(s) on `fz-27-j9-live-integration-fixes`.
+- Files / Patch IDs: PATCH-48.
+- Related tasks: FZ-27 (P4.4).
+
 ## CL-56 J9 ambiguous Test Clock advance + credit evidence label (P4.4 / FZ-27)
 
 - Why we changed it: Resume of `*_advance_committed` could silently re-POST `/advance` when Stripe was still ready below target, and harness credit checks overstated durable exactly-once grants.

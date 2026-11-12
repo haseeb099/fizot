@@ -77,10 +77,10 @@ Incomplete resume **never** auto-deletes. Auto-cleanup runs only after every man
 
 1. Dispatch `billing-stripe-j9.yml` with `stage=prepare`. Note `github.run_id` and printed `runId` (`j9run_…`).
 2. Open Checkout URL; pay with a Stripe **test** card.
-3. Capture signed Stripe CLI deliveries into `artifacts/j9/webhook-capture.json` (required types + explicit `fizot_j9_run_id`). Upload as `j9-webhook-capture`.
-4. First resume: `artifact_run_id=<prepare github.run_id>` (+ `capture_run_id`). Downloads latest artifact into fixed paths; verifies MAC.
-5. If resume is BLOCKED/FAIL, the resume run uploads the **updated** artifact. Next resume/cleanup must use `artifact_run_id=<that resume run id>` — never re-use a stale prepare artifact after lifecycle advanced.
-6. Confirmed cleanup (including MAC-valid expired artifacts): `stage=cleanup`, `artifact_run_id=<latest upload run>`, `cleanup_confirm=<runId>`.
+3. **Local capture receiver (required for raw HTTP fidelity):** run `scripts/fizot/j9-capture-receiver.mjs` on loopback, `stripe listen --forward-to http://127.0.0.1:18787/stripe`, then `j9-pack-webhook-capture.mjs --run-id=… --from-inbox`. Output is gitignored (`artifacts/j9/webhook-capture.json`). **Never commit captures to Git.**
+4. **Actions handoff (optional, still enabled):** host the packed file on a short-lived **HTTPS** URL you control (no redirects; public-network only). Set repository Actions secret `STRIPE_J9_CAPTURE_TRANSFER_URL` to that URL (**never** a `workflow_dispatch` input — the URL is a bearer credential). Dispatch `stage=upload_capture`. The fetch resolves DNS once, rejects non-public/loopback/link-local/metadata/IPv4-mapped destinations, pins the TCP connect to those addresses while keeping TLS hostname/certificate checks, streams at most **2 MiB**, and wipes partial files on failure. Missing/empty secret → **BLOCKED** (no git fallback). Note run id as `capture_run_id`. **Clear/rotate the secret immediately after.** Artifact retention **7 days**. Or skip Actions upload and resume locally with the capture on disk. Capture may include customer email/ids — never print bodies in CI logs. The loopback receiver applies the same 2 MiB body cap.
+5. Resume: `artifact_run_id=<prepare github.run_id>` (+ `capture_run_id` if Actions). Capture signature `t=` may be up to **48 hours** old (staged-capture policy); production webhook skew stays 300s.
+6. Confirmed cleanup: `stage=cleanup`, `artifact_run_id=<latest upload run>`, `cleanup_confirm=<runId>`. Manually delete `artifacts/j9/inbox/`, `artifacts/j9/webhook-capture.json`, any transfer-host object, and expire or delete Actions artifacts after verification.
 
 **Local stages**
 
@@ -104,6 +104,7 @@ Required configuration:
 | `STRIPE_J9_ARTIFACT_RUN_ID` | env | Digits-only GitHub Actions run id that uploaded the **latest** `j9-run-artifact` |
 | `STRIPE_J9_PREPARE_RUN_ID` | env | Deprecated alias for `STRIPE_J9_ARTIFACT_RUN_ID` |
 | `STRIPE_J9_CLEANUP_CONFIRM` | env | Must equal artifact `runId` for abandoned/expired confirmed cleanup |
+| `STRIPE_J9_CAPTURE_TRANSFER_URL` | secret | Optional; short-lived HTTPS capture URL for `upload_capture` only. Bearer credential — never a workflow input. Clear after use. |
 
 Shared scenarios: `secure_startup`, `checkout_session_created`, `checkout_completed`, `subscription_payment_and_credit`, `webhook_lifecycle`, `simulated_failed_payment_lifecycle`, `simulated_recovery`, `tax_and_seats`, `cleanup`. Live also requires `stripe_dunning_recovery`. Any required `FAIL`, `BLOCKED` or `NOT_RUN` prevents overall PASS and sets `live_acceptance=false`. Fake-unit PASS never becomes live acceptance.
 
@@ -113,8 +114,8 @@ Shared scenarios: `secure_startup`, `checkout_session_created`, `checkout_comple
 - Paid invoices require `object=invoice`, `in_…`, `livemode===false`, `paid===true`, `status=paid`, matching `cus_` / `sub_`. No fabricated invoices.
 - Seat quantity is re-read from Stripe subscription items only.
 - Simulated grace/suspension/recovery uses the **Fizot app worker clock** and remains labelled simulated. Stripe Test Clock `frozen_time` is separate evidence for `stripe_dunning_recovery`.
-- Webhook capture schema v2: `provenance` is an operator claim only. Verify Stripe-Signature using header `t=` (never body `created`). Require explicit `fizot_j9_run_id` (missing metadata ≠ ownership). Correlate `checkout.session.completed` + `invoice.paid` to the same Checkout journey. Separately retrieve each `evt_…` from the Stripe Events API (`livemode=false`) for Stripe-origin verification. Signature PASS without origin stays BLOCKED for live acceptance.
-- Test Clock: record baseline invoice + event ids → attach `pm_card_chargeCustomerFail` → advance → poll until `status=ready` → correlate post-baseline `invoice.payment_failed` for the clock customer/subscription/period → restore `pm_card_visa` → advance → require a distinct recovery invoice/`invoice.paid` (baseline excluded). Missing associations or event evidence stay BLOCKED (no wildcards). Pagination limits are reported honestly.
+- Webhook capture schema v2: `provenance` is an operator claim only. Staged captures use an explicit **48h** signature-age bound (reject future `t=` and expired captures); this does not weaken production admin webhook verification (300s). Verify Stripe-Signature over the exact raw body. Session events require `fizot_j9_run_id` on the Checkout Session. `invoice.paid` ownership is proven via Stripe-retrieved Invoice → Subscription (legacy or `parent.subscription_details`) plus the artifact Session; invoice metadata is not required. Retrieve each `evt_…` from the Stripe Events API (`livemode=false`). Signature alone is never acceptance.
+- Test Clock: frozen time starts near now (not a fixed calendar date). Record baseline invoice + event ids → set **subscription** `default_payment_method` to `pm_card_chargeCustomerFail` (subscription PM precedes customer `invoice_settings`) → advance within Stripe’s ≤2-period window → poll until `status=ready` → correlate post-baseline `invoice.payment_failed` → restore subscription PM to `pm_card_visa` → advance → require a distinct recovery invoice/`invoice.paid` (baseline excluded). Missing associations or event evidence stay BLOCKED.
 - Cleanup expires open Sessions, then deletes subscriptions, customers and test clocks tracked by the artifact after live ownership checks. Foreign resource ids are refused. Partial cleanup never reports `cleanup=complete` and does not mark `abandoned` while resources may remain. Paused prepare / mid-prepare `cleanup_partial` runs must use the confirmed cleanup stage.
 
 ### Costs and limits

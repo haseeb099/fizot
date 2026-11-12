@@ -26,6 +26,11 @@ cloudflare/control-plane/worker-configuration.d.ts
 .vercel/
 .pi/
 
+# J9 live capture material (customer email/ids; never commit webhook bodies)
+artifacts/j9/inbox/
+artifacts/j9/webhook-capture.json
+artifacts/j9/raw/
+
 # Release signing material. The signing keys for the mobile stores belong to the
 # maintainer and never enter this repository; these patterns are the second line
 # of defence behind that rule, repo-wide rather than per-platform, because a key
