@@ -764,7 +764,7 @@ it("rejects invoice.paid that only matches customer without Checkout subscriptio
   if (!signed.ok) expect(signed.reason).toBe("capture_event_subscription_mismatch");
 });
 
-it("rejects fixture aliases and payment methods attached to a different customer", async () => {
+it("resolves fixture aliases while retaining created PaymentMethod IDs and customer ownership", async () => {
   const transport = createFakeStripeTransport();
   const first = await transport.request("POST", "customers", null);
   const second = await transport.request("POST", "customers", null);
@@ -786,6 +786,19 @@ it("rejects fixture aliases and payment methods attached to a different customer
   })).resolves.toMatchObject({
     invoice_settings: { default_payment_method: attachedId },
   });
+
+  const created = await transport.request("POST", "payment_methods", { type: "card", "card[token]": "tok_visa" });
+  const createdId = String(created.id);
+  const createdAttached = await transport.request("POST", `payment_methods/${createdId}/attach`, { customer: firstId });
+  expect(createdAttached.id).toBe(createdId);
+  await expect(transport.request("POST", `customers/${firstId}`, {
+    "invoice_settings[default_payment_method]": createdId,
+  })).resolves.toMatchObject({
+    invoice_settings: { default_payment_method: createdId },
+  });
+  await expect(transport.request("POST", `customers/${secondId}`, {
+    "invoice_settings[default_payment_method]": createdId,
+  })).rejects.toThrow("payment_method_must_be_attached_to_customer");
 });
 
 it("updates subscription-level default_payment_method for Test Clock failure and recovery", async () => {
