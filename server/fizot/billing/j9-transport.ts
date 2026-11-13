@@ -113,6 +113,7 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
   const deletedSubs = new Set<string>();
   const deletedCust = new Set<string>();
   const deletedClocks = new Set<string>();
+  const createdPaymentMethods = new Set<string>();
   const attachedPaymentMethods = new Map<string, { customerId: string; fixtureId: string }>();
   const assertPaymentMethodAttached = (paymentMethodId: string, customerId: string) => {
     if (attachedPaymentMethods.get(paymentMethodId)?.customerId !== customerId) {
@@ -478,16 +479,25 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
         return { ...session };
       }
       if (method === "POST" && path === "payment_methods") {
-        return { id: `pm_j9_${seq}`, object: "payment_method", type: "card", livemode: false };
+        const id = `pm_j9_${seq}`;
+        createdPaymentMethods.add(id);
+        return { id, object: "payment_method", type: "card", livemode: false };
       }
-      // Stripe test fixture aliases resolve to new attached PaymentMethod IDs.
       if (method === "POST" && /^payment_methods\/[^/]+\/attach$/.test(path)) {
         const customerId = String(params?.customer ?? "");
         if (!customerObjects.has(customerId)) {
           throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:customer_missing" });
         }
         const fixtureId = path.split("/")[1]!;
-        const id = `pm_j9_attached_${seq}`;
+        const isFixtureAlias = fixtureId === "pm_card_visa" || fixtureId === "pm_card_chargeCustomerFail";
+        if (!isFixtureAlias && !createdPaymentMethods.has(fixtureId)) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:payment_method_missing" });
+        }
+        const id = isFixtureAlias ? `pm_j9_attached_${seq}` : fixtureId;
+        const existing = attachedPaymentMethods.get(id);
+        if (existing && existing.customerId !== customerId) {
+          throw new J9StripeError({ status: 400, code: "payment_method_attached_elsewhere", stripeType: "invalid_request_error", message: "stripe_400:payment_method_attached_to_different_customer" });
+        }
         attachedPaymentMethods.set(id, { customerId, fixtureId });
         return { id, object: "payment_method", customer: customerId, livemode: false };
       }
