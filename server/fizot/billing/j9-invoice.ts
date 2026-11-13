@@ -1,6 +1,8 @@
 /**
  * Paid-invoice checks for J9. Never invents a paid invoice or rewrites Stripe fields.
  */
+import { subscriptionIdFromInvoiceObject } from "./j9-invoice-ownership.ts";
+
 export type PaidInvoiceExpectation = {
   customerId: string;
   subscriptionId: string;
@@ -43,11 +45,25 @@ export function assertPaidInvoice(
   if (invoice.livemode !== false) {
     return { ok: false, reason: invoice.livemode === true ? "invoice_livemode_true" : "invoice_livemode_invalid" };
   }
-  if (!Object.prototype.hasOwnProperty.call(invoice, "paid")) {
-    return { ok: false, reason: "invoice_paid_missing" };
-  }
-  if (invoice.paid !== true) {
-    return { ok: false, reason: invoice.paid === false ? "invoice_paid_flag_false" : "invoice_paid_invalid" };
+  if (Object.prototype.hasOwnProperty.call(invoice, "paid")) {
+    if (invoice.paid !== true) {
+      return { ok: false, reason: invoice.paid === false ? "invoice_paid_flag_false" : "invoice_paid_invalid" };
+    }
+  } else {
+    const transitions = invoice.status_transitions as Record<string, unknown> | null | undefined;
+    const amountDue = invoice.amount_due;
+    const amountPaid = invoice.amount_paid;
+    const amountRemaining = invoice.amount_remaining;
+    if (
+      !transitions || typeof transitions !== "object" || Array.isArray(transitions)
+      || !Number.isSafeInteger(transitions.paid_at) || Number(transitions.paid_at) <= 0
+      || invoice.attempted !== true
+      || !Number.isSafeInteger(amountDue) || Number(amountDue) <= 0
+      || !Number.isSafeInteger(amountPaid) || amountPaid !== amountDue
+      || amountRemaining !== 0
+    ) {
+      return { ok: false, reason: "invoice_paid_missing" };
+    }
   }
   if (invoice.status !== "paid") {
     return { ok: false, reason: `invoice_status=${String(invoice.status)}` };
@@ -59,7 +75,7 @@ export function assertPaidInvoice(
   if (customerId !== expected.customerId) {
     return { ok: false, reason: "invoice_customer_mismatch" };
   }
-  const subscriptionId = requireId(invoice.subscription, "sub_");
+  const subscriptionId = subscriptionIdFromInvoiceObject(invoice);
   if (!subscriptionId) {
     return { ok: false, reason: "invoice_subscription_missing" };
   }
