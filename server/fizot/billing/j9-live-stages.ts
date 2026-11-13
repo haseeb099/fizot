@@ -58,6 +58,15 @@ function emptyResources(): J9TrackedResources {
   return emptyTrackedResources();
 }
 
+async function attachTestCard(transport: J9StripeTransport, customerId: string, fixtureId: string): Promise<string> {
+  const attached = await transport.request("POST", `payment_methods/${fixtureId}/attach`, { customer: customerId });
+  const id = attached.id;
+  if (typeof id !== "string" || !id.startsWith("pm_") || attached.customer !== customerId || attached.livemode !== false) {
+    throw new Error("attached_test_payment_method_invalid");
+  }
+  return id;
+}
+
 export type PrepareResult = {
   artifact: J9RunArtifact;
   checkoutUrl: string | null;
@@ -177,14 +186,14 @@ export async function prepareLiveJ9(input: {
     }
     resources.customers.push(clockCustomerId);
 
-    await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: clockCustomerId });
+    const clockPaymentMethodId = await attachTestCard(input.transport, clockCustomerId, "pm_card_visa");
     await input.transport.request("POST", `customers/${clockCustomerId}`, {
-      "invoice_settings[default_payment_method]": "pm_card_visa",
+      "invoice_settings[default_payment_method]": clockPaymentMethodId,
     });
 
     const clockSub = await input.transport.request("POST", "subscriptions", {
       customer: clockCustomerId,
-      default_payment_method: "pm_card_visa",
+      default_payment_method: clockPaymentMethodId,
       "items[0][price]": input.config.priceHome,
       "items[0][quantity]": "1",
       "metadata[workspace_id]": workspaceId,
@@ -685,12 +694,12 @@ export async function runStripeTestClockDunning(input: {
 
   if (dunning.phase === "baseline") {
     // Subscription.default_payment_method takes precedence over customer invoice_settings.
-    await input.transport.request("POST", "payment_methods/pm_card_chargeCustomerFail/attach", { customer: customerId });
+    const failurePaymentMethodId = await attachTestCard(input.transport, customerId, "pm_card_chargeCustomerFail");
     await input.transport.request("POST", `customers/${customerId}`, {
-      "invoice_settings[default_payment_method]": "pm_card_chargeCustomerFail",
+      "invoice_settings[default_payment_method]": failurePaymentMethodId,
     });
     await input.transport.request("POST", `subscriptions/${subscriptionId}`, {
-      default_payment_method: "pm_card_chargeCustomerFail",
+      default_payment_method: failurePaymentMethodId,
     });
     dunning = { ...dunning, phase: "fail_pm_set" };
     persist(dunning);
@@ -765,12 +774,12 @@ export async function runStripeTestClockDunning(input: {
   }
 
   if (dunning.phase === "failure_confirmed") {
-    await input.transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: customerId });
+    const recoveryPaymentMethodId = await attachTestCard(input.transport, customerId, "pm_card_visa");
     await input.transport.request("POST", `customers/${customerId}`, {
-      "invoice_settings[default_payment_method]": "pm_card_visa",
+      "invoice_settings[default_payment_method]": recoveryPaymentMethodId,
     });
     await input.transport.request("POST", `subscriptions/${subscriptionId}`, {
-      default_payment_method: "pm_card_visa",
+      default_payment_method: recoveryPaymentMethodId,
     });
     const live = await retrieveTestClock(input.transport, clockId);
     if (!live.ok) return failed(live.reason, live.reason);
