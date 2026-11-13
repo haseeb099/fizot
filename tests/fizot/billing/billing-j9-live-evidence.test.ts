@@ -889,6 +889,9 @@ it("refuses abandoned cleanup without matching confirm and ownership", async () 
     repoRoot: root,
   });
   expect(refused.scenarios.find((row) => row.scenario === "cleanup")?.cleanup).toBe("refused");
+  expect(refused.overall).toBe("FAIL");
+  expect(refused.exitCode).toBe(1);
+  expect(refused.liveAcceptance).toBe(false);
 
   const cleaned = await runJ9({
     env: liveEnv(root, { STRIPE_J9_STAGE: "cleanup", STRIPE_J9_CLEANUP_CONFIRM: artifact.artifact.runId }),
@@ -896,6 +899,10 @@ it("refuses abandoned cleanup without matching confirm and ownership", async () 
     repoRoot: root,
   });
   expect(cleaned.scenarios.find((row) => row.scenario === "cleanup")?.status).toBe("PASS");
+  expect(cleaned.overall).toBe("PASS");
+  expect(cleaned.exitCode).toBe(0);
+  expect(cleaned.liveAcceptance).toBe(false);
+  expect(cleaned.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("NOT_RUN");
 });
 
 it("reports partial cleanup without marking abandoned while resources remain", async () => {
@@ -915,6 +922,9 @@ it("reports partial cleanup without marking abandoned while resources remain", a
   const row = cleaned.scenarios.find((item) => item.scenario === "cleanup");
   expect(row?.status).toBe("FAIL");
   expect(row?.cleanup).toBe("partial");
+  expect(cleaned.overall).toBe("FAIL");
+  expect(cleaned.exitCode).toBe(1);
+  expect(cleaned.liveAcceptance).toBe(false);
   const after = JSON.parse(readFileSync(artifactFile(root), "utf8")) as { stage: string; retrySafe: boolean };
   expect(after.stage).toBe("cleanup_partial");
   expect(after.retrySafe).toBe(false);
