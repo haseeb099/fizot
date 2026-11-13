@@ -32,6 +32,78 @@ it("accepts a fully valid paid test invoice", () => {
   expect(result).toEqual({ ok: true, invoiceId: "in_1", livemode: false, paid: true });
 });
 
+function modernPaidInvoice(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "in_modern",
+    object: "invoice",
+    livemode: false,
+    status: "paid",
+    attempted: true,
+    amount_due: 1999,
+    amount_paid: 1999,
+    amount_remaining: 0,
+    status_transitions: { paid_at: 1794531893 },
+    customer: "cus_1",
+    parent: { type: "subscription_details", subscription_details: { subscription: "sub_1" } },
+    ...overrides,
+  };
+}
+
+it("accepts a genuinely paid modern Stripe invoice with parent subscription details", () => {
+  expect(assertPaidInvoice(modernPaidInvoice(), expected)).toEqual({
+    ok: true, invoiceId: "in_modern", livemode: false, paid: true,
+  });
+});
+
+it("accepts a modern expanded parent subscription reference", () => {
+  expect(assertPaidInvoice(modernPaidInvoice({
+    parent: { type: "subscription_details", subscription_details: { subscription: { id: "sub_1" } } },
+  }), expected).ok).toBe(true);
+});
+
+it("rejects modern invoices without sufficient independent payment evidence", () => {
+  const invalid: Array<[string, Record<string, unknown>]> = [
+    ["missing paid timestamp", { status_transitions: {} }],
+    ["null paid timestamp", { status_transitions: { paid_at: null } }],
+    ["zero paid timestamp", { status_transitions: { paid_at: 0 } }],
+    ["fractional paid timestamp", { status_transitions: { paid_at: 1.5 } }],
+    ["unattempted", { attempted: false }],
+    ["missing attempted", { attempted: undefined }],
+    ["zero amount due", { amount_due: 0, amount_paid: 0 }],
+    ["zero amount paid", { amount_paid: 0 }],
+    ["incorrect amount paid", { amount_paid: 1000 }],
+    ["noninteger amount paid", { amount_paid: "1999" }],
+    ["remaining amount", { amount_remaining: 1 }],
+    ["missing remaining amount", { amount_remaining: undefined }],
+  ];
+  for (const [name, overrides] of invalid) {
+    expect(assertPaidInvoice(modernPaidInvoice(overrides), expected), name).toEqual({
+      ok: false, reason: "invoice_paid_missing",
+    });
+  }
+});
+
+it("modern invoices still reject unpaid, live-mode, wrong customer and wrong subscription", () => {
+  expect(assertPaidInvoice(modernPaidInvoice({ status: "open" }), expected)).toEqual({
+    ok: false, reason: "invoice_status=open",
+  });
+  expect(assertPaidInvoice(modernPaidInvoice({ paid: false }), expected)).toEqual({
+    ok: false, reason: "invoice_paid_flag_false",
+  });
+  expect(assertPaidInvoice(modernPaidInvoice({ livemode: true }), expected)).toEqual({
+    ok: false, reason: "invoice_livemode_true",
+  });
+  expect(assertPaidInvoice(modernPaidInvoice({ customer: "cus_other" }), expected)).toEqual({
+    ok: false, reason: "invoice_customer_mismatch",
+  });
+  expect(assertPaidInvoice(modernPaidInvoice({
+    parent: { type: "subscription_details", subscription_details: { subscription: "sub_other" } },
+  }), expected)).toEqual({ ok: false, reason: "invoice_subscription_mismatch" });
+  expect(assertPaidInvoice(modernPaidInvoice({ parent: null }), expected)).toEqual({
+    ok: false, reason: "invoice_subscription_missing",
+  });
+});
+
 it("rejects missing livemode", () => {
   const invoice = validPaidInvoice();
   delete (invoice as { livemode?: boolean }).livemode;
