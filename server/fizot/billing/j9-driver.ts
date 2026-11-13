@@ -73,8 +73,10 @@ export function finish(input: {
   artifactPath?: string | null;
   runId?: string | null;
   checkoutUrl?: string | null;
+  evaluationScope?: "cleanup_only";
 }): J9Report {
   const required = mandatoryFor(input.kind);
+  const assessed = input.evaluationScope === "cleanup_only" ? ["secure_startup", "cleanup"] : required;
   const byName = new Map(input.scenarios.map((row) => [row.scenario, row]));
   const ordered = [
     ...required.map((name) => byName.get(name) ?? scenario(name, "NOT_RUN", "none", "not executed")),
@@ -87,14 +89,14 @@ export function finish(input: {
     seen.add(row.scenario);
     return true;
   });
-  const requiredRows = scenarios.filter((row) => required.includes(row.scenario));
+  const requiredRows = scenarios.filter((row) => assessed.includes(row.scenario));
   const hasFail = requiredRows.some((row) => row.status === "FAIL");
   const hasBlockedOrSkip = requiredRows.some((row) => row.status === "BLOCKED" || row.status === "NOT_RUN");
   const overall = hasFail ? "FAIL" : hasBlockedOrSkip ? "BLOCKED" : "PASS";
   const exitCode = overall === "PASS" ? 0 : overall === "FAIL" ? 1 : 2;
   return {
     kind: input.kind,
-    liveAcceptance: input.kind === "live_j9" && overall === "PASS",
+    liveAcceptance: input.kind === "live_j9" && input.evaluationScope !== "cleanup_only" && overall === "PASS",
     overall,
     exitCode,
     scenarios,
@@ -178,6 +180,7 @@ export async function runJ9(deps: J9DriverDeps): Promise<J9Report> {
     const abandoned = await cleanupAbandonedRun({ config, transport });
     return finish({
       kind,
+      evaluationScope: "cleanup_only",
       scenarios: [
         scenario("secure_startup", "PASS", "config", `stage=cleanup confirm=${config.cleanupConfirm}`),
         ...abandoned.scenarios,
