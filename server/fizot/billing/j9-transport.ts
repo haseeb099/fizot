@@ -113,6 +113,17 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
   const deletedSubs = new Set<string>();
   const deletedCust = new Set<string>();
   const deletedClocks = new Set<string>();
+  const attachedPaymentMethods = new Map<string, { customerId: string; fixtureId: string }>();
+  const assertPaymentMethodAttached = (paymentMethodId: string, customerId: string) => {
+    if (attachedPaymentMethods.get(paymentMethodId)?.customerId !== customerId) {
+      throw new J9StripeError({
+        status: 400,
+        code: "payment_method_unattached",
+        stripeType: "invalid_request_error",
+        message: "stripe_400:payment_method_must_be_attached_to_customer",
+      });
+    }
+  };
 
   const transport: FakeStripeTransport = {
     customers,
@@ -269,7 +280,7 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
               ?? (customer.invoice_settings as { default_payment_method: string | null } | undefined)?.default_payment_method;
             seq += 1;
             const invoiceId = `in_clock_${seq}`;
-            if (defaultPm === "pm_card_chargeCustomerFail") {
+            if ((defaultPm && attachedPaymentMethods.get(defaultPm)?.fixtureId) === "pm_card_chargeCustomerFail") {
               events.push({
                 id: `evt_fail_${seq}`,
                 object: "event",
@@ -392,6 +403,7 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
           throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:customer_missing" });
         }
         if (params?.["invoice_settings[default_payment_method]"]) {
+          assertPaymentMethodAttached(params["invoice_settings[default_payment_method]"], id);
           (customer.invoice_settings as { default_payment_method: string | null }).default_payment_method =
             params["invoice_settings[default_payment_method]"];
         }
@@ -468,9 +480,16 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
       if (method === "POST" && path === "payment_methods") {
         return { id: `pm_j9_${seq}`, object: "payment_method", type: "card", livemode: false };
       }
-      // Official Stripe path: POST /v1/payment_methods/:id/attach
+      // Stripe test fixture aliases resolve to new attached PaymentMethod IDs.
       if (method === "POST" && /^payment_methods\/[^/]+\/attach$/.test(path)) {
-        return { id: path.split("/")[1], object: "payment_method", customer: params?.customer ?? null, livemode: false };
+        const customerId = String(params?.customer ?? "");
+        if (!customerObjects.has(customerId)) {
+          throw new J9StripeError({ status: 404, code: "resource_missing", stripeType: "invalid_request_error", message: "stripe_404:customer_missing" });
+        }
+        const fixtureId = path.split("/")[1]!;
+        const id = `pm_j9_attached_${seq}`;
+        attachedPaymentMethods.set(id, { customerId, fixtureId });
+        return { id, object: "payment_method", customer: customerId, livemode: false };
       }
       if (method === "POST" && path === "subscriptions") {
         const id = `sub_j9_${seq}`;
@@ -479,6 +498,7 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
         const price = params?.["items[0][price]"] ?? "price_j9";
         const quantity = Number(params?.["items[0][quantity]"] ?? 1);
         const customer = String(params?.customer ?? "");
+        if (params?.default_payment_method) assertPaymentMethodAttached(params.default_payment_method, customer);
         const metadata = {
           workspace_id: params?.["metadata[workspace_id]"] ?? "",
           plan: params?.["metadata[plan]"] ?? "home",
@@ -552,6 +572,7 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
           }
         }
         if (params?.default_payment_method) {
+          assertPaymentMethodAttached(params.default_payment_method, item.customer);
           item.defaultPaymentMethod = params.default_payment_method;
         }
         return {
