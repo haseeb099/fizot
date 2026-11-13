@@ -56,10 +56,10 @@ export function assertPaidInvoice(
     const amountRemaining = invoice.amount_remaining;
     if (
       !transitions || typeof transitions !== "object" || Array.isArray(transitions)
-      || !Number.isSafeInteger(transitions.paid_at) || Number(transitions.paid_at) <= 0
+      || typeof transitions.paid_at !== "number" || !Number.isSafeInteger(transitions.paid_at) || transitions.paid_at <= 0
       || invoice.attempted !== true
-      || !Number.isSafeInteger(amountDue) || Number(amountDue) <= 0
-      || !Number.isSafeInteger(amountPaid) || amountPaid !== amountDue
+      || typeof amountDue !== "number" || !Number.isSafeInteger(amountDue) || amountDue <= 0
+      || typeof amountPaid !== "number" || !Number.isSafeInteger(amountPaid) || amountPaid !== amountDue
       || amountRemaining !== 0
     ) {
       return { ok: false, reason: "invoice_paid_missing" };
