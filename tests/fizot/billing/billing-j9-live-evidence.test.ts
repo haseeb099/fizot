@@ -189,6 +189,45 @@ async function prepareAndCompleteCheckout(root: string, transport: FakeStripeTra
   };
 }
 
+it("prepares hosted Checkout when Stripe returns a verified modern paid baseline invoice", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const request = transport.request.bind(transport);
+  transport.request = async (method, path, params) => {
+    const response = await request(method, path, params);
+    if (method !== "POST" || path !== "subscriptions") return response;
+    const original = response.latest_invoice as Record<string, unknown>;
+    return {
+      ...response,
+      latest_invoice: {
+        id: original.id,
+        object: "invoice",
+        livemode: false,
+        status: "paid",
+        attempted: true,
+        amount_due: 1999,
+        amount_paid: 1999,
+        amount_remaining: 0,
+        status_transitions: { paid_at: 1794531893 },
+        customer: response.customer,
+        parent: {
+          type: "subscription_details",
+          subscription_details: { subscription: response.id },
+        },
+      },
+    };
+  };
+
+  const prepared = await runJ9({
+    env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }),
+    transport,
+    repoRoot: root,
+  });
+  expect(prepared.scenarios.find((row) => row.scenario === "checkout_session_created")?.status).toBe("PASS");
+  expect(prepared.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("BLOCKED");
+  expect(prepared.liveAcceptance).toBe(false);
+});
+
 it("resumes the same sealed test run after prepare using Checkout subscription credit", async () => {
   const root = repoFixture();
   const transport = createFakeStripeTransport();
