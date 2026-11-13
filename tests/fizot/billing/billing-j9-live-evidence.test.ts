@@ -764,6 +764,30 @@ it("rejects invoice.paid that only matches customer without Checkout subscriptio
   if (!signed.ok) expect(signed.reason).toBe("capture_event_subscription_mismatch");
 });
 
+it("rejects fixture aliases and payment methods attached to a different customer", async () => {
+  const transport = createFakeStripeTransport();
+  const first = await transport.request("POST", "customers", null);
+  const second = await transport.request("POST", "customers", null);
+  const firstId = String(first.id);
+  const secondId = String(second.id);
+  const attached = await transport.request("POST", "payment_methods/pm_card_visa/attach", { customer: firstId });
+  const attachedId = String(attached.id);
+  expect(attachedId).toMatch(/^pm_j9_attached_/);
+  expect(attachedId).not.toBe("pm_card_visa");
+
+  await expect(transport.request("POST", `customers/${firstId}`, {
+    "invoice_settings[default_payment_method]": "pm_card_visa",
+  })).rejects.toThrow("payment_method_must_be_attached_to_customer");
+  await expect(transport.request("POST", `customers/${secondId}`, {
+    "invoice_settings[default_payment_method]": attachedId,
+  })).rejects.toThrow("payment_method_must_be_attached_to_customer");
+  await expect(transport.request("POST", `customers/${firstId}`, {
+    "invoice_settings[default_payment_method]": attachedId,
+  })).resolves.toMatchObject({
+    invoice_settings: { default_payment_method: attachedId },
+  });
+});
+
 it("updates subscription-level default_payment_method for Test Clock failure and recovery", async () => {
   const root = repoFixture();
   const transport = createFakeStripeTransport();
@@ -781,7 +805,7 @@ it("updates subscription-level default_payment_method for Test Clock failure and
   });
   const clockSubId = loaded.artifact.clock.subscriptionId!;
   const before = await transport.request("GET", `subscriptions/${clockSubId}`, null);
-  expect(before.default_payment_method).toBe("pm_card_visa");
+  expect(before.default_payment_method).toMatch(/^pm_j9_attached_/);
 
   const mid = await runStripeTestClockDunning({
     transport,
@@ -792,7 +816,8 @@ it("updates subscription-level default_payment_method for Test Clock failure and
   });
   expect(mid.scenario.status).toBe("PASS");
   const after = await transport.request("GET", `subscriptions/${clockSubId}`, null);
-  expect(after.default_payment_method).toBe("pm_card_visa");
+  expect(after.default_payment_method).toMatch(/^pm_j9_attached_/);
+  expect(after.default_payment_method).not.toBe(before.default_payment_method);
   expect(mid.artifact.clock.dunning.failureInvoiceId).toBeTruthy();
   expect(mid.artifact.clock.dunning.recoveryInvoiceId).toBeTruthy();
   expect(mid.artifact.clock.dunning.recoveryInvoiceId).not.toBe(loaded.artifact.clock.baselineInvoiceId);
