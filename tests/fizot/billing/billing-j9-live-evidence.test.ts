@@ -1221,6 +1221,47 @@ it("keeps failure_advance_committed and blocks when Stripe is ready below target
   expect(resumed.artifact.clock.dunning.failTargetFrozenTime).toBe(failTarget);
 });
 
+it("waits beyond 40 polls for Stripe Test Clock advances without duplicate POSTs", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  await runJ9({
+    env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }),
+    transport,
+    repoRoot: root,
+  });
+  const path = artifactFile(root);
+  const loaded = loadJ9RunArtifact(path, hmacSecret);
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) return;
+
+  const original = transport.request.bind(transport);
+  let advances = 0;
+  let getsSinceAdvance = 0;
+  transport.request = async (method, pathName, params) => {
+    const result = await original(method, pathName, params);
+    if (method === "POST" && pathName.endsWith("/advance")) {
+      advances += 1;
+      getsSinceAdvance = 0;
+    }
+    if (method === "GET" && /^test_helpers\/test_clocks\/[^/]+$/.test(pathName) && advances > 0) {
+      getsSinceAdvance += 1;
+      if (getsSinceAdvance <= 45) return { ...result, status: "advancing" };
+    }
+    return result;
+  };
+
+  const result = await runStripeTestClockDunning({
+    transport,
+    artifact: loaded.artifact,
+    hmacSecret,
+    artifactPath: path,
+    sleepMs: 1,
+  });
+  expect(result.scenario.status).toBe("PASS");
+  expect(result.artifact.clock.dunning.phase).toBe("recovered");
+  expect(advances).toBe(2);
+});
+
 it("resumes Test Clock dunning from authenticated checkpoints without repeating advances", async () => {
   const root = repoFixture();
   const transport = createFakeStripeTransport();
