@@ -1243,7 +1243,7 @@ it("waits beyond 40 polls for Stripe Test Clock advances without duplicate POSTs
       advances += 1;
       getsSinceAdvance = 0;
     }
-    if (method === "GET" && /^test_helpers\\/test_clocks\\/[^/]+$/.test(pathName) && advances > 0) {
+    if (method === "GET" && /^test_helpers\/test_clocks\/[^/]+$/.test(pathName) && advances > 0) {
       getsSinceAdvance += 1;
       if (getsSinceAdvance <= 45) return { ...result, status: "advancing" };
     }
