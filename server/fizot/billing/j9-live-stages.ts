@@ -27,6 +27,7 @@ import {
   createTestClock,
   ensureTestClockFrozenAt,
   listStripeEventsPaged,
+  parseStripeEvent,
   nextBillingFrozenTime,
   recurringIntervalFromPrice,
   retrieveTestClock,
@@ -677,6 +678,9 @@ export async function runStripeTestClockDunning(input: {
   };
   let dunning: J9DunningCheckpoint = { ...artifact.clock.dunning };
   const baselineFrozen = artifact.clock.frozenTime;
+  // Stripe Event.created is wall-clock time, never the virtual Test Clock frozen_time.
+  // This signed creation time remains stable when a resume persists a later frozen_time.
+  const postPrepareEventCreatedSec = Math.floor(Date.parse(artifact.createdAt) / 1000);
 
   // First failure target is derived from prepare baseline frozen_time only.
   if (dunning.failTargetFrozenTime == null) {
@@ -751,7 +755,7 @@ export async function runStripeTestClockDunning(input: {
         types: ["invoice.payment_failed"],
         excludeEventIds: artifact.clock.baselineEventIds,
         excludeInvoiceIds: [baselineInvoiceId],
-        createdAfterSec: baselineFrozen,
+        createdAfterSec: postPrepareEventCreatedSec,
       });
       if (failedMatch.matched.length < 1) {
         return blocked(
@@ -831,6 +835,31 @@ export async function runStripeTestClockDunning(input: {
       return blocked("failure_checkpoint_missing", "Cannot confirm recovery without distinct failure invoice checkpoint");
     }
 
+    // Recheck the persisted failure checkpoint against Stripe's Events API.
+    // A future Test Clock frozen_time must never be used to filter Event.created.
+    let rawFailureEvent: Record<string, unknown>;
+    try {
+      rawFailureEvent = await input.transport.request("GET", `events/${failureEventId}`, null);
+    } catch {
+      return blocked("failure_event_unavailable", "Cannot independently retrieve Stripe failure checkpoint");
+    }
+    const failureProof = parseStripeEvent(rawFailureEvent);
+    const failureOwned = failureProof && correlateCustomerEvents([failureProof], {
+      customerId,
+      subscriptionId,
+      types: ["invoice.payment_failed"],
+      excludeEventIds: artifact.clock.baselineEventIds,
+      excludeInvoiceIds: [baselineInvoiceId],
+      createdAfterSec: postPrepareEventCreatedSec,
+    });
+    if (
+      !failureProof || failureProof.id !== failureEventId
+      || !failureOwned || failureOwned.matched.length !== 1
+      || failureProof.data.object.id !== failureInvoiceId
+    ) {
+      return blocked("failure_checkpoint_unverified", "Signed failure checkpoint does not match a post-prepare Stripe payment failure");
+    }
+
     let recoveryInvoiceId = dunning.recoveryInvoiceId;
     let recoveryEventId = dunning.recoveryEventId;
     if (!recoveryInvoiceId) {
@@ -845,7 +874,7 @@ export async function runStripeTestClockDunning(input: {
         types: ["invoice.paid"],
         excludeEventIds: [...artifact.clock.baselineEventIds, failureEventId],
         excludeInvoiceIds: [baselineInvoiceId, failureInvoiceId],
-        createdAfterSec: dunning.failTargetFrozenTime ?? baselineFrozen,
+        createdAfterSec: failureProof.created,
       });
       if (paidMatch.matched.length >= 1) {
         const recoveryEvent = paidMatch.matched[0]!;
@@ -874,6 +903,11 @@ export async function runStripeTestClockDunning(input: {
         }
         const recoveryPaid = assertPaidInvoice(latestInvoice, { customerId, subscriptionId });
         if (!recoveryPaid.ok) return blocked(recoveryPaid.reason, recoveryPaid.reason);
+        // If a paid webhook is delayed, only accept a distinct, post-failure
+        // Stripe invoice; a pre-failure paid invoice is not recovery evidence.
+        if (typeof latestInvoice.created !== "number" || latestInvoice.created <= failureProof.created) {
+          return blocked("recovery_invoice_not_after_failure", "Stripe invoice must be created after the verified failure event");
+        }
         recoveryInvoiceId = recoveryPaid.invoiceId;
       }
     }
