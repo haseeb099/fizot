@@ -673,7 +673,7 @@ export async function runStripeTestClockDunning(input: {
     // Stripe Test Clock advances can finish well after the previous 10s window.
     // Poll up to 2 minutes at the live runner's 250ms interval. A committed
     // advance is still reconciled read-only; never POST twice on timeout.
-    maxAttempts: input.sleepMs && input.sleepMs > 0 ? Math.ceil(120_000 / input.sleepMs) : 3,
+    maxAttempts: input.sleepMs && input.sleepMs > 0 ? Math.min(480, Math.ceil(120_000 / input.sleepMs)) : 3,
   };
   let dunning: J9DunningCheckpoint = { ...artifact.clock.dunning };
   const baselineFrozen = artifact.clock.frozenTime;
