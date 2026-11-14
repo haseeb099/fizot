@@ -189,6 +189,50 @@ async function prepareAndCompleteCheckout(root: string, transport: FakeStripeTra
   };
 }
 
+it("sends customer name update with Tax ID collection for existing J9 Checkout customers", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const original = transport.request.bind(transport);
+  let checkoutRequests = 0;
+  transport.request = async (method, path, params) => {
+    if (method === "POST" && path === "checkout/sessions") {
+      checkoutRequests += 1;
+      expect(params?.customer).toMatch(/^cus_/);
+      expect(params?.["tax_id_collection[enabled]"]).toBe("true");
+      expect(params?.["customer_update[name]"]).toBe("auto");
+      expect(params?.["automatic_tax[enabled]"]).toBe("true");
+    }
+    return original(method, path, params);
+  };
+  const prepared = await runJ9({
+    env: liveEnv(root, { STRIPE_J9_STAGE: "prepare" }),
+    transport,
+    repoRoot: root,
+  });
+  expect(checkoutRequests).toBe(1);
+  expect(prepared.scenarios.find((row) => row.scenario === "checkout_session_created")?.status).toBe("PASS");
+  expect(prepared.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("BLOCKED");
+  expect(prepared.overall).toBe("BLOCKED");
+  expect(prepared.exitCode).toBe(2);
+  expect(prepared.liveAcceptance).toBe(false);
+});
+
+it("rejects tax ID collection for an existing customer when name update is omitted", async () => {
+  const transport = createFakeStripeTransport();
+  await expect(transport.request("POST", "checkout/sessions", {
+    mode: "subscription",
+    customer: "cus_existing",
+    "tax_id_collection[enabled]": "true",
+  })).rejects.toMatchObject({ status: 400, code: "invalid_request_error" });
+  const created = await transport.request("POST", "checkout/sessions", {
+    mode: "subscription",
+    customer: "cus_existing",
+    "tax_id_collection[enabled]": "true",
+    "customer_update[name]": "auto",
+  });
+  expect(created.id).toMatch(/^cs_/);
+});
+
 it("prepares hosted Checkout when Stripe returns a verified modern paid baseline invoice", async () => {
   const root = repoFixture();
   const transport = createFakeStripeTransport();
