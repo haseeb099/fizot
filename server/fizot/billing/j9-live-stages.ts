@@ -677,6 +677,7 @@ export async function runStripeTestClockDunning(input: {
     maxAttempts: input.sleepMs && input.sleepMs > 0 ? Math.min(480, Math.ceil(120_000 / input.sleepMs)) : 3,
   };
   let dunning: J9DunningCheckpoint = { ...artifact.clock.dunning };
+  const baselineFrozen = artifact.clock.frozenTime;
   // Stripe Event.created is wall-clock time, never the virtual Test Clock frozen_time.
   // This signed creation time remains stable when a resume persists a later frozen_time.
   const postPrepareEventCreatedSec = Math.floor(Date.parse(artifact.createdAt) / 1000);
