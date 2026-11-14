@@ -202,9 +202,29 @@ export function eventObjectCustomerId(obj: Record<string, unknown>): string | nu
 }
 
 export function eventObjectSubscriptionId(obj: Record<string, unknown>): string | null {
-  if (typeof obj.subscription === "string" && obj.subscription.startsWith("sub_")) return obj.subscription;
-  if (typeof obj.id === "string" && obj.object === "subscription" && obj.id.startsWith("sub_")) return obj.id;
-  return null;
+  const direct = typeof obj.subscription === "string" && obj.subscription.startsWith("sub_")
+    ? obj.subscription
+    : null;
+  const self = typeof obj.id === "string" && obj.object === "subscription" && obj.id.startsWith("sub_")
+    ? obj.id
+    : null;
+  // Modern Stripe Invoice events move subscription into parent.subscription_details.
+  // Never accept contradictory legacy/modern associations.
+  const parent = obj.object === "invoice" && obj.parent && typeof obj.parent === "object"
+    && !Array.isArray(obj.parent) ? obj.parent as Record<string, unknown> : null;
+  const details = parent?.subscription_details && typeof parent.subscription_details === "object"
+    && !Array.isArray(parent.subscription_details)
+    ? parent.subscription_details as Record<string, unknown> : null;
+  const nested = details?.subscription;
+  const modern = typeof nested === "string" && nested.startsWith("sub_")
+    ? nested
+    : nested && typeof nested === "object" && !Array.isArray(nested)
+      && typeof (nested as Record<string, unknown>).id === "string"
+      && ((nested as Record<string, unknown>).id as string).startsWith("sub_")
+      ? (nested as Record<string, unknown>).id as string
+      : null;
+  if ((direct && modern && direct !== modern) || (self && direct && self !== direct)) return null;
+  return direct ?? self ?? modern;
 }
 
 export function eventObjectInvoiceId(obj: Record<string, unknown>): string | null {
