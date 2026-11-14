@@ -57,6 +57,7 @@ export async function runCheckoutSessionCreated(
     "line_items[0][quantity]": "1",
     "automatic_tax[enabled]": "true",
     "tax_id_collection[enabled]": "true",
+    "customer_update[name]": "auto",
     billing_address_collection: "required",
     "metadata[workspace_id]": workspaceId,
     "metadata[plan]": "home",
