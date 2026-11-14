@@ -211,7 +211,9 @@ it("sends customer name update with Tax ID collection for existing J9 Checkout c
   });
   expect(checkoutRequests).toBe(1);
   expect(prepared.scenarios.find((row) => row.scenario === "checkout_session_created")?.status).toBe("PASS");
-  expect(prepared.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("NOT_RUN");
+  expect(prepared.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("BLOCKED");
+  expect(prepared.overall).toBe("BLOCKED");
+  expect(prepared.exitCode).toBe(2);
   expect(prepared.liveAcceptance).toBe(false);
 });
 
