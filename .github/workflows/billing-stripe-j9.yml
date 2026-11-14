@@ -11,10 +11,12 @@
 #      node --experimental-strip-types scripts/fizot/j9-pack-webhook-capture.mjs \
 #        --run-id=j9run_… --from-inbox
 #    Output is gitignored at artifacts/j9/webhook-capture.json (mode 0600 when supported).
-# 4) Actions handoff (optional): host the file on a short-lived HTTPS URL you control.
-#    Set Actions secret STRIPE_J9_CAPTURE_TRANSFER_URL to that URL (NOT a workflow input).
+# 4) Actions handoff (optional):
+#    A: Set temporary Actions secret STRIPE_J9_CAPTURE_JSON from local capture file
+#       using 'gh secret set' with piped file content (never inline as workflow input).
+#    B: Or host a short-lived private HTTPS URL and set STRIPE_J9_CAPTURE_TRANSFER_URL.
 #    Dispatch stage=upload_capture. Note github.run_id as capture_run_id.
-#    Clear/rotate the secret immediately after. Missing secret → BLOCKED (no git fallback).
+#    Clear the temporary secret immediately after; no git or workflow-input fallback.
 #    Or resume locally with the capture file on disk (no upload_capture).
 # 5) Resume: artifact_run_id=<prepare run> (+ capture_run_id if Actions).
 # 6) Cleanup: stage=cleanup, artifact_run_id=<latest>, cleanup_confirm=<j9run_…>.
@@ -104,18 +106,24 @@ jobs:
           fi
           echo "run_id=$HANDOFF" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch capture via short-lived Actions secret URL
+      - name: Import signed capture from temporary Actions secret or short-lived HTTPS URL
         if: ${{ inputs.stage == 'upload_capture' }}
         env:
+          STRIPE_J9_CAPTURE_JSON: ${{ secrets.STRIPE_J9_CAPTURE_JSON }}
           STRIPE_J9_CAPTURE_TRANSFER_URL: ${{ secrets.STRIPE_J9_CAPTURE_TRANSFER_URL }}
         run: |
           set -euo pipefail
-          # Secret is a bearer URL — never echo it. No workflow_dispatch URL input (metadata leak).
-          # No git commit fallback.
-          node --experimental-strip-types scripts/fizot/j9-fetch-capture-transfer.mjs
+          # Never print either secret or use workflow_dispatch inputs as a handoff.
+          # Direct encrypted-secret handoff is suitable for captures below GitHub's 48 KB secret limit.
+          # HTTPS transfer remains supported; no git commit fallback.
+          if [[ -n "${STRIPE_J9_CAPTURE_JSON:-}" ]]; then
+            node --experimental-strip-types scripts/fizot/j9-import-capture-secret.mjs
+          else
+            node --experimental-strip-types scripts/fizot/j9-fetch-capture-transfer.mjs
+          fi
           node --experimental-strip-types scripts/fizot/j9-validate-capture.mjs artifacts/j9/webhook-capture.json
           echo "j9_upload_capture fetched_and_validated=true artifact=j9-webhook-capture"
-          echo "j9_upload_capture reminder=clear_STRIPE_J9_CAPTURE_TRANSFER_URL_secret_after_run"
+          echo "j9_upload_capture reminder=delete_temporary_capture_secret_after_run"
 
       - name: Upload j9-webhook-capture artifact
         if: ${{ inputs.stage == 'upload_capture' }}
