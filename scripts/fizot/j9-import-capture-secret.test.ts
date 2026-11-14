@@ -78,7 +78,7 @@ it("rejects a capture containing prohibited key material", () => {
 });
 
 it("rejects an oversized capture secret without creating a file", () => {
-  const { run, path } = execute("x".repeat(2 * 1024 * 1024 + 1));
+  const { run, path } = execute("x".repeat(48 * 1024 + 1));
   expect(run.status).toBe(2);
   expect(existsSync(path)).toBe(false);
 });
