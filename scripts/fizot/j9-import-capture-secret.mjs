@@ -15,7 +15,9 @@ import { loadWebhookCapture } from "../../server/fizot/billing/j9-webhook-captur
 
 const raw = process.env.STRIPE_J9_CAPTURE_JSON ?? "";
 const bytes = Buffer.byteLength(raw, "utf8");
-if (bytes === 0 || bytes > J9_CAPTURE_MAX_BYTES) {
+// GitHub Actions secret size limit is 48 KiB; keep the importer bound aligned.
+const maxBytes = Math.min(J9_CAPTURE_MAX_BYTES, 48 * 1024);
+if (bytes === 0 || bytes > maxBytes) {
   console.error("j9_import_capture BLOCKED reason=empty_or_oversized_capture_secret");
   process.exit(2);
 }
