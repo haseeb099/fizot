@@ -20,6 +20,7 @@ import {
 import {
   advanceTestClockUntilReady,
   correlateCustomerEvents,
+  eventObjectSubscriptionId,
   ensureTestClockFrozenAt,
   parseStripeEvent,
 } from "../../../server/fizot/billing/j9-test-clock.ts";
@@ -1259,6 +1260,113 @@ it("waits beyond 40 polls for Stripe Test Clock advances without duplicate POSTs
   });
   expect(result.scenario.status).toBe("PASS");
   expect(result.artifact.clock.dunning.phase).toBe("recovered");
+  expect(advances).toBe(2);
+});
+
+it("accepts modern invoice parent associations while rejecting conflicting Stripe subscription ids", () => {
+  const modern = {
+    id: "in_modern",
+    object: "invoice",
+    customer: "cus_expected",
+    parent: { type: "subscription_details", subscription_details: { subscription: "sub_expected" } },
+  };
+  expect(eventObjectSubscriptionId(modern)).toBe("sub_expected");
+  expect(eventObjectSubscriptionId({ ...modern, subscription: "sub_expected" })).toBe("sub_expected");
+  expect(eventObjectSubscriptionId({ ...modern, subscription: "sub_foreign" })).toBe(null);
+  const event = parseStripeEvent({
+    id: "evt_modern",
+    object: "event",
+    type: "invoice.payment_failed",
+    created: 100,
+    livemode: false,
+    data: { object: modern },
+  });
+  expect(event).not.toBeNull();
+  const result = correlateCustomerEvents([event!], {
+    customerId: "cus_expected",
+    subscriptionId: "sub_expected",
+    types: ["invoice.payment_failed"],
+    createdAfterSec: 50,
+    excludeInvoiceIds: ["in_baseline"],
+  });
+  expect(result.matched.map((row) => row.id)).toEqual(["evt_modern"]);
+  expect(correlateCustomerEvents([event!], {
+    customerId: "cus_foreign",
+    subscriptionId: "sub_expected",
+    types: ["invoice.payment_failed"],
+  }).matched).toEqual([]);
+});
+
+it("reconciles modern invoice failure events after the Test Clock frozen time advances into the future", async () => {
+  const root = repoFixture();
+  const transport = createFakeStripeTransport();
+  const prepared = await prepareAndCompleteCheckout(root, transport);
+  const path = artifactFile(root);
+  const loaded = loadJ9RunArtifact(path, hmacSecret);
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) return;
+
+  const withSub = persistArtifactUpdate(hmacSecret, path, loaded.artifact, {
+    checkout: { ...loaded.artifact.checkout, subscriptionId: prepared.subscriptionId },
+    resources: {
+      ...loaded.artifact.resources,
+      subscriptions: [...loaded.artifact.resources.subscriptions, prepared.subscriptionId],
+    },
+  });
+  const postPrepareSec = Math.floor(Date.parse(withSub.createdAt) / 1000);
+  const source = transport.request.bind(transport);
+  let revealFailedEvents = false;
+  let advances = 0;
+  transport.request = async (method, pathName, params) => {
+    const raw = await source(method, pathName, params);
+    if (method === "POST" && pathName.endsWith("/advance")) advances += 1;
+
+    const modernize = (input: Record<string, unknown>): Record<string, unknown> => {
+      if (input.type !== "invoice.payment_failed" && input.type !== "invoice.paid") return input;
+      const data = input.data as { object: Record<string, unknown> };
+      const { subscription, ...invoice } = data.object;
+      return {
+        ...input,
+        // Stripe's event.created is wall time; the virtual clock frozen_time
+        // may be more than a month ahead of this real timestamp.
+        created: postPrepareSec + (input.type === "invoice.payment_failed" ? 60 : 120),
+        data: {
+          object: {
+            ...invoice,
+            parent: { type: "subscription_details", subscription_details: { subscription } },
+          },
+        },
+      };
+    };
+
+    if (method === "GET" && pathName === "events") {
+      let rows = ((raw.data as Record<string, unknown>[] | undefined) ?? []).map(modernize);
+      if (!revealFailedEvents && params?.type === "invoice.payment_failed") rows = [];
+      return { ...raw, data: rows, has_more: false };
+    }
+    if (method === "GET" && pathName.startsWith("events/")) return modernize(raw);
+    return raw;
+  };
+
+  const first = await runStripeTestClockDunning({
+    transport, artifact: withSub, hmacSecret, artifactPath: path, sleepMs: 0,
+  });
+  expect(first.scenario.status).toBe("BLOCKED");
+  expect(first.scenario.evidence).toContain("missing=invoice.payment_failed");
+  expect(first.artifact.clock.dunning.phase).toBe("failure_advanced");
+  expect(first.artifact.clock.frozenTime).toBeGreaterThan(postPrepareSec + 120);
+  expect(advances).toBe(1);
+
+  // Late Stripe events become visible. Never repeat the previously committed advance.
+  revealFailedEvents = true;
+  const resumed = await runStripeTestClockDunning({
+    transport, artifact: first.artifact, hmacSecret, artifactPath: path, sleepMs: 0,
+  });
+  expect(resumed.scenario.status).toBe("PASS");
+  expect(resumed.artifact.clock.dunning.phase).toBe("recovered");
+  expect(resumed.artifact.clock.dunning.failureInvoiceId).toBeTruthy();
+  expect(resumed.artifact.clock.dunning.recoveryInvoiceId).toBeTruthy();
+  expect(resumed.artifact.clock.dunning.recoveryInvoiceId).not.toBe(resumed.artifact.clock.dunning.failureInvoiceId);
   expect(advances).toBe(2);
 });
 
