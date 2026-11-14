@@ -161,6 +161,51 @@ it("grants no credit when Stripe returns an unpaid invoice", async () => {
   expect(payment?.failureReason).toBe("invoice_paid_flag_false");
 });
 
+it("marks cleanup-only success without granting full live acceptance", () => {
+  const cleaned = finish({
+    kind: "live_j9",
+    evaluationScope: "cleanup_only",
+    resources: { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] },
+    scenarios: [
+      { scenario: "secure_startup", status: "PASS", source: "config", evidence: "stage=cleanup" },
+      { scenario: "cleanup", status: "PASS", source: "stripe_api", evidence: "verified", cleanup: "complete" },
+    ],
+  });
+  expect(cleaned.overall).toBe("PASS");
+  expect(cleaned.exitCode).toBe(0);
+  expect(cleaned.liveAcceptance).toBe(false);
+  expect(cleaned.scenarios.find((row) => row.scenario === "checkout_completed")?.status).toBe("NOT_RUN");
+  const full = finish({
+    kind: "live_j9",
+    resources: cleaned.resources,
+    scenarios: cleaned.scenarios,
+  });
+  expect(full.overall).toBe("BLOCKED");
+  expect(full.liveAcceptance).toBe(false);
+});
+
+it("cleanup-only scope fails closed on cleanup errors or missing evidence", () => {
+  for (const [startup, cleanup, overall, exitCode] of [
+    ["PASS", "FAIL", "FAIL", 1],
+    ["FAIL", "PASS", "FAIL", 1],
+    ["PASS", "BLOCKED", "BLOCKED", 2],
+    ["PASS", "NOT_RUN", "BLOCKED", 2],
+  ] as const) {
+    const report = finish({
+      kind: "live_j9",
+      evaluationScope: "cleanup_only",
+      resources: { customers: [], subscriptions: [], checkoutSessions: [], testClocks: [] },
+      scenarios: [
+        { scenario: "secure_startup", status: startup, source: "config", evidence: "startup" },
+        { scenario: "cleanup", status: cleanup, source: "stripe_api", evidence: "cleanup" },
+      ],
+    });
+    expect(report.overall).toBe(overall);
+    expect(report.exitCode).toBe(exitCode);
+    expect(report.liveAcceptance).toBe(false);
+  }
+});
+
 it("tolerates verified already-absent cleanup states", () => {
   expect(classifyCleanupError("subscription", new J9StripeError({
     status: 404,
