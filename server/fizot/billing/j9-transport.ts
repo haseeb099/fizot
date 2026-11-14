@@ -411,6 +411,14 @@ export function createFakeStripeTransport(options: FakeStripeOptions = {}): Fake
         return { ...customer };
       }
       if (method === "POST" && path === "checkout/sessions") {
+        if (params?.customer && params["tax_id_collection[enabled]"] === "true" && params["customer_update[name]"] !== "auto") {
+          throw new J9StripeError({
+            status: 400,
+            code: "invalid_request_error",
+            stripeType: "invalid_request_error",
+            message: "stripe_400:tax_id_collection_requires_customer_update_name_auto",
+          });
+        }
         const id = `cs_j9_${seq}`;
         checkoutSessions.push(id);
         const session = {
