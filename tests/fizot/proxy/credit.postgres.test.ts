@@ -5,6 +5,7 @@ import { meterCompletion } from "../../../server/fizot/proxy/meter.ts";
 import type { TierPrice } from "../../../server/fizot/proxy/pricing.ts";
 
 const databaseUrl = process.env.ADMIN_DATABASE_URL?.trim();
+const TEST_SECRET = "fizot-test-hmac-p43-not-production-only-0123456789";
 
 const UNIT: TierPrice[] = [{
   tier: "fast",
@@ -39,7 +40,7 @@ it.runIf(Boolean(databaseUrl))("Postgres: 50 parallel requests cannot overspend 
   try {
     await credit.ensureAccount(workspaceId, 10);
     await credit.grant({ workspaceId, amountMicroGbp: 10, requestId: `g-${workspaceId}`, kind: "grant" });
-    const results = await Promise.all(Array.from({ length: 50 }, (_, index) => meterCompletion({
+    const results = await Promise.all(Array.from({ length: 50 }, (_, index) => meterCompletion({ idempotencySecret: TEST_SECRET,
       credit,
       workspaceId,
       requestId: `r-${workspaceId}-${index}`,
