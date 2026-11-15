@@ -88,6 +88,78 @@ it("reserves then settles the provider usage, and a repeat request_id does not c
   });
 });
 
+it("rejects a cross-tenant request-ID collision without replaying private model content", async () => {
+  const credit = createMemoryCreditStore();
+  for (const workspaceId of ["tenant_a", "tenant_b"]) {
+    await credit.ensureAccount(workspaceId, 10);
+    await credit.grant({ workspaceId, amountMicroGbp: 10, requestId: `grant-${workspaceId}` });
+  }
+  let providerCalls = 0;
+  const body = Buffer.from(JSON.stringify({ model: "fast", max_tokens: 1, messages: [{ role: "user", content: "private prompt" }] }));
+  const invoke = (workspaceId: string) => meterCompletion({
+    idempotencySecret: TEST_SECRET,
+    credit, workspaceId, requestId: "same-external-id", tier: "fast",
+    rawBody: body, parsed: { max_tokens: 1 }, prices: UNIT,
+    forward: async () => {
+      providerCalls++;
+      return { status: 200, contentType: "application/json", body: completion(1, "tenant-a-private-output") };
+    },
+  });
+  const a = await invoke("tenant_a");
+  const b = await invoke("tenant_b");
+  expect(a.status).toBe(200);
+  expect(b.status).toBe(409);
+  expect(JSON.parse(b.body)).toEqual({ error: "idempotency_conflict" });
+  expect(b.body).not.toContain("tenant-a-private-output");
+  expect(providerCalls).toBe(1);
+  expect(await credit.usageCount("tenant_a")).toBe(1);
+  expect(await credit.usageCount("tenant_b")).toBe(0);
+  expect((await credit.summary("tenant_b")).balanceMicroGbp).toBe(10);
+});
+
+it("rejects changed payloads under the same request ID without charging twice", async () => {
+  const credit = await seed(10);
+  let providerCalls = 0;
+  const invoke = (body: string) => meterCompletion({
+    idempotencySecret: TEST_SECRET,
+    credit, workspaceId: "ws", requestId: "same-payload-id", tier: "fast",
+    rawBody: Buffer.from(body), parsed: { max_tokens: 1 }, prices: UNIT,
+    forward: async () => {
+      providerCalls++;
+      return { status: 200, contentType: "application/json", body: completion(1, "sensitive") };
+    },
+  });
+  const first = await invoke('{"model":"fast","message":"A"}');
+  const changed = await invoke('{"model":"fast","message":"B"}');
+  const repeat = await invoke('{"model":"fast","message":"A"}');
+  expect(first.status).toBe(200);
+  expect(JSON.parse(changed.body)).toEqual({ error: "idempotency_conflict" });
+  expect(JSON.parse(repeat.body)).toEqual({ error: "request_already_completed", request_id: "same-payload-id" });
+  expect(repeat.body).not.toContain("sensitive");
+  expect(providerCalls).toBe(1);
+  expect(await credit.usageCount("ws")).toBe(1);
+  await expect(credit.grant({ workspaceId: "another-tenant", requestId: "grant-1", amountMicroGbp: 10 }))
+    .rejects.toThrow("grant_idempotency_conflict");
+});
+
+it("does not let one workspace release or settle another workspace's reservation", async () => {
+  const credit = await seed(10);
+  const requestId = "owned-reservation";
+  const reservation = await credit.tryReserve({
+    workspaceId: "ws", requestId, amountMicroGbp: 1, requestFingerprint: "a".repeat(64),
+  });
+  expect(reservation.ok).toBe(true);
+  await credit.release("another-tenant", requestId);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(1);
+  await expect(credit.settle({
+    workspaceId: "another-tenant", requestId, amountMicroGbp: 1,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 1, httpStatus: 200,
+  })).rejects.toThrow("reservation ownership mismatch");
+  await credit.release("ws", requestId);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(0);
+});
+
 it("returns 409 while the same request_id is in flight", async () => {
   const credit = await seed(10);
   let release: () => void = () => {};
