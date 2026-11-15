@@ -145,3 +145,175 @@ it.runIf(Boolean(databaseUrl))("Postgres concurrent cross-tenant duplicate IDs f
     await credit.close();
   }
 });
+
+it.runIf(Boolean(databaseUrl))("Postgres: two racing last-credit requests and usage over-reservation clamp", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const fingerprint = "c".repeat(64);
+  try {
+    await credit.ensureAccount(workspaceId, 1);
+    await credit.grant({ workspaceId, amountMicroGbp: 1, requestId: `g-${workspaceId}` });
+    const results = await Promise.all(["a", "b"].map((suffix) => credit.tryReserve({
+      workspaceId,
+      requestId: `race-${workspaceId}-${suffix}`,
+      amountMicroGbp: 1,
+      requestFingerprint: fingerprint,
+    })));
+    expect(results.filter((row) => row.ok)).toHaveLength(1);
+    expect(results.filter((row) => !row.ok && row.reason === "insufficient")).toHaveLength(1);
+
+    const winner = results.find((row) => row.ok);
+    if (!winner || !winner.ok) throw new Error("expected winner");
+    const settled = await credit.settle({
+      workspaceId,
+      requestId: winner.reservation.requestId,
+      amountMicroGbp: 50,
+      provider: "xai",
+      model: "internal-fast",
+      tier: "fast",
+      inputTokens: 0,
+      outputTokens: 50,
+      httpStatus: 200,
+      meta: { response: "must-not-store", prompt: "must-not-store" },
+    });
+    expect(settled.amountMicroGbp).toBe(-1);
+    expect(settled.meta.cappedToReservation).toBe(true);
+    expect(settled.meta.response).toBeUndefined();
+    expect(settled.meta.prompt).toBeUndefined();
+    expect((await credit.summary(workspaceId)).balanceMicroGbp).toBe(0);
+  } finally {
+    await credit.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: uncertain recovery settles reserved without duplicate debit", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const requestId = `unc-${randomUUID()}`;
+  const now = Date.UTC(2025, 5, 1, 12, 0, 0);
+  try {
+    await credit.ensureAccount(workspaceId, 10);
+    await credit.grant({ workspaceId, amountMicroGbp: 10, requestId: `g-${workspaceId}`, nowMs: now });
+    const reserved = await credit.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 4, requestFingerprint: "d".repeat(64), nowMs: now,
+    });
+    expect(reserved.ok).toBe(true);
+    await credit.markUncertain(workspaceId, requestId);
+    expect((await credit.summary(workspaceId, now)).reservedMicroGbp).toBe(4);
+
+    const tooSoon = await credit.recoverStaleReservations({
+      workspaceId, nowMs: now + 60_000, graceMs: 15 * 60_000,
+    });
+    expect(tooSoon.recovered).toBe(0);
+
+    const [a, b] = await Promise.all([
+      credit.recoverStaleReservations({ workspaceId, nowMs: now + 16 * 60_000, graceMs: 15 * 60_000 }),
+      credit.recoverStaleReservations({ workspaceId, nowMs: now + 16 * 60_000, graceMs: 15 * 60_000 }),
+    ]);
+    expect(a.recovered + b.recovered).toBe(1);
+    expect(await credit.settledMicroGbp(workspaceId)).toBe(4);
+    expect(await credit.usageCount(workspaceId)).toBe(1);
+    expect((await credit.summary(workspaceId, now + 16 * 60_000)).reservedMicroGbp).toBe(0);
+  } finally {
+    await credit.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: 12-month expiry is append-only and idempotent with legacy grants", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const grantedAt = Date.UTC(2024, 1, 29, 8, 0, 0);
+  try {
+    await credit.ensureAccount(workspaceId, 30);
+    const fresh = await credit.grant({
+      workspaceId, amountMicroGbp: 20, requestId: `fresh-${workspaceId}`, kind: "grant", nowMs: grantedAt,
+    });
+    await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `legacy-${workspaceId}`, kind: "grant",
+      nowMs: grantedAt, expireInTwelveMonths: false,
+    });
+    expect(fresh.expiresAt).toBe(new Date(Date.UTC(2025, 1, 28, 8, 0, 0)).toISOString());
+
+    const before = await credit.summary(workspaceId, Date.UTC(2025, 1, 28, 7, 59, 59));
+    expect(before.balanceMicroGbp).toBe(30);
+    const [e1, e2] = await Promise.all([
+      credit.expireDue(workspaceId, Date.UTC(2025, 1, 28, 8, 0, 0)),
+      credit.expireDue(workspaceId, Date.UTC(2025, 1, 28, 8, 0, 0)),
+    ]);
+    expect(e1 + e2).toBe(1);
+    const after = await credit.summary(workspaceId, Date.UTC(2025, 1, 28, 8, 0, 0));
+    expect(after.balanceMicroGbp).toBe(10);
+
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: databaseUrl });
+    try {
+      const grants = await pool.query(
+        `SELECT kind, amount_micro_gbp, request_id, meta FROM fizot_credit_ledger WHERE workspace_id = $1 ORDER BY created_at, id`,
+        [workspaceId],
+      );
+      const expireRow = grants.rows.find((row) => row.kind === "expire");
+      expect(expireRow?.amount_micro_gbp).toBe("-20");
+      expect(String(expireRow?.request_id)).toMatch(/^expire:/);
+      expect(JSON.stringify(expireRow?.meta)).not.toMatch(/prompt|completion|messages/);
+      const original = grants.rows.find((row) => row.request_id === `fresh-${workspaceId}`);
+      expect(original?.amount_micro_gbp).toBe("20");
+    } finally {
+      await pool.end();
+    }
+
+    const denied = await credit.tryReserve({
+      workspaceId,
+      requestId: `after-${workspaceId}`,
+      amountMicroGbp: 11,
+      requestFingerprint: "e".repeat(64),
+      nowMs: Date.UTC(2025, 1, 28, 9, 0, 0),
+    });
+    expect(denied).toEqual({ ok: false, reason: "insufficient" });
+  } finally {
+    await credit.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: foreign settle/release and restart-safe balance journey", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const owner = `ws-${randomUUID()}`;
+  const foreign = `ws-${randomUUID()}`;
+  const requestId = `own-${randomUUID()}`;
+  try {
+    await credit.ensureAccount(owner, 12);
+    await credit.grant({ workspaceId: owner, amountMicroGbp: 12, requestId: `g-${owner}` });
+    await credit.ensureAccount(foreign, 12);
+    await credit.grant({ workspaceId: foreign, amountMicroGbp: 12, requestId: `g-${foreign}` });
+
+    const reserved = await credit.tryReserve({
+      workspaceId: owner, requestId, amountMicroGbp: 5, requestFingerprint: "f".repeat(64),
+    });
+    expect(reserved.ok).toBe(true);
+    await credit.release(foreign, requestId);
+    expect((await credit.summary(owner)).reservedMicroGbp).toBe(5);
+    await expect(credit.settle({
+      workspaceId: foreign, requestId, amountMicroGbp: 5,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 5, httpStatus: 200,
+    })).rejects.toThrow("reservation ownership mismatch");
+
+    await credit.settle({
+      workspaceId: owner, requestId, amountMicroGbp: 5,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 5, httpStatus: 200,
+    });
+  } finally {
+    await credit.close();
+  }
+
+  const reopened = await createPostgresCreditStore(databaseUrl!);
+  try {
+    const summary = await reopened.summary(owner);
+    expect(summary.balanceMicroGbp).toBe(7);
+    expect(summary.reservedMicroGbp).toBe(0);
+    expect(await reopened.settledMicroGbp(owner)).toBe(5);
+    expect((await reopened.summary(foreign)).balanceMicroGbp).toBe(12);
+  } finally {
+    await reopened.close();
+  }
+});
