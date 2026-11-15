@@ -530,9 +530,13 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
           )
           : await client.query(
             `INSERT INTO fizot_credit_reservations (request_id, workspace_id, amount_micro_gbp, status, request_fingerprint)
-              VALUES ($1, $2, $3, 'reserved', $4) RETURNING *`,
+              VALUES ($1, $2, $3, 'reserved', $4)
+              ON CONFLICT (request_id) DO NOTHING RETURNING *`,
             [input.requestId, input.workspaceId, input.amountMicroGbp, input.requestFingerprint],
           );
+        // Different workspaces lock independently. A concurrent duplicate must
+        // fail closed, not throw a unique-index error or leak the winner's row.
+        if (!inserted.rows[0]) return { ok: false as const, reason: "conflict" as const };
         return { ok: true as const, reservation: mapReservation(inserted.rows[0]!) };
       });
     },
