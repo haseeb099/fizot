@@ -301,6 +301,52 @@ it("releases the reservation when the provider returns 500 and when usage is mis
   expect(await credit.settledMicroGbp("ws")).toBe(4);
 });
 
+it("fails closed without a stable idempotency HMAC key for credit-enabled proxy", async () => {
+  await expect(startFizotProxy({
+    upstreamBase: "http://127.0.0.1:2",
+    credit: createMemoryCreditStore(),
+    idempotencySecret: "short",
+  })).rejects.toThrow("FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET");
+});
+
+it("rejects malformed request IDs and oversized request bodies before forwarding", async () => {
+  const credit = await seed(10);
+  const upstream = await startMockXai();
+  const proxy = await startFizotProxy({
+    upstreamBase: upstream.url, credit, prices: UNIT, idempotencySecret: TEST_SECRET,
+  });
+  try {
+    const minted = await fetch(`${proxy.url}/internal/mint`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instanceId: "ws", ttlSeconds: 600 }),
+    }).then((response) => response.json()) as { token: string };
+    const invalid = await fetch(`${proxy.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${minted.token}`,
+        "content-type": "application/json",
+        "x-request-id": "x".repeat(129),
+      },
+      body: JSON.stringify({ tier: "fast", max_tokens: 1 }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: "invalid_request_id" });
+
+    const oversized = await fetch(`${proxy.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${minted.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ tier: "fast", prompt: "p".repeat(1024 * 1024) }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toEqual({ error: "request_too_large" });
+    expect(upstream.calls.filter((call) => call.path === "/v1/chat/completions")).toHaveLength(0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
 it("streams a mock completion, strips the provider key, and the kill switch forwards nothing", async () => {
   const fakeKey = "xai-fake-key-DO-NOT-LEAK";
   const credit = await seed(1_000_000);
