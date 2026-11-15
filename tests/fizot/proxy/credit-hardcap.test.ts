@@ -140,7 +140,7 @@ it("rejects invalid and oversized max_tokens before reserve", async () => {
   expect((await credit.summary("ws")).reservedMicroGbp).toBe(0);
 });
 
-it("marks uncertain on provider timeout and recovers by settling reserved amount", async () => {
+it("timeouts mark uncertain; recovery quarantines without fabricating usage", async () => {
   const credit = await seed(10);
   const now = Date.UTC(2025, 0, 1, 12, 0, 0);
   const timedOut = await meterCompletion({
@@ -160,24 +160,108 @@ it("marks uncertain on provider timeout and recovers by settling reserved amount
     nowMs: now + RESERVATION_RECOVERY_GRACE_MS - 1,
     graceMs: RESERVATION_RECOVERY_GRACE_MS,
   });
-  expect(early.recovered).toBe(0);
+  expect(early.released + early.quarantined).toBe(0);
 
   const recovered = await credit.recoverStaleReservations({
     workspaceId: "ws",
-    nowMs: now + RESERVATION_RECOVERY_GRACE_MS + 1,
+    nowMs: Date.now() + RESERVATION_RECOVERY_GRACE_MS + 1,
     graceMs: RESERVATION_RECOVERY_GRACE_MS,
   });
-  expect(recovered.recovered).toBe(1);
-  expect(await credit.settledMicroGbp("ws")).toBe(3);
-  expect((await credit.summary("ws")).reservedMicroGbp).toBe(0);
+  expect(recovered.quarantined).toBe(1);
+  expect(recovered.released).toBe(0);
+  expect(await credit.usageCount("ws")).toBe(0);
+  expect(await credit.settledMicroGbp("ws")).toBe(0);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(3);
 
-  const again = await credit.recoverStaleReservations({
-    workspaceId: "ws",
-    nowMs: now + RESERVATION_RECOVERY_GRACE_MS + 60_000,
-    graceMs: RESERVATION_RECOVERY_GRACE_MS,
+  const late = await credit.settle({
+    workspaceId: "ws", requestId: "timeout-1", amountMicroGbp: 2,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 2, httpStatus: 200,
   });
-  expect(again.recovered).toBe(0);
+  expect(late.amountMicroGbp).toBe(-2);
   expect(await credit.usageCount("ws")).toBe(1);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(0);
+});
+
+it("crash after reserve before dispatch releases without usage charge", async () => {
+  const credit = await seed(10);
+  const now = Date.UTC(2025, 2, 1);
+  const reserved = await credit.tryReserve({
+    workspaceId: "ws", requestId: "crash-1", amountMicroGbp: 4, requestFingerprint: FP, nowMs: now,
+  });
+  expect(reserved.ok).toBe(true);
+  const tooSoon = await credit.recoverStaleReservations({
+    workspaceId: "ws", nowMs: now + RESERVATION_RECOVERY_GRACE_MS - 1, graceMs: RESERVATION_RECOVERY_GRACE_MS,
+  });
+  expect(tooSoon.released).toBe(0);
+  const recovered = await credit.recoverStaleReservations({
+    workspaceId: "ws", nowMs: now + RESERVATION_RECOVERY_GRACE_MS + 1, graceMs: RESERVATION_RECOVERY_GRACE_MS,
+  });
+  expect(recovered.released).toBe(1);
+  expect(recovered.quarantined).toBe(0);
+  expect(await credit.usageCount("ws")).toBe(0);
+  expect((await credit.summary("ws", now + RESERVATION_RECOVERY_GRACE_MS + 1)).reservedMicroGbp).toBe(0);
+  expect((await credit.summary("ws", now + RESERVATION_RECOVERY_GRACE_MS + 1)).balanceMicroGbp).toBe(10);
+});
+
+it("long-running dispatched request is quarantined, not settled, after grace", async () => {
+  const credit = await seed(10);
+  const now = Date.UTC(2025, 3, 1);
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "long-1", amountMicroGbp: 5, requestFingerprint: FP, nowMs: now,
+  });
+  await credit.markDispatched("ws", "long-1", now);
+  const recovered = await credit.recoverStaleReservations({
+    workspaceId: "ws", nowMs: now + RESERVATION_RECOVERY_GRACE_MS + 1, graceMs: RESERVATION_RECOVERY_GRACE_MS,
+  });
+  expect(recovered.quarantined).toBe(1);
+  expect(await credit.usageCount("ws")).toBe(0);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(5);
+});
+
+it("rejects negative, zero and unsafe-integer grant/refund amounts", async () => {
+  const credit = createMemoryCreditStore();
+  await credit.ensureAccount("ws", 10);
+  await expect(credit.grant({ workspaceId: "ws", amountMicroGbp: -5, requestId: "neg", kind: "grant" }))
+    .rejects.toThrow(/positive/);
+  await expect(credit.grant({ workspaceId: "ws", amountMicroGbp: 0, requestId: "zero", kind: "refund" }))
+    .rejects.toThrow(/positive/);
+  await expect(credit.grant({ workspaceId: "ws", amountMicroGbp: Number.MAX_SAFE_INTEGER + 1, requestId: "big" }))
+    .rejects.toThrow(/safe integer/);
+  await expect(credit.grant({ workspaceId: "ws", amountMicroGbp: 0, requestId: "adj0", kind: "adjust" }))
+    .rejects.toThrow(/non-zero/);
+  await credit.grant({ workspaceId: "ws", amountMicroGbp: 10, requestId: "ok" });
+  await credit.grant({ workspaceId: "ws", amountMicroGbp: -3, requestId: "adj-neg", kind: "adjust" });
+  expect((await credit.summary("ws")).balanceMicroGbp).toBe(7);
+  await expect(credit.grant({ workspaceId: "ws", amountMicroGbp: 9, requestId: "ok" }))
+    .rejects.toThrow("grant_idempotency_conflict");
+});
+
+it("expired lot plus later usage does not inflate spendable balance", async () => {
+  const credit = createMemoryCreditStore();
+  await credit.ensureAccount("ws", 20);
+  await credit.grant({
+    workspaceId: "ws", amountMicroGbp: 10, requestId: "g_old", kind: "grant",
+    nowMs: Date.UTC(2024, 0, 1),
+  });
+  await credit.grant({
+    workspaceId: "ws", amountMicroGbp: 10, requestId: "g_new", kind: "grant",
+    nowMs: Date.UTC(2025, 0, 1),
+  });
+  const expireAt = Date.UTC(2025, 0, 1);
+  expect((await credit.summary("ws", expireAt)).balanceMicroGbp).toBe(10);
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "u_later", amountMicroGbp: 7, requestFingerprint: FP,
+    nowMs: Date.UTC(2025, 0, 2),
+  });
+  await credit.settle({
+    workspaceId: "ws", requestId: "u_later", amountMicroGbp: 7,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 7, httpStatus: 200, nowMs: Date.UTC(2025, 0, 2),
+  });
+  expect((await credit.summary("ws", Date.UTC(2025, 0, 3))).balanceMicroGbp).toBe(3);
+  expect(await credit.expireDue("ws", Date.UTC(2025, 0, 3))).toBeGreaterThanOrEqual(0);
+  expect((await credit.summary("ws", Date.UTC(2025, 0, 3))).balanceMicroGbp).toBe(3);
 });
 
 it("releases unused reservation after definite provider failure", async () => {

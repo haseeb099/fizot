@@ -186,7 +186,7 @@ it.runIf(Boolean(databaseUrl))("Postgres: two racing last-credit requests and us
   }
 });
 
-it.runIf(Boolean(databaseUrl))("Postgres: uncertain recovery settles reserved without duplicate debit", async () => {
+it.runIf(Boolean(databaseUrl))("Postgres: uncertain recovery quarantines without fabricating usage", async () => {
   const credit = await createPostgresCreditStore(databaseUrl!);
   const workspaceId = `ws-${randomUUID()}`;
   const requestId = `unc-${randomUUID()}`;
@@ -198,22 +198,86 @@ it.runIf(Boolean(databaseUrl))("Postgres: uncertain recovery settles reserved wi
       workspaceId, requestId, amountMicroGbp: 4, requestFingerprint: "d".repeat(64), nowMs: now,
     });
     expect(reserved.ok).toBe(true);
+    await credit.markDispatched(workspaceId, requestId, now);
     await credit.markUncertain(workspaceId, requestId, now);
     expect((await credit.summary(workspaceId, now)).reservedMicroGbp).toBe(4);
 
     const tooSoon = await credit.recoverStaleReservations({
       workspaceId, nowMs: now + 60_000, graceMs: 15 * 60_000,
     });
-    expect(tooSoon.recovered).toBe(0);
+    expect(tooSoon.released + tooSoon.quarantined).toBe(0);
 
     const [a, b] = await Promise.all([
       credit.recoverStaleReservations({ workspaceId, nowMs: now + 16 * 60_000, graceMs: 15 * 60_000 }),
       credit.recoverStaleReservations({ workspaceId, nowMs: now + 16 * 60_000, graceMs: 15 * 60_000 }),
     ]);
-    expect(a.recovered + b.recovered).toBe(1);
-    expect(await credit.settledMicroGbp(workspaceId)).toBe(4);
-    expect(await credit.usageCount(workspaceId)).toBe(1);
-    expect((await credit.summary(workspaceId, now + 16 * 60_000)).reservedMicroGbp).toBe(0);
+    expect(a.quarantined + b.quarantined).toBe(1);
+    expect(a.released + b.released).toBe(0);
+    expect(await credit.settledMicroGbp(workspaceId)).toBe(0);
+    expect(await credit.usageCount(workspaceId)).toBe(0);
+    expect((await credit.summary(workspaceId, now + 16 * 60_000)).reservedMicroGbp).toBe(4);
+
+    await credit.settle({
+      workspaceId, requestId, amountMicroGbp: 2,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 2, httpStatus: 200, nowMs: now + 20 * 60_000,
+    });
+    expect(await credit.settledMicroGbp(workspaceId)).toBe(2);
+    expect((await credit.summary(workspaceId, now + 20 * 60_000)).reservedMicroGbp).toBe(0);
+  } finally {
+    await credit.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: undelivered reserved recovery releases without usage", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const requestId = `crash-${randomUUID()}`;
+  const now = Date.UTC(2025, 4, 1);
+  try {
+    await credit.ensureAccount(workspaceId, 8);
+    await credit.grant({ workspaceId, amountMicroGbp: 8, requestId: `g-${workspaceId}`, nowMs: now });
+    await credit.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 3, requestFingerprint: "g".repeat(64), nowMs: now,
+    });
+    const recovered = await credit.recoverStaleReservations({
+      workspaceId, nowMs: now + 16 * 60_000, graceMs: 15 * 60_000,
+    });
+    expect(recovered.released).toBe(1);
+    expect(recovered.quarantined).toBe(0);
+    expect(await credit.usageCount(workspaceId)).toBe(0);
+    expect((await credit.summary(workspaceId, now + 16 * 60_000)).balanceMicroGbp).toBe(8);
+  } finally {
+    await credit.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: later usage cannot consume expired grant residual", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  try {
+    await credit.ensureAccount(workspaceId, 20);
+    await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `old-${workspaceId}`, nowMs: Date.UTC(2024, 0, 1),
+    });
+    await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `new-${workspaceId}`, nowMs: Date.UTC(2025, 0, 1),
+    });
+    expect((await credit.summary(workspaceId, Date.UTC(2025, 0, 1))).balanceMicroGbp).toBe(10);
+    const requestId = `later-${workspaceId}`;
+    await credit.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 7, requestFingerprint: "h".repeat(64),
+      nowMs: Date.UTC(2025, 0, 2),
+    });
+    await credit.settle({
+      workspaceId, requestId, amountMicroGbp: 7,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 7, httpStatus: 200, nowMs: Date.UTC(2025, 0, 2),
+    });
+    expect((await credit.summary(workspaceId, Date.UTC(2025, 0, 3))).balanceMicroGbp).toBe(3);
+    const wrote = await credit.expireDue(workspaceId, Date.UTC(2025, 0, 3));
+    expect(wrote).toBe(1);
+    expect((await credit.summary(workspaceId, Date.UTC(2025, 0, 3))).balanceMicroGbp).toBe(3);
   } finally {
     await credit.close();
   }
