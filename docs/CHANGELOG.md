@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-61 Credit hard cap, reservation recovery and 12-month expiry (P4.3 WP2 / FZ-26)
+
+- Why we changed it: Concurrent reserves could theoretically race the soft balance check; actual provider usage could exceed the reserved estimate without a fail-closed bound; interrupted requests lacked a durable recovery path; grants never expired.
+- How it works: Spendable balance is FIFO lot residual minus reserved/uncertain holds. Settlement clamps to the reservation and records overage in meta. Provider timeouts mark `uncertain`; after a 15-minute grace, recovery settles the reserved amount idempotently (never age-only release). New positive grants/refunds/adjusts get UTC +12 calendar-month `expires_at`; expiry appends compensating `expire` rows (`expire:{grantId}`). Legacy null `expires_at` stays grandfathered. PR #34 HMAC fingerprints, ownership checks and no-response-body storage are preserved.
+- Why it is necessary: P4.3 work package 2 — true 100% hard cap, reservation recovery, auditable credit expiry.
+- Impact: Schema adds nullable `expires_at` on ledger, `uncertain` reservation status, and `updated_at` on reservations (idempotent `ADD COLUMN IF NOT EXISTS`). No production deploy, no Stripe, no purge of historical response bodies, no forced legacy expiry.
+- Rollback? Revert the CL-61 commit(s) on `fix/p43-credit-hardcap-expiry-recovery`. Existing DBs keep new columns/constraints; dropping them is a separate operator decision. Rollback does not restore already-written `expire` rows.
+- Files / Patch IDs: PATCH-52.
+- Related tasks: FZ-26 (P4.3). P4.3 and G4 remain in progress.
+
 ## CL-60 J9 capture transfer: pin connect + stream size cap (P4.4 / FZ-27)
 
 - Why we changed it: DNS preflight alone can be raced (rebinding) against the later fetch connect, and `arrayBuffer()` accepted oversized bodies into memory before rejecting.
