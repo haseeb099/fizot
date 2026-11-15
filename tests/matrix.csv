@@ -46,8 +46,8 @@ DA-I,Dependency audit,integration,Daily static job runs pnpm audit high/critical
 RD-I,Pilot readiness,integration,"Insurance certificate, ICO fee receipt and written solicitor licence sign-off are on file before any partner is hosted",none,G3,planned,S2.12
 GN-I,Go or no-go,integration,"Every row in tests/matrix.csv has a pass, and there is no open P0 or P1",none,G6,planned,H7.4
 GN-E,Go or no-go,e2e,J1 to J11 pass at desktop and phone width,"J1; J2; J3; J4; J5; J6; J7; J8; J9; J10; J11",G6,planned,H7.4
-PX-U,Fizot AI proxy,unit,"Tier price table, reserve/settle, idempotency, exactly 80% alert and 100% hard cap, over-reservation clamp, timeout→uncertain recovery, 12-month expiry FIFO, key redaction, mock stream and provider 500",none,G5,implemented,P4.3
-PX-I,Fizot AI proxy,integration,"Postgres append-only ledger, 50 parallel hard-cap, overage clamp, uncertain recovery, concurrent expiry, legacy grant coexistence (admin-postgres.yml)",none,G5,implemented,P4.3
+PX-U,Fizot AI proxy,unit,"Tier price table, reserve/settle, idempotency, 100% hard cap, time-aware expiry FIFO, over-reservation clamp, timeout→uncertain→quarantine (no fabricated usage), grant sign validation, key redaction, mock stream and provider 500",none,G5,implemented,P4.3
+PX-I,Fizot AI proxy,integration,"Postgres append-only ledger, 50 parallel hard-cap, overage clamp, crash-before-dispatch release, uncertain quarantine, time-aware expiry, concurrent expiry, legacy grant coexistence (admin-postgres.yml)",none,G5,implemented,P4.3
 BL-U,Fizot billing,unit,"State machine, VAT rounding, permutation convergence, unpublished-plan refusal, key redaction, margin gate",none,G5,implemented,P4.4
 BL-I,Fizot billing,integration,"Postgres webhook dedupe, included-credit grant idempotency, grace and suspension (admin-postgres.yml)",none,G5,implemented,P4.4
 BL-E,Fizot billing,e2e,"J9 Stripe test-mode checkout, dunning, recovery and cleanup",J9,G5,planned,P4.4
