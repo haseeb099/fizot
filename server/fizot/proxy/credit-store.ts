@@ -24,9 +24,9 @@ export type CreditReservation = {
   workspaceId: string;
   amountMicroGbp: number;
   status: ReservationStatus;
+  /** Keyed digest of the workspace, tier, and raw request. */
+  requestFingerprint: string | null;
   httpStatus: number | null;
-  responseBody: string | null;
-  contentType: string | null;
   createdAt: string;
 };
 
@@ -42,7 +42,8 @@ export type ReserveResult =
   | { ok: true; reservation: CreditReservation }
   | { ok: false; reason: "insufficient" }
   | { ok: false; reason: "in_flight"; reservation: CreditReservation }
-  | { ok: false; reason: "replay"; reservation: CreditReservation };
+  | { ok: false; reason: "replay"; reservation: CreditReservation }
+  | { ok: false; reason: "conflict" };
 
 const META_FORBIDDEN = new Set([
   "prompt", "content", "messages", "response", "input", "output", "completion", "email",
@@ -68,6 +69,10 @@ function assertInt(name: string, value: number): void {
   if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
 }
 
+function assertFingerprint(value: string): void {
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new Error("invalid_request_fingerprint");
+}
+
 export type CreditStore = {
   ensureAccount(workspaceId: string, includedMicroGbp: number): Promise<void>;
   /** Replace the 80% denominator. Does not write a ledger row. */
@@ -84,8 +89,10 @@ export type CreditStore = {
     workspaceId: string;
     requestId: string;
     amountMicroGbp: number;
+    requestFingerprint: string;
   }): Promise<ReserveResult>;
   settle(input: {
+    workspaceId: string;
     requestId: string;
     amountMicroGbp: number;
     provider: string | null;
@@ -94,11 +101,9 @@ export type CreditStore = {
     inputTokens: number;
     outputTokens: number;
     httpStatus: number;
-    responseBody: string;
-    contentType: string;
     meta?: Record<string, unknown>;
   }): Promise<CreditLedgerRow>;
-  release(requestId: string): Promise<void>;
+  release(workspaceId: string, requestId: string): Promise<void>;
   markAlerted(workspaceId: string, period: string): Promise<boolean>;
   alerted(workspaceId: string, period: string): Promise<boolean>;
   usageCount(workspaceId: string): Promise<number>;
@@ -196,9 +201,15 @@ export function createMemoryCreditStore(): CreditStore {
     },
     async tryReserve(input) {
       assertInt("amountMicroGbp", input.amountMicroGbp);
+      assertFingerprint(input.requestFingerprint);
       if (input.amountMicroGbp < 0) throw new Error("reserve must be non-negative");
       return lock(() => {
         const existing = state.reservations.get(input.requestId);
+        if (existing && (existing.workspaceId !== input.workspaceId
+          || existing.requestFingerprint !== input.requestFingerprint
+          || existing.amountMicroGbp !== input.amountMicroGbp)) {
+          return { ok: false as const, reason: "conflict" as const };
+        }
         if (existing?.status === "settled") return { ok: false as const, reason: "replay" as const, reservation: existing };
         if (existing?.status === "reserved") return { ok: false as const, reason: "in_flight" as const, reservation: existing };
         const available = balanceOf(input.workspaceId) - reservedOf(input.workspaceId);
@@ -208,9 +219,8 @@ export function createMemoryCreditStore(): CreditStore {
           workspaceId: input.workspaceId,
           amountMicroGbp: input.amountMicroGbp,
           status: "reserved",
+          requestFingerprint: input.requestFingerprint,
           httpStatus: null,
-          responseBody: null,
-          contentType: null,
           createdAt: new Date().toISOString(),
         };
         state.reservations.set(input.requestId, reservation);
@@ -223,7 +233,7 @@ export function createMemoryCreditStore(): CreditStore {
       assertInt("outputTokens", input.outputTokens);
       return lock(() => {
         const reservation = state.reservations.get(input.requestId);
-        if (!reservation) throw new Error("reservation missing");
+        if (!reservation || reservation.workspaceId !== input.workspaceId) throw new Error("reservation ownership mismatch");
         const existing = state.ledger.find((row) => row.requestId === input.requestId);
         if (existing) return existing;
         const row: CreditLedgerRow = {
@@ -245,16 +255,14 @@ export function createMemoryCreditStore(): CreditStore {
           ...reservation,
           status: "settled",
           httpStatus: input.httpStatus,
-          responseBody: input.responseBody,
-          contentType: input.contentType,
         });
         return row;
       });
     },
-    async release(requestId) {
+    async release(workspaceId, requestId) {
       await lock(() => {
         const reservation = state.reservations.get(requestId);
-        if (!reservation || reservation.status !== "reserved") return;
+        if (!reservation || reservation.workspaceId !== workspaceId || reservation.status !== "reserved") return;
         state.reservations.set(requestId, { ...reservation, status: "released" });
       });
     },
@@ -329,9 +337,8 @@ function mapReservation(row: Record<string, unknown>): CreditReservation {
     workspaceId: String(row.workspace_id),
     amountMicroGbp: num(row.amount_micro_gbp),
     status: row.status as ReservationStatus,
+    requestFingerprint: row.request_fingerprint == null ? null : String(row.request_fingerprint),
     httpStatus: row.http_status == null ? null : num(row.http_status),
-    responseBody: row.response_body == null ? null : String(row.response_body),
-    contentType: row.content_type == null ? null : String(row.content_type),
     createdAt: new Date(String(row.created_at)).toISOString(),
   };
 }
@@ -361,11 +368,12 @@ CREATE TABLE IF NOT EXISTS fizot_credit_reservations (
   workspace_id TEXT NOT NULL,
   amount_micro_gbp BIGINT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('reserved','settled','released')),
+  request_fingerprint TEXT,
   http_status INTEGER,
-  response_body TEXT,
-  content_type TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Existing tables are upgraded without deleting prior reservation data.
+ALTER TABLE fizot_credit_reservations ADD COLUMN IF NOT EXISTS request_fingerprint TEXT;
 CREATE TABLE IF NOT EXISTS fizot_credit_alerts (
   workspace_id TEXT NOT NULL,
   period TEXT NOT NULL,
@@ -478,6 +486,7 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
     },
     async tryReserve(input) {
       assertInt("amountMicroGbp", input.amountMicroGbp);
+      assertFingerprint(input.requestFingerprint);
       return withLock(input.workspaceId, async (client) => {
         const existing = await client.query(
           `SELECT * FROM fizot_credit_reservations WHERE request_id = $1`,
