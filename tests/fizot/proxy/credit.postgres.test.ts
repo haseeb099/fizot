@@ -263,8 +263,13 @@ it.runIf(Boolean(databaseUrl))("Postgres: later usage cannot consume expired gra
     await credit.grant({
       workspaceId, amountMicroGbp: 10, requestId: `new-${workspaceId}`, nowMs: Date.UTC(2025, 0, 1),
     });
-    // Before any expiry instant both lots are spendable.
     expect((await credit.summary(workspaceId, Date.UTC(2024, 11, 31))).balanceMicroGbp).toBe(20);
+
+    // Expire audit before later usage (tryReserve also expireDue's; must stay idempotent).
+    expect(await credit.expireDue(workspaceId, Date.UTC(2025, 0, 2))).toBe(1);
+    expect(await credit.expireDue(workspaceId, Date.UTC(2025, 0, 2))).toBe(0);
+    expect((await credit.summary(workspaceId, Date.UTC(2025, 0, 2))).balanceMicroGbp).toBe(10);
+
     const requestId = `later-${workspaceId}`;
     await credit.tryReserve({
       workspaceId, requestId, amountMicroGbp: 7, requestFingerprint: "a".repeat(64),
@@ -275,11 +280,8 @@ it.runIf(Boolean(databaseUrl))("Postgres: later usage cannot consume expired gra
       provider: "xai", model: "internal-fast", tier: "fast",
       inputTokens: 0, outputTokens: 7, httpStatus: 200, nowMs: Date.UTC(2025, 0, 2),
     });
-    // Spendable excludes the expired lot even before the audit row is written.
-    const wrote = await credit.expireDue(workspaceId, Date.UTC(2025, 0, 3));
-    expect(wrote).toBe(1);
+    expect(await credit.settledMicroGbp(workspaceId)).toBe(7);
     expect((await credit.summary(workspaceId, Date.UTC(2025, 0, 3))).balanceMicroGbp).toBe(3);
-    expect(await credit.expireDue(workspaceId, Date.UTC(2025, 0, 3))).toBe(0);
   } finally {
     await credit.close();
   }
