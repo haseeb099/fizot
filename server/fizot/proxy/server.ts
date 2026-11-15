@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { signAlertBody } from "../admin/alerts.ts";
 import type { AddressInfo } from "node:net";
 import { CapBook } from "./caps.ts";
@@ -21,6 +22,8 @@ export type ProxyOptions = {
   defaultCap?: number;
   /** When set, chat completions use reserve-then-settle instead of the Spike B token cap. */
   credit?: CreditStore;
+  /** Stable across replicas; required for privacy-safe replay when credit is enabled. */
+  idempotencySecret?: string;
   prices?: readonly TierPrice[];
   rateLimitPerMinute?: number;
   onSoftAlert?: (event: SoftAlertEvent) => Promise<void>;
@@ -30,9 +33,18 @@ export type ProxyOptions = {
   subscriptionAllows?: (workspaceId: string) => Promise<boolean>;
 };
 
+const MAX_PROXY_BODY_BYTES = 1024 * 1024;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
 async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let bytes = 0;
+  for await (const chunk of req) {
+    const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += piece.length;
+    if (bytes > MAX_PROXY_BODY_BYTES) throw new Error("request_too_large");
+    chunks.push(piece);
+  }
   return Buffer.concat(chunks);
 }
 
@@ -73,6 +85,10 @@ export type FizotProxy = {
 };
 
 export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy> {
+  const idempotencySecret = options.idempotencySecret ?? process.env.FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET?.trim();
+  if (options.credit && (!idempotencySecret || Buffer.byteLength(idempotencySecret, "utf8") < 32)) {
+    throw new Error("FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET is required (at least 32 bytes) when credit metering is enabled");
+  }
   const tokens = options.tokens ?? new TokenStore();
   const ledger = new Ledger();
   const caps = new CapBook();
@@ -136,7 +152,11 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
         log(`proxy ${url.pathname} instance=${record.instanceId} bytes=${raw.byteLength}`);
         let parsed: { stream?: boolean; model?: string } = {};
         try { parsed = JSON.parse(raw.toString("utf8")) as typeof parsed; } catch { /* forward as-is */ }
-        const requestId = String(req.headers["x-request-id"] ?? `${record.instanceId}-${Date.now()}`);
+        const requestedId = req.headers["x-request-id"];
+        if (requestedId !== undefined && (typeof requestedId !== "string" || !REQUEST_ID_PATTERN.test(requestedId))) {
+          return sendJson(res, 400, { error: "invalid_request_id" });
+        }
+        const requestId = requestedId ?? randomUUID();
         if (options.credit && limiter) {
           let parsedBody: { stream?: boolean; model?: string; tier?: string; max_tokens?: number; max_completion_tokens?: number } = {};
           try { parsedBody = JSON.parse(raw.toString("utf8")) as typeof parsedBody; } catch { /* priced from the raw size */ }
@@ -145,6 +165,7 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
             credit: options.credit,
             workspaceId: record.instanceId,
             requestId,
+            idempotencySecret: idempotencySecret!,
             tier,
             rawBody: raw,
             parsed: parsedBody,
@@ -216,6 +237,9 @@ export async function startFizotProxy(options: ProxyOptions): Promise<FizotProxy
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`error ${redactSecrets(message, secrets)}`);
+      if (message === "request_too_large") {
+        return sendJson(res, 413, { error: "request_too_large" });
+      }
       sendJson(res, 500, { error: { message: hideKeys(`proxy error ${message}`) } });
     }
   });
