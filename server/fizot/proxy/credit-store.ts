@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  assertLedgerAmount,
   defaultGrantExpiresAtMs,
   expiredGrantResiduals,
   RESERVATION_RECOVERY_GRACE_MS,
@@ -26,7 +27,28 @@ export type CreditLedgerRow = {
   meta: Record<string, unknown>;
 };
 
-export type ReservationStatus = "reserved" | "uncertain" | "settled" | "released";
+/**
+ * reserved — held, provider not contacted yet
+ * dispatched — provider request sent
+ * uncertain — timeout after dispatch; provider may still bill
+ * quarantined — past grace; funds held pending reconcile; no fabricated usage
+ * settled / released — terminal
+ */
+export type ReservationStatus =
+  | "reserved"
+  | "dispatched"
+  | "uncertain"
+  | "quarantined"
+  | "settled"
+  | "released";
+
+const HOLDING_STATUSES: readonly ReservationStatus[] = [
+  "reserved", "dispatched", "uncertain", "quarantined",
+];
+
+function isHolding(status: ReservationStatus): boolean {
+  return HOLDING_STATUSES.includes(status);
+}
 
 export type CreditReservation = {
   requestId: string;
@@ -41,8 +63,12 @@ export type CreditReservation = {
 };
 
 export type RecoverStaleResult = {
-  recovered: number;
-  settledRequestIds: string[];
+  /** Undelivered `reserved` rows released (never dispatched). */
+  released: number;
+  /** Ambiguous dispatched/uncertain rows moved to quarantined (no usage debit). */
+  quarantined: number;
+  releasedRequestIds: string[];
+  quarantinedRequestIds: string[];
 };
 
 export type CreditSummary = {
@@ -81,11 +107,15 @@ export function cleanLedgerMeta(meta: Record<string, unknown> | undefined): Reco
 }
 
 function assertInt(name: string, value: number): void {
-  if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
+  if (!Number.isSafeInteger(value)) throw new Error(`${name} must be a safe integer`);
 }
 
 function assertFingerprint(value: string): void {
   if (!/^[a-f0-9]{64}$/.test(value)) throw new Error("invalid_request_fingerprint");
+}
+
+function assertGrantInput(kind: "grant" | "refund" | "adjust", amountMicroGbp: number): void {
+  assertLedgerAmount(kind, amountMicroGbp);
 }
 
 export type CreditStore = {
@@ -111,6 +141,7 @@ export type CreditStore = {
     requestFingerprint: string;
     nowMs?: number;
   }): Promise<ReserveResult>;
+  markDispatched(workspaceId: string, requestId: string, nowMs?: number): Promise<void>;
   settle(input: {
     workspaceId: string;
     requestId: string;
@@ -121,11 +152,15 @@ export type CreditStore = {
     inputTokens: number;
     outputTokens: number;
     httpStatus: number;
+    nowMs?: number;
     meta?: Record<string, unknown>;
   }): Promise<CreditLedgerRow>;
   release(workspaceId: string, requestId: string, nowMs?: number): Promise<void>;
   markUncertain(workspaceId: string, requestId: string, nowMs?: number): Promise<void>;
-  /** Fail-closed recovery: stale reserved/uncertain → settle at reserved amount. */
+  /**
+   * Recovery: stale undelivered `reserved` → release;
+   * stale `dispatched`/`uncertain` → quarantine (hold, no fabricated usage).
+   */
   recoverStaleReservations(input?: {
     workspaceId?: string;
     nowMs?: number;
@@ -167,7 +202,7 @@ export function createMemoryCreditStore(): CreditStore {
   function reservedOf(workspaceId: string): number {
     let sum = 0;
     for (const row of state.reservations.values()) {
-      if (row.workspaceId === workspaceId && (row.status === "reserved" || row.status === "uncertain")) {
+      if (row.workspaceId === workspaceId && isHolding(row.status)) {
         sum += row.amountMicroGbp;
       }
     }
@@ -242,15 +277,15 @@ export function createMemoryCreditStore(): CreditStore {
       });
     },
     async grant(input) {
-      assertInt("amountMicroGbp", input.amountMicroGbp);
+      const kind = input.kind ?? "grant";
+      assertGrantInput(kind, input.amountMicroGbp);
       return lock(() => {
         const existing = state.ledger.find((row) => row.requestId === input.requestId);
         if (existing) {
-          if (existing.workspaceId !== input.workspaceId || existing.kind !== (input.kind ?? "grant")
+          if (existing.workspaceId !== input.workspaceId || existing.kind !== kind
             || existing.amountMicroGbp !== input.amountMicroGbp) throw new Error("grant_idempotency_conflict");
           return existing;
         }
-        const kind = input.kind ?? "grant";
         const nowMs = input.nowMs ?? Date.now();
         const autoExpire = input.expireInTwelveMonths ?? (kind === "grant" || kind === "refund" || (kind === "adjust" && input.amountMicroGbp > 0));
         const row: CreditLedgerRow = {
@@ -286,7 +321,7 @@ export function createMemoryCreditStore(): CreditStore {
           return { ok: false as const, reason: "conflict" as const };
         }
         if (existing?.status === "settled") return { ok: false as const, reason: "replay" as const, reservation: existing };
-        if (existing?.status === "reserved" || existing?.status === "uncertain") {
+        if (existing && isHolding(existing.status)) {
           return { ok: false as const, reason: "in_flight" as const, reservation: existing };
         }
         const available = spendableMicroGbp(lotsOf(input.workspaceId), nowMs) - reservedOf(input.workspaceId);
@@ -306,6 +341,17 @@ export function createMemoryCreditStore(): CreditStore {
         return { ok: true as const, reservation };
       });
     },
+    async markDispatched(workspaceId, requestId, nowMs = Date.now()) {
+      await lock(() => {
+        const reservation = state.reservations.get(requestId);
+        if (!reservation || reservation.workspaceId !== workspaceId || reservation.status !== "reserved") return;
+        state.reservations.set(requestId, {
+          ...reservation,
+          status: "dispatched",
+          updatedAt: new Date(nowMs).toISOString(),
+        });
+      });
+    },
     async settle(input) {
       assertInt("amountMicroGbp", input.amountMicroGbp);
       assertInt("inputTokens", input.inputTokens);
@@ -319,7 +365,11 @@ export function createMemoryCreditStore(): CreditStore {
           if (existing.workspaceId !== input.workspaceId || existing.kind !== "usage") throw new Error("settle_idempotency_conflict");
           return existing;
         }
+        if (!isHolding(reservation.status) && reservation.status !== "settled") {
+          throw new Error("reservation_not_settleable");
+        }
         const charge = Math.min(Math.abs(input.amountMicroGbp), reservation.amountMicroGbp);
+        const stamp = new Date(input.nowMs ?? Date.now()).toISOString();
         const row: CreditLedgerRow = {
           id: randomUUID(),
           workspaceId: reservation.workspaceId,
@@ -331,7 +381,7 @@ export function createMemoryCreditStore(): CreditStore {
           tier: input.tier,
           inputTokens: input.inputTokens,
           outputTokens: input.outputTokens,
-          createdAt: new Date().toISOString(),
+          createdAt: stamp,
           expiresAt: null,
           meta: cleanLedgerMeta({
             ...input.meta,
@@ -345,7 +395,7 @@ export function createMemoryCreditStore(): CreditStore {
           ...reservation,
           status: "settled",
           httpStatus: input.httpStatus,
-          updatedAt: new Date().toISOString(),
+          updatedAt: stamp,
         });
         return row;
       });
@@ -354,7 +404,7 @@ export function createMemoryCreditStore(): CreditStore {
       await lock(() => {
         const reservation = state.reservations.get(requestId);
         if (!reservation || reservation.workspaceId !== workspaceId) return;
-        if (reservation.status !== "reserved" && reservation.status !== "uncertain") return;
+        if (!isHolding(reservation.status)) return;
         state.reservations.set(requestId, {
           ...reservation,
           status: "released",
@@ -365,7 +415,8 @@ export function createMemoryCreditStore(): CreditStore {
     async markUncertain(workspaceId, requestId, nowMs = Date.now()) {
       await lock(() => {
         const reservation = state.reservations.get(requestId);
-        if (!reservation || reservation.workspaceId !== workspaceId || reservation.status !== "reserved") return;
+        if (!reservation || reservation.workspaceId !== workspaceId) return;
+        if (reservation.status !== "dispatched" && reservation.status !== "reserved") return;
         state.reservations.set(requestId, {
           ...reservation,
           status: "uncertain",
@@ -377,39 +428,38 @@ export function createMemoryCreditStore(): CreditStore {
       return lock(() => {
         const nowMs = input.nowMs ?? Date.now();
         const graceMs = input.graceMs ?? RESERVATION_RECOVERY_GRACE_MS;
-        const settledRequestIds: string[] = [];
+        const releasedRequestIds: string[] = [];
+        const quarantinedRequestIds: string[] = [];
         for (const reservation of state.reservations.values()) {
           if (input.workspaceId && reservation.workspaceId !== input.workspaceId) continue;
-          if (reservation.status !== "reserved" && reservation.status !== "uncertain") continue;
           const age = nowMs - Date.parse(reservation.updatedAt || reservation.createdAt);
           if (age < graceMs) continue;
-          const existing = state.ledger.find((row) => row.requestId === reservation.requestId);
-          if (!existing) {
-            state.ledger.push({
-              id: randomUUID(),
-              workspaceId: reservation.workspaceId,
-              kind: "usage",
-              amountMicroGbp: -reservation.amountMicroGbp,
-              requestId: reservation.requestId,
-              provider: null,
-              model: null,
-              tier: null,
-              inputTokens: null,
-              outputTokens: null,
-              createdAt: new Date(nowMs).toISOString(),
-              expiresAt: null,
-              meta: cleanLedgerMeta({ recovery: "stale_settle_reserved" }),
+          if (reservation.status === "reserved") {
+            // Never forwarded — safe to release; do not fabricate usage.
+            state.reservations.set(reservation.requestId, {
+              ...reservation,
+              status: "released",
+              updatedAt: new Date(nowMs).toISOString(),
             });
+            releasedRequestIds.push(reservation.requestId);
+            continue;
           }
-          state.reservations.set(reservation.requestId, {
-            ...reservation,
-            status: "settled",
-            httpStatus: reservation.httpStatus ?? 0,
-            updatedAt: new Date(nowMs).toISOString(),
-          });
-          settledRequestIds.push(reservation.requestId);
+          if (reservation.status === "dispatched" || reservation.status === "uncertain") {
+            // Provider outcome unknown — hold funds; operator/J4 reconcile required.
+            state.reservations.set(reservation.requestId, {
+              ...reservation,
+              status: "quarantined",
+              updatedAt: new Date(nowMs).toISOString(),
+            });
+            quarantinedRequestIds.push(reservation.requestId);
+          }
         }
-        return { recovered: settledRequestIds.length, settledRequestIds };
+        return {
+          released: releasedRequestIds.length,
+          quarantined: quarantinedRequestIds.length,
+          releasedRequestIds,
+          quarantinedRequestIds,
+        };
       });
     },
     async expireDue(workspaceId, nowMs = Date.now()) {
@@ -538,6 +588,8 @@ async function expireDueOnClient(
   return wrote;
 }
 
+const HOLDING_SQL = `'reserved','dispatched','uncertain','quarantined'`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS fizot_credit_accounts (
   workspace_id TEXT PRIMARY KEY,
@@ -577,7 +629,7 @@ ALTER TABLE fizot_credit_reservations ADD COLUMN IF NOT EXISTS request_fingerpri
 ALTER TABLE fizot_credit_reservations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE fizot_credit_reservations DROP CONSTRAINT IF EXISTS fizot_credit_reservations_status_check;
 ALTER TABLE fizot_credit_reservations ADD CONSTRAINT fizot_credit_reservations_status_check
-  CHECK (status IN ('reserved','uncertain','settled','released'));
+  CHECK (status IN ('reserved','dispatched','uncertain','quarantined','settled','released'));
 CREATE TABLE IF NOT EXISTS fizot_credit_alerts (
   workspace_id TEXT NOT NULL,
   period TEXT NOT NULL,
@@ -662,7 +714,7 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
              (SELECT COALESCE(SUM(-amount_micro_gbp), 0) FROM fizot_credit_ledger
                WHERE workspace_id = $1 AND kind = 'usage' AND to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') = $2) AS usage,
              (SELECT COALESCE(SUM(amount_micro_gbp), 0) FROM fizot_credit_reservations
-               WHERE workspace_id = $1 AND status IN ('reserved','uncertain')) AS reserved`,
+               WHERE workspace_id = $1 AND status IN (${HOLDING_SQL})) AS reserved`,
           [workspaceId, period],
         );
         const row = result.rows[0] ?? {};
@@ -676,10 +728,10 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
       });
     },
     async grant(input) {
-      assertInt("amountMicroGbp", input.amountMicroGbp);
+      const kind = input.kind ?? "grant";
+      assertGrantInput(kind, input.amountMicroGbp);
       const id = randomUUID();
       const meta = cleanLedgerMeta(input.meta);
-      const kind = input.kind ?? "grant";
       const nowMs = input.nowMs ?? Date.now();
       const autoExpire = input.expireInTwelveMonths ?? (kind === "grant" || kind === "refund" || (kind === "adjust" && input.amountMicroGbp > 0));
       const expiresAt = autoExpire ? new Date(defaultGrantExpiresAtMs(nowMs)).toISOString() : null;
@@ -716,13 +768,13 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
           return { ok: false as const, reason: "conflict" as const };
         }
         if (prior?.status === "settled") return { ok: false as const, reason: "replay" as const, reservation: prior };
-        if (prior?.status === "reserved" || prior?.status === "uncertain") {
+        if (prior && isHolding(prior.status)) {
           return { ok: false as const, reason: "in_flight" as const, reservation: prior };
         }
         const ledger = await client.query(`SELECT * FROM fizot_credit_ledger WHERE workspace_id = $1`, [input.workspaceId]);
         const reserved = await client.query(
           `SELECT COALESCE(SUM(amount_micro_gbp), 0) AS reserved FROM fizot_credit_reservations
-            WHERE workspace_id = $1 AND status IN ('reserved','uncertain')`,
+            WHERE workspace_id = $1 AND status IN (${HOLDING_SQL})`,
           [input.workspaceId],
         );
         const available = spendableMicroGbp(lotSourcesFromRows(ledger.rows), nowMs) - num(reserved.rows[0]?.reserved);
@@ -746,6 +798,13 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         return { ok: true as const, reservation: mapReservation(inserted.rows[0]!) };
       });
     },
+    async markDispatched(workspaceId, requestId, nowMs = Date.now()) {
+      await pool.query(
+        `UPDATE fizot_credit_reservations SET status = 'dispatched', updated_at = $3::timestamptz
+          WHERE request_id = $1 AND workspace_id = $2 AND status = 'reserved'`,
+        [requestId, workspaceId, new Date(nowMs).toISOString()],
+      );
+    },
     async settle(input) {
       assertInt("amountMicroGbp", input.amountMicroGbp);
       assertInt("inputTokens", input.inputTokens);
@@ -764,12 +823,14 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
           if (mapped.workspaceId !== input.workspaceId || mapped.kind !== "usage") throw new Error("settle_idempotency_conflict");
           return mapped;
         }
+        if (!isHolding(prior.status)) throw new Error("reservation_not_settleable");
         const charge = Math.min(Math.abs(input.amountMicroGbp), prior.amountMicroGbp);
+        const stamp = new Date(input.nowMs ?? Date.now()).toISOString();
         const id = randomUUID();
         const inserted = await client.query(
           `INSERT INTO fizot_credit_ledger
-            (id, workspace_id, kind, amount_micro_gbp, request_id, provider, model, tier, input_tokens, output_tokens, meta)
-           VALUES ($1, $2, 'usage', $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+            (id, workspace_id, kind, amount_micro_gbp, request_id, provider, model, tier, input_tokens, output_tokens, created_at, meta)
+           VALUES ($1, $2, 'usage', $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11::jsonb)
            RETURNING *`,
           [
             id,
@@ -781,6 +842,7 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
             input.tier,
             input.inputTokens,
             input.outputTokens,
+            stamp,
             JSON.stringify(cleanLedgerMeta({
               ...input.meta,
               reservedMicroGbp: prior.amountMicroGbp,
@@ -791,9 +853,9 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         );
         await client.query(
           `UPDATE fizot_credit_reservations
-             SET status = 'settled', http_status = $2, updated_at = NOW()
+             SET status = 'settled', http_status = $2, updated_at = $4::timestamptz
             WHERE request_id = $1 AND workspace_id = $3`,
-          [input.requestId, input.httpStatus, input.workspaceId],
+          [input.requestId, input.httpStatus, input.workspaceId, stamp],
         );
         return mapLedger(inserted.rows[0]!);
       });
@@ -801,14 +863,14 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
     async release(workspaceId, requestId, nowMs = Date.now()) {
       await pool.query(
         `UPDATE fizot_credit_reservations SET status = 'released', updated_at = $3::timestamptz
-          WHERE request_id = $1 AND workspace_id = $2 AND status IN ('reserved','uncertain')`,
+          WHERE request_id = $1 AND workspace_id = $2 AND status IN (${HOLDING_SQL})`,
         [requestId, workspaceId, new Date(nowMs).toISOString()],
       );
     },
     async markUncertain(workspaceId, requestId, nowMs = Date.now()) {
       await pool.query(
         `UPDATE fizot_credit_reservations SET status = 'uncertain', updated_at = $3::timestamptz
-          WHERE request_id = $1 AND workspace_id = $2 AND status = 'reserved'`,
+          WHERE request_id = $1 AND workspace_id = $2 AND status IN ('reserved','dispatched')`,
         [requestId, workspaceId, new Date(nowMs).toISOString()],
       );
     },
@@ -818,12 +880,13 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
       const cutoff = new Date(nowMs - graceMs).toISOString();
       const stale = await pool.query(
         `SELECT * FROM fizot_credit_reservations
-          WHERE status IN ('reserved','uncertain')
+          WHERE status IN ('reserved','dispatched','uncertain')
             AND updated_at <= $1::timestamptz
             AND ($2::text IS NULL OR workspace_id = $2)`,
         [cutoff, input.workspaceId ?? null],
       );
-      const settledRequestIds: string[] = [];
+      const releasedRequestIds: string[] = [];
+      const quarantinedRequestIds: string[] = [];
       for (const row of stale.rows) {
         const reservation = mapReservation(row);
         await withLock(reservation.workspaceId, async (client) => {
@@ -834,33 +897,35 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
           if (!current.rows[0]) return;
           const live = mapReservation(current.rows[0]);
           if (live.workspaceId !== reservation.workspaceId) return;
-          if (live.status !== "reserved" && live.status !== "uncertain") return;
           if (Date.parse(live.updatedAt) > nowMs - graceMs) return;
-          const existing = await client.query(`SELECT * FROM fizot_credit_ledger WHERE request_id = $1`, [live.requestId]);
-          if (!existing.rows[0]) {
+          const stamp = new Date(nowMs).toISOString();
+          if (live.status === "reserved") {
             await client.query(
-              `INSERT INTO fizot_credit_ledger
-                (id, workspace_id, kind, amount_micro_gbp, request_id, meta)
-               VALUES ($1, $2, 'usage', $3, $4, $5::jsonb)`,
-              [
-                randomUUID(),
-                live.workspaceId,
-                -live.amountMicroGbp,
-                live.requestId,
-                JSON.stringify(cleanLedgerMeta({ recovery: "stale_settle_reserved" })),
-              ],
+              `UPDATE fizot_credit_reservations
+                 SET status = 'released', updated_at = $2::timestamptz
+               WHERE request_id = $1 AND workspace_id = $3`,
+              [live.requestId, stamp, live.workspaceId],
             );
+            releasedRequestIds.push(live.requestId);
+            return;
           }
-          await client.query(
-            `UPDATE fizot_credit_reservations
-               SET status = 'settled', http_status = COALESCE(http_status, 0), updated_at = $2::timestamptz
-             WHERE request_id = $1 AND workspace_id = $3`,
-            [live.requestId, new Date(nowMs).toISOString(), live.workspaceId],
-          );
-          settledRequestIds.push(live.requestId);
+          if (live.status === "dispatched" || live.status === "uncertain") {
+            await client.query(
+              `UPDATE fizot_credit_reservations
+                 SET status = 'quarantined', updated_at = $2::timestamptz
+               WHERE request_id = $1 AND workspace_id = $3`,
+              [live.requestId, stamp, live.workspaceId],
+            );
+            quarantinedRequestIds.push(live.requestId);
+          }
         });
       }
-      return { recovered: settledRequestIds.length, settledRequestIds };
+      return {
+        released: releasedRequestIds.length,
+        quarantined: quarantinedRequestIds.length,
+        releasedRequestIds,
+        quarantinedRequestIds,
+      };
     },
     async expireDue(workspaceId, nowMs = Date.now()) {
       return withLock(workspaceId, async (client) => expireDueOnClient(client, workspaceId, nowMs));

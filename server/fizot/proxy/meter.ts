@@ -179,6 +179,10 @@ export async function meterCompletion(input: {
     return jsonOutcome(402, { error: "insufficient_credit" }, headers);
   }
 
+  // Mark dispatched before the provider call so a crash-before-forward
+  // recovery can release without fabricating usage.
+  await input.credit.markDispatched(input.workspaceId, input.requestId, now);
+
   let upstream: { status: number; contentType: string; body: Buffer };
   try {
     const rewritten = rewriteModel(input.rawBody, price.model);
@@ -186,16 +190,16 @@ export async function meterCompletion(input: {
   } catch (error) {
     const timedOut = error instanceof Error && /timeout|timed.?out|abort/i.test(error.message);
     if (timedOut) {
-      // Provider may still complete; keep funds reserved as uncertain.
-      await input.credit.markUncertain(input.workspaceId, input.requestId, now);
+      // Grace for quarantine starts at the actual timeout, not request start.
+      await input.credit.markUncertain(input.workspaceId, input.requestId, Date.now());
       return jsonOutcome(504, { error: "provider_timeout" }, headers);
     }
-    await input.credit.release(input.workspaceId, input.requestId, now);
+    await input.credit.release(input.workspaceId, input.requestId, Date.now());
     return jsonOutcome(502, { error: "provider_unavailable" }, headers);
   }
   const hide = input.redactBody ?? ((body: string) => body);
   if (upstream.status >= 500) {
-    await input.credit.release(input.workspaceId, input.requestId, now);
+    await input.credit.release(input.workspaceId, input.requestId, Date.now());
     return {
       status: upstream.status,
       body: hide(upstream.body.toString("utf8")),

@@ -4,7 +4,7 @@
  */
 
 export const MAX_OUTPUT_TOKENS_CAP = 128_000;
-/** Reserved/uncertain rows older than this may be recovered fail-closed. */
+/** Grace before undelivered `reserved` may be released, or uncertain→quarantined. */
 export const RESERVATION_RECOVERY_GRACE_MS = 15 * 60_000;
 
 export type CreditLotKind = "grant" | "refund" | "adjust";
@@ -17,6 +17,28 @@ export type CreditLotSource = {
   /** Null = legacy grandfathered grant; not auto-expired until an operator migrates it. */
   expiresAtMs: number | null;
   requestId: string | null;
+};
+
+export type AllocatedLot = {
+  grantId: string;
+  grantRequestId: string;
+  remaining: number;
+  expiresAtMs: number | null;
+  createdAtMs: number;
+};
+
+export type UncoveredDebit = {
+  id: string;
+  requestId: string | null;
+  kind: "usage" | "adjust";
+  amountMicroGbp: number;
+  createdAtMs: number;
+  uncoveredMicroGbp: number;
+};
+
+export type AllocationResult = {
+  lots: AllocatedLot[];
+  uncoveredDebits: UncoveredDebit[];
 };
 
 export function addUtcCalendarMonths(fromMs: number, months: number): number {
@@ -60,8 +82,42 @@ export function sanitizeUsageTokens(input: {
   return { inputTokens, outputTokens };
 }
 
+/** Reject unsafe / non-integer / wrong-sign ledger credit amounts. */
+export function assertLedgerAmount(
+  kind: "grant" | "refund" | "adjust" | "usage" | "expire",
+  amountMicroGbp: number,
+): void {
+  if (typeof amountMicroGbp !== "number" || !Number.isSafeInteger(amountMicroGbp)) {
+    throw new Error("amountMicroGbp must be a safe integer");
+  }
+  if (kind === "grant" || kind === "refund") {
+    if (amountMicroGbp <= 0) throw new Error(`${kind} amount must be positive`);
+    return;
+  }
+  if (kind === "adjust") {
+    if (amountMicroGbp === 0) throw new Error("adjust amount must be non-zero");
+    return;
+  }
+  if (kind === "usage" || kind === "expire") {
+    if (amountMicroGbp >= 0) throw new Error(`${kind} amount must be negative`);
+  }
+}
+
 function isPositiveLot(row: CreditLotSource): boolean {
-  return row.kind === "grant" || row.kind === "refund" || (row.kind === "adjust" && row.amountMicroGbp > 0);
+  if (!Number.isSafeInteger(row.amountMicroGbp) || row.amountMicroGbp <= 0) return false;
+  return row.kind === "grant" || row.kind === "refund" || row.kind === "adjust";
+}
+
+function isDebit(row: CreditLotSource): boolean {
+  if (row.kind === "usage") return true;
+  if (row.kind === "adjust" && row.amountMicroGbp < 0) return true;
+  return false;
+}
+
+/** Lot is spendable at debitMs when expiresAt is null or strictly after debitMs. */
+export function lotValidAt(expiresAtMs: number | null, atMs: number): boolean {
+  if (expiresAtMs == null) return true;
+  return expiresAtMs > atMs;
 }
 
 /** Same-ms ties: credits before debits so a settle cannot sort ahead of its grant. */
@@ -74,34 +130,63 @@ function lotOrder(a: CreditLotSource, b: CreditLotSource): number {
 }
 
 /**
- * Consumption order: oldest positive grant/refund/adjust(+) first (FIFO).
- * Only `usage` and negative `adjust` consume lots. Compensating `expire` rows
- * are append-only audit; spendability itself uses expiresAtMs so expiry is not
- * applied twice. Legacy null expiresAt never auto-expires.
+ * Chronological allocation: each usage/negative adjust consumes FIFO among lots
+ * still valid at the debit's createdAtMs. Expire audit rows are ignored.
+ * Uncovered debit amounts are reported, never silently dropped from the ledger.
  */
-export function spendableMicroGbp(sources: readonly CreditLotSource[], nowMs: number): number {
-  const lots: Array<{ remaining: number; expiresAtMs: number | null }> = [];
+export function allocateCreditLots(sources: readonly CreditLotSource[]): AllocationResult {
+  const lots: AllocatedLot[] = [];
+  const uncoveredDebits: UncoveredDebit[] = [];
   const ordered = [...sources].sort(lotOrder);
   for (const row of ordered) {
     if (isPositiveLot(row)) {
-      lots.push({ remaining: row.amountMicroGbp, expiresAtMs: row.expiresAtMs });
+      lots.push({
+        grantId: row.id,
+        grantRequestId: row.requestId ?? row.id,
+        remaining: row.amountMicroGbp,
+        expiresAtMs: row.expiresAtMs,
+        createdAtMs: row.createdAtMs,
+      });
       continue;
     }
     if (row.kind === "expire") continue;
-    if (row.kind !== "usage" && !(row.kind === "adjust" && row.amountMicroGbp < 0)) continue;
+    if (!isDebit(row)) continue;
     let need = Math.abs(row.amountMicroGbp);
     for (const lot of lots) {
       if (need <= 0) break;
       if (lot.remaining <= 0) continue;
+      if (!lotValidAt(lot.expiresAtMs, row.createdAtMs)) continue;
       const take = Math.min(lot.remaining, need);
       lot.remaining -= take;
       need -= take;
     }
+    if (need > 0) {
+      uncoveredDebits.push({
+        id: row.id,
+        requestId: row.requestId,
+        kind: row.kind === "adjust" ? "adjust" : "usage",
+        amountMicroGbp: row.amountMicroGbp,
+        createdAtMs: row.createdAtMs,
+        uncoveredMicroGbp: need,
+      });
+    }
+  }
+  return { lots, uncoveredDebits };
+}
+
+/**
+ * Spendable residual at nowMs after time-aware FIFO. Throws if any historical
+ * debit was not fully covered by lots valid at its timestamp (fail closed).
+ */
+export function spendableMicroGbp(sources: readonly CreditLotSource[], nowMs: number): number {
+  const { lots, uncoveredDebits } = allocateCreditLots(sources);
+  if (uncoveredDebits.length > 0) {
+    throw new Error("uncovered_debit");
   }
   let spendable = 0;
   for (const lot of lots) {
     if (lot.remaining <= 0) continue;
-    if (lot.expiresAtMs != null && lot.expiresAtMs <= nowMs) continue;
+    if (!lotValidAt(lot.expiresAtMs, nowMs)) continue;
     spendable += lot.remaining;
   }
   return spendable;
@@ -115,7 +200,7 @@ export type ExpirableGrant = {
   expiresAtMs: number;
 };
 
-/** Residual still on an expired grant lot after FIFO usage/negative adjusts. */
+/** Residual still on an expired grant lot after time-aware FIFO usage/negative adjusts. */
 export function expiredGrantResiduals(
   sources: readonly CreditLotSource[],
   nowMs: number,
@@ -125,33 +210,9 @@ export function expiredGrantResiduals(
       .filter((row) => row.kind === "expire" && row.requestId?.startsWith("expire:"))
       .map((row) => row.requestId!.slice("expire:".length)),
   );
-  const lots: Array<{
-    grantId: string;
-    grantRequestId: string;
-    remaining: number;
-    expiresAtMs: number | null;
-  }> = [];
-  const ordered = [...sources].sort(lotOrder);
-  for (const row of ordered) {
-    if (isPositiveLot(row)) {
-      lots.push({
-        grantId: row.id,
-        grantRequestId: row.requestId ?? row.id,
-        remaining: row.amountMicroGbp,
-        expiresAtMs: row.expiresAtMs,
-      });
-      continue;
-    }
-    if (row.kind === "expire") continue;
-    if (row.kind !== "usage" && !(row.kind === "adjust" && row.amountMicroGbp < 0)) continue;
-    let need = Math.abs(row.amountMicroGbp);
-    for (const lot of lots) {
-      if (need <= 0) break;
-      if (lot.remaining <= 0) continue;
-      const take = Math.min(lot.remaining, need);
-      lot.remaining -= take;
-      need -= take;
-    }
+  const { lots, uncoveredDebits } = allocateCreditLots(sources);
+  if (uncoveredDebits.length > 0) {
+    throw new Error("uncovered_debit");
   }
   const out: Array<{ grantId: string; grantRequestId: string; residualMicroGbp: number }> = [];
   for (const lot of lots) {
