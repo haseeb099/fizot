@@ -198,7 +198,7 @@ it.runIf(Boolean(databaseUrl))("Postgres: uncertain recovery settles reserved wi
       workspaceId, requestId, amountMicroGbp: 4, requestFingerprint: "d".repeat(64), nowMs: now,
     });
     expect(reserved.ok).toBe(true);
-    await credit.markUncertain(workspaceId, requestId);
+    await credit.markUncertain(workspaceId, requestId, now);
     expect((await credit.summary(workspaceId, now)).reservedMicroGbp).toBe(4);
 
     const tooSoon = await credit.recoverStaleReservations({
