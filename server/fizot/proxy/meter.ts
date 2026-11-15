@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type { CreditStore } from "./credit-store.ts";
 import { periodKey } from "./credit-store.ts";
 import { isTierId, quoteMicroGbp, tierPrice, type TierId, type TierPrice } from "./pricing.ts";
@@ -100,6 +100,8 @@ export async function meterCompletion(input: {
   credit: CreditStore;
   workspaceId: string;
   requestId: string;
+  /** Same >=32-byte secret on all replicas; never expose it to the sandbox. */
+  idempotencySecret: string;
   tier: string;
   rawBody: Buffer;
   parsed: { max_tokens?: unknown; max_completion_tokens?: unknown; stream?: boolean };
@@ -133,6 +135,12 @@ export async function meterCompletion(input: {
   }
   const tier: TierId = input.tier;
   const price = tierPrice(tier, input.prices);
+  if (Buffer.byteLength(input.idempotencySecret, "utf8") < 32) {
+    throw new Error("FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET must be at least 32 bytes");
+  }
+  const requestFingerprint = createHmac("sha256", input.idempotencySecret)
+    .update(input.workspaceId).update("\0").update(tier).update("\0").update(input.rawBody)
+    .digest("hex");
   const maxOutput = readMaxOutputTokens(input.parsed);
   const inputTokens = estimateInputTokens(input.rawBody);
   const reserve = quoteMicroGbp({
@@ -146,15 +154,14 @@ export async function meterCompletion(input: {
     workspaceId: input.workspaceId,
     requestId: input.requestId,
     amountMicroGbp: reserve,
+    requestFingerprint,
   });
   if (!reserved.ok && reserved.reason === "replay") {
-    return {
-      status: reserved.reservation.httpStatus ?? 200,
-      body: reserved.reservation.responseBody ?? "",
-      contentType: reserved.reservation.contentType ?? "application/json",
-      headers,
-      forwarded: false,
-    };
+    // Billing replay is idempotent, but model content is never cached in Admin.
+    return jsonOutcome(409, { error: "request_already_completed", request_id: input.requestId }, headers);
+  }
+  if (!reserved.ok && reserved.reason === "conflict") {
+    return jsonOutcome(409, { error: "idempotency_conflict" }, headers);
   }
   if (!reserved.ok && reserved.reason === "in_flight") {
     return jsonOutcome(409, { error: "in_flight", request_id: input.requestId }, headers);
@@ -168,12 +175,12 @@ export async function meterCompletion(input: {
     const rewritten = rewriteModel(input.rawBody, price.model);
     upstream = await input.forward(rewritten, price.model);
   } catch {
-    await input.credit.release(input.requestId);
+    await input.credit.release(input.workspaceId, input.requestId);
     return jsonOutcome(502, { error: "provider_unavailable" }, headers);
   }
   const hide = input.redactBody ?? ((body: string) => body);
   if (upstream.status >= 500) {
-    await input.credit.release(input.requestId);
+    await input.credit.release(input.workspaceId, input.requestId);
     return {
       status: upstream.status,
       body: hide(upstream.body.toString("utf8")),
@@ -195,6 +202,7 @@ export async function meterCompletion(input: {
     : reserve;
   const customerBody = hide(text.split(price.model).join(tier).split(price.provider).join(tier));
   await input.credit.settle({
+    workspaceId: input.workspaceId,
     requestId: input.requestId,
     amountMicroGbp: charge,
     provider: price.provider,
@@ -203,8 +211,6 @@ export async function meterCompletion(input: {
     inputTokens: usage?.inputTokens ?? inputTokens,
     outputTokens: usage?.outputTokens ?? maxOutput,
     httpStatus: upstream.status,
-    responseBody: customerBody,
-    contentType: upstream.contentType,
     meta: { charged: usage ? "usage" : "reserved" },
   });
   await maybeAlert(input.credit, input.workspaceId, now, input.onSoftAlert);

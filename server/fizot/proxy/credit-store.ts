@@ -24,9 +24,9 @@ export type CreditReservation = {
   workspaceId: string;
   amountMicroGbp: number;
   status: ReservationStatus;
+  /** Keyed digest of the workspace, tier, and raw request. */
+  requestFingerprint: string | null;
   httpStatus: number | null;
-  responseBody: string | null;
-  contentType: string | null;
   createdAt: string;
 };
 
@@ -42,7 +42,8 @@ export type ReserveResult =
   | { ok: true; reservation: CreditReservation }
   | { ok: false; reason: "insufficient" }
   | { ok: false; reason: "in_flight"; reservation: CreditReservation }
-  | { ok: false; reason: "replay"; reservation: CreditReservation };
+  | { ok: false; reason: "replay"; reservation: CreditReservation }
+  | { ok: false; reason: "conflict" };
 
 const META_FORBIDDEN = new Set([
   "prompt", "content", "messages", "response", "input", "output", "completion", "email",
@@ -68,6 +69,10 @@ function assertInt(name: string, value: number): void {
   if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
 }
 
+function assertFingerprint(value: string): void {
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new Error("invalid_request_fingerprint");
+}
+
 export type CreditStore = {
   ensureAccount(workspaceId: string, includedMicroGbp: number): Promise<void>;
   /** Replace the 80% denominator. Does not write a ledger row. */
@@ -84,8 +89,10 @@ export type CreditStore = {
     workspaceId: string;
     requestId: string;
     amountMicroGbp: number;
+    requestFingerprint: string;
   }): Promise<ReserveResult>;
   settle(input: {
+    workspaceId: string;
     requestId: string;
     amountMicroGbp: number;
     provider: string | null;
@@ -94,11 +101,9 @@ export type CreditStore = {
     inputTokens: number;
     outputTokens: number;
     httpStatus: number;
-    responseBody: string;
-    contentType: string;
     meta?: Record<string, unknown>;
   }): Promise<CreditLedgerRow>;
-  release(requestId: string): Promise<void>;
+  release(workspaceId: string, requestId: string): Promise<void>;
   markAlerted(workspaceId: string, period: string): Promise<boolean>;
   alerted(workspaceId: string, period: string): Promise<boolean>;
   usageCount(workspaceId: string): Promise<number>;
@@ -175,7 +180,11 @@ export function createMemoryCreditStore(): CreditStore {
       assertInt("amountMicroGbp", input.amountMicroGbp);
       return lock(() => {
         const existing = state.ledger.find((row) => row.requestId === input.requestId);
-        if (existing) return existing;
+        if (existing) {
+          if (existing.workspaceId !== input.workspaceId || existing.kind !== (input.kind ?? "grant")
+            || existing.amountMicroGbp !== input.amountMicroGbp) throw new Error("grant_idempotency_conflict");
+          return existing;
+        }
         const row: CreditLedgerRow = {
           id: randomUUID(),
           workspaceId: input.workspaceId,
@@ -196,9 +205,15 @@ export function createMemoryCreditStore(): CreditStore {
     },
     async tryReserve(input) {
       assertInt("amountMicroGbp", input.amountMicroGbp);
+      assertFingerprint(input.requestFingerprint);
       if (input.amountMicroGbp < 0) throw new Error("reserve must be non-negative");
       return lock(() => {
         const existing = state.reservations.get(input.requestId);
+        if (existing && (existing.workspaceId !== input.workspaceId
+          || existing.requestFingerprint !== input.requestFingerprint
+          || existing.amountMicroGbp !== input.amountMicroGbp)) {
+          return { ok: false as const, reason: "conflict" as const };
+        }
         if (existing?.status === "settled") return { ok: false as const, reason: "replay" as const, reservation: existing };
         if (existing?.status === "reserved") return { ok: false as const, reason: "in_flight" as const, reservation: existing };
         const available = balanceOf(input.workspaceId) - reservedOf(input.workspaceId);
@@ -208,9 +223,8 @@ export function createMemoryCreditStore(): CreditStore {
           workspaceId: input.workspaceId,
           amountMicroGbp: input.amountMicroGbp,
           status: "reserved",
+          requestFingerprint: input.requestFingerprint,
           httpStatus: null,
-          responseBody: null,
-          contentType: null,
           createdAt: new Date().toISOString(),
         };
         state.reservations.set(input.requestId, reservation);
@@ -223,9 +237,12 @@ export function createMemoryCreditStore(): CreditStore {
       assertInt("outputTokens", input.outputTokens);
       return lock(() => {
         const reservation = state.reservations.get(input.requestId);
-        if (!reservation) throw new Error("reservation missing");
+        if (!reservation || reservation.workspaceId !== input.workspaceId) throw new Error("reservation ownership mismatch");
         const existing = state.ledger.find((row) => row.requestId === input.requestId);
-        if (existing) return existing;
+        if (existing) {
+          if (existing.workspaceId !== input.workspaceId || existing.kind !== "usage") throw new Error("settle_idempotency_conflict");
+          return existing;
+        }
         const row: CreditLedgerRow = {
           id: randomUUID(),
           workspaceId: reservation.workspaceId,
@@ -245,16 +262,14 @@ export function createMemoryCreditStore(): CreditStore {
           ...reservation,
           status: "settled",
           httpStatus: input.httpStatus,
-          responseBody: input.responseBody,
-          contentType: input.contentType,
         });
         return row;
       });
     },
-    async release(requestId) {
+    async release(workspaceId, requestId) {
       await lock(() => {
         const reservation = state.reservations.get(requestId);
-        if (!reservation || reservation.status !== "reserved") return;
+        if (!reservation || reservation.workspaceId !== workspaceId || reservation.status !== "reserved") return;
         state.reservations.set(requestId, { ...reservation, status: "released" });
       });
     },
@@ -329,9 +344,8 @@ function mapReservation(row: Record<string, unknown>): CreditReservation {
     workspaceId: String(row.workspace_id),
     amountMicroGbp: num(row.amount_micro_gbp),
     status: row.status as ReservationStatus,
+    requestFingerprint: row.request_fingerprint == null ? null : String(row.request_fingerprint),
     httpStatus: row.http_status == null ? null : num(row.http_status),
-    responseBody: row.response_body == null ? null : String(row.response_body),
-    contentType: row.content_type == null ? null : String(row.content_type),
     createdAt: new Date(String(row.created_at)).toISOString(),
   };
 }
@@ -361,11 +375,12 @@ CREATE TABLE IF NOT EXISTS fizot_credit_reservations (
   workspace_id TEXT NOT NULL,
   amount_micro_gbp BIGINT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('reserved','settled','released')),
+  request_fingerprint TEXT,
   http_status INTEGER,
-  response_body TEXT,
-  content_type TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Existing tables are upgraded without deleting prior reservation data.
+ALTER TABLE fizot_credit_reservations ADD COLUMN IF NOT EXISTS request_fingerprint TEXT;
 CREATE TABLE IF NOT EXISTS fizot_credit_alerts (
   workspace_id TEXT NOT NULL,
   period TEXT NOT NULL,
@@ -474,16 +489,27 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
       if (inserted.rows[0]) return mapLedger(inserted.rows[0]);
       const existing = await pool.query(`SELECT * FROM fizot_credit_ledger WHERE request_id = $1`, [input.requestId]);
       if (!existing.rows[0]) throw new Error("grant missing after conflict");
-      return mapLedger(existing.rows[0]);
+      const prior = mapLedger(existing.rows[0]);
+      if (prior.workspaceId !== input.workspaceId || prior.kind !== (input.kind ?? "grant")
+        || prior.amountMicroGbp !== input.amountMicroGbp) throw new Error("grant_idempotency_conflict");
+      return prior;
     },
     async tryReserve(input) {
       assertInt("amountMicroGbp", input.amountMicroGbp);
+      assertFingerprint(input.requestFingerprint);
       return withLock(input.workspaceId, async (client) => {
         const existing = await client.query(
           `SELECT * FROM fizot_credit_reservations WHERE request_id = $1`,
           [input.requestId],
         );
         const prior = existing.rows[0] ? mapReservation(existing.rows[0]) : null;
+        // Global legacy request IDs remain unique. Never return a foreign
+        // reservation or replay a pre-fingerprint request (fail closed).
+        if (prior && (prior.workspaceId !== input.workspaceId
+          || prior.requestFingerprint !== input.requestFingerprint
+          || prior.amountMicroGbp !== input.amountMicroGbp)) {
+          return { ok: false as const, reason: "conflict" as const };
+        }
         if (prior?.status === "settled") return { ok: false as const, reason: "replay" as const, reservation: prior };
         if (prior?.status === "reserved") return { ok: false as const, reason: "in_flight" as const, reservation: prior };
         const sums = await client.query(
@@ -498,15 +524,19 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         const inserted = prior
           ? await client.query(
             `UPDATE fizot_credit_reservations
-               SET status = 'reserved', amount_micro_gbp = $2, http_status = NULL, response_body = NULL, content_type = NULL
-             WHERE request_id = $1 RETURNING *`,
-            [input.requestId, input.amountMicroGbp],
+               SET status = 'reserved', amount_micro_gbp = $2, request_fingerprint = $3, http_status = NULL
+             WHERE request_id = $1 AND workspace_id = $4 RETURNING *`,
+            [input.requestId, input.amountMicroGbp, input.requestFingerprint, input.workspaceId],
           )
           : await client.query(
-            `INSERT INTO fizot_credit_reservations (request_id, workspace_id, amount_micro_gbp, status)
-             VALUES ($1, $2, $3, 'reserved') RETURNING *`,
-            [input.requestId, input.workspaceId, input.amountMicroGbp],
+            `INSERT INTO fizot_credit_reservations (request_id, workspace_id, amount_micro_gbp, status, request_fingerprint)
+              VALUES ($1, $2, $3, 'reserved', $4)
+              ON CONFLICT (request_id) DO NOTHING RETURNING *`,
+            [input.requestId, input.workspaceId, input.amountMicroGbp, input.requestFingerprint],
           );
+        // Different workspaces lock independently. A concurrent duplicate must
+        // fail closed, not throw a unique-index error or leak the winner's row.
+        if (!inserted.rows[0]) return { ok: false as const, reason: "conflict" as const };
         return { ok: true as const, reservation: mapReservation(inserted.rows[0]!) };
       });
     },
@@ -517,10 +547,14 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         [input.requestId],
       );
       const workspaceId = reservationRow.rows[0] ? String(reservationRow.rows[0].workspace_id) : "";
-      if (!workspaceId) throw new Error("reservation missing");
-      return withLock(workspaceId, async (client) => {
+      if (!workspaceId || workspaceId !== input.workspaceId) throw new Error("reservation ownership mismatch");
+      return withLock(input.workspaceId, async (client) => {
         const existing = await client.query(`SELECT * FROM fizot_credit_ledger WHERE request_id = $1`, [input.requestId]);
-        if (existing.rows[0]) return mapLedger(existing.rows[0]);
+        if (existing.rows[0]) {
+          const prior = mapLedger(existing.rows[0]);
+          if (prior.workspaceId !== input.workspaceId || prior.kind !== "usage") throw new Error("settle_idempotency_conflict");
+          return prior;
+        }
         const id = randomUUID();
         const inserted = await client.query(
           `INSERT INTO fizot_credit_ledger
@@ -542,18 +576,18 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         );
         await client.query(
           `UPDATE fizot_credit_reservations
-             SET status = 'settled', http_status = $2, response_body = $3, content_type = $4
-           WHERE request_id = $1`,
-          [input.requestId, input.httpStatus, input.responseBody, input.contentType],
+             SET status = 'settled', http_status = $2
+            WHERE request_id = $1 AND workspace_id = $3`,
+          [input.requestId, input.httpStatus, input.workspaceId],
         );
         return mapLedger(inserted.rows[0]!);
       });
     },
-    async release(requestId) {
+    async release(workspaceId, requestId) {
       await pool.query(
         `UPDATE fizot_credit_reservations SET status = 'released'
-         WHERE request_id = $1 AND status = 'reserved'`,
-        [requestId],
+          WHERE request_id = $1 AND workspace_id = $2 AND status = 'reserved'`,
+        [requestId, workspaceId],
       );
     },
     async markAlerted(workspaceId, period) {

@@ -11,6 +11,8 @@ import { redactSecrets } from "../../../server/fizot/proxy/redact.ts";
 import { startMockXai } from "../../../server/fizot/proxy/mock-xai.ts";
 import { startFizotProxy } from "../../../server/fizot/proxy/server.ts";
 
+const TEST_SECRET = "fizot-test-hmac-p43-not-production-only-0123456789";
+
 const UNIT: TierPrice[] = [{
   tier: "fast",
   displayName: "Fast",
@@ -41,6 +43,7 @@ it("reserves then settles the provider usage, and a repeat request_id does not c
   const credit = await seed(10);
   let calls = 0;
   const once = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit,
     workspaceId: "ws",
     requestId: "req-1",
@@ -54,6 +57,7 @@ it("reserves then settles the provider usage, and a repeat request_id does not c
     },
   });
   const again = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit,
     workspaceId: "ws",
     requestId: "req-1",
@@ -67,9 +71,10 @@ it("reserves then settles the provider usage, and a repeat request_id does not c
     },
   });
   expect(once.status).toBe(200);
-  expect(again.body).toBe(once.body);
-  expect(again.body).toContain("stored-answer");
-  expect(again.body).not.toContain("internal-fast");
+  expect(once.body).toContain("stored-answer");
+  expect(again.status).toBe(409);
+  expect(JSON.parse(again.body)).toEqual({ error: "request_already_completed", request_id: "req-1" });
+  expect(again.body).not.toContain("stored-answer");
   expect(calls).toBe(1);
   expect(await credit.usageCount("ws")).toBe(1);
   expect(await credit.settledMicroGbp("ws")).toBe(1);
@@ -83,6 +88,78 @@ it("reserves then settles the provider usage, and a repeat request_id does not c
   });
 });
 
+it("rejects a cross-tenant request-ID collision without replaying private model content", async () => {
+  const credit = createMemoryCreditStore();
+  for (const workspaceId of ["tenant_a", "tenant_b"]) {
+    await credit.ensureAccount(workspaceId, 10);
+    await credit.grant({ workspaceId, amountMicroGbp: 10, requestId: `grant-${workspaceId}` });
+  }
+  let providerCalls = 0;
+  const body = Buffer.from(JSON.stringify({ model: "fast", max_tokens: 1, messages: [{ role: "user", content: "private prompt" }] }));
+  const invoke = (workspaceId: string) => meterCompletion({
+    idempotencySecret: TEST_SECRET,
+    credit, workspaceId, requestId: "same-external-id", tier: "fast",
+    rawBody: body, parsed: { max_tokens: 1 }, prices: UNIT,
+    forward: async () => {
+      providerCalls++;
+      return { status: 200, contentType: "application/json", body: completion(1, "tenant-a-private-output") };
+    },
+  });
+  const a = await invoke("tenant_a");
+  const b = await invoke("tenant_b");
+  expect(a.status).toBe(200);
+  expect(b.status).toBe(409);
+  expect(JSON.parse(b.body)).toEqual({ error: "idempotency_conflict" });
+  expect(b.body).not.toContain("tenant-a-private-output");
+  expect(providerCalls).toBe(1);
+  expect(await credit.usageCount("tenant_a")).toBe(1);
+  expect(await credit.usageCount("tenant_b")).toBe(0);
+  expect((await credit.summary("tenant_b")).balanceMicroGbp).toBe(10);
+});
+
+it("rejects changed payloads under the same request ID without charging twice", async () => {
+  const credit = await seed(10);
+  let providerCalls = 0;
+  const invoke = (body: string) => meterCompletion({
+    idempotencySecret: TEST_SECRET,
+    credit, workspaceId: "ws", requestId: "same-payload-id", tier: "fast",
+    rawBody: Buffer.from(body), parsed: { max_tokens: 1 }, prices: UNIT,
+    forward: async () => {
+      providerCalls++;
+      return { status: 200, contentType: "application/json", body: completion(1, "sensitive") };
+    },
+  });
+  const first = await invoke('{"model":"fast","message":"A"}');
+  const changed = await invoke('{"model":"fast","message":"B"}');
+  const repeat = await invoke('{"model":"fast","message":"A"}');
+  expect(first.status).toBe(200);
+  expect(JSON.parse(changed.body)).toEqual({ error: "idempotency_conflict" });
+  expect(JSON.parse(repeat.body)).toEqual({ error: "request_already_completed", request_id: "same-payload-id" });
+  expect(repeat.body).not.toContain("sensitive");
+  expect(providerCalls).toBe(1);
+  expect(await credit.usageCount("ws")).toBe(1);
+  await expect(credit.grant({ workspaceId: "another-tenant", requestId: "grant-1", amountMicroGbp: 10 }))
+    .rejects.toThrow("grant_idempotency_conflict");
+});
+
+it("does not let one workspace release or settle another workspace's reservation", async () => {
+  const credit = await seed(10);
+  const requestId = "owned-reservation";
+  const reservation = await credit.tryReserve({
+    workspaceId: "ws", requestId, amountMicroGbp: 1, requestFingerprint: "a".repeat(64),
+  });
+  expect(reservation.ok).toBe(true);
+  await credit.release("another-tenant", requestId);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(1);
+  await expect(credit.settle({
+    workspaceId: "another-tenant", requestId, amountMicroGbp: 1,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 1, httpStatus: 200,
+  })).rejects.toThrow("reservation ownership mismatch");
+  await credit.release("ws", requestId);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(0);
+});
+
 it("returns 409 while the same request_id is in flight", async () => {
   const credit = await seed(10);
   let release: () => void = () => {};
@@ -90,6 +167,7 @@ it("returns 409 while the same request_id is in flight", async () => {
   let started: () => void = () => {};
   const startedP = new Promise<void>((resolve) => { started = resolve; });
   const first = meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit,
     workspaceId: "ws",
     requestId: "req-fly",
@@ -105,6 +183,7 @@ it("returns 409 while the same request_id is in flight", async () => {
   });
   await startedP;
   const second = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit,
     workspaceId: "ws",
     requestId: "req-fly",
@@ -132,6 +211,7 @@ it("alerts at exactly 80% once and hard-stops at 100% without forwarding", async
   };
   const eighty = UNIT.map((row) => ({ ...row, outputMicroGbpPerMillion: 80_000_000 }));
   const first = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "r80", tier: "fast",
     rawBody: Buffer.from("{}"), parsed: { max_tokens: 1 }, prices: eighty,
     onSoftAlert: async (event) => { alerts.push(event); },
@@ -143,6 +223,7 @@ it("alerts at exactly 80% once and hard-stops at 100% without forwarding", async
   expect(alerts[0]?.workspaceIdHash).toMatch(/^[a-f0-9]{64}$/);
   expect(JSON.stringify(alerts[0])).not.toMatch(/@/);
   const second = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "r20", tier: "fast",
     rawBody: Buffer.from("{}"), parsed: { max_tokens: 1 }, prices: UNIT.map((row) => ({ ...row, outputMicroGbpPerMillion: 20_000_000 })),
     onSoftAlert: async (event) => { alerts.push(event); },
@@ -151,6 +232,7 @@ it("alerts at exactly 80% once and hard-stops at 100% without forwarding", async
   expect(second.status).toBe(200);
   expect(alerts).toHaveLength(1);
   const blocked = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "r1", tier: "fast",
     rawBody: Buffer.from("{}"), parsed: { max_tokens: 1 }, prices: UNIT,
     forward,
@@ -175,6 +257,7 @@ it("allows a charge that lands on exactly 100% and refuses the next one", async 
   let calls = 0;
   const full = UNIT.map((row) => ({ ...row, outputMicroGbpPerMillion: 100_000_000 }));
   const ok = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "all", tier: "fast",
     rawBody: Buffer.from("{}"), parsed: { max_tokens: 1 }, prices: full,
     forward: async () => {
@@ -185,6 +268,7 @@ it("allows a charge that lands on exactly 100% and refuses the next one", async 
   expect(ok.status).toBe(200);
   expect((await credit.summary("ws")).balanceMicroGbp).toBe(0);
   const denied = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "more", tier: "fast",
     rawBody: Buffer.from("{}"), parsed: { max_tokens: 1 }, prices: UNIT,
     forward: async () => {
@@ -199,6 +283,7 @@ it("allows a charge that lands on exactly 100% and refuses the next one", async 
 it("releases the reservation when the provider returns 500 and when usage is missing charges the reserve", async () => {
   const credit = await seed(10);
   const failed = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "boom", tier: "fast",
     rawBody: Buffer.from("{}"), parsed: { max_tokens: 1 }, prices: UNIT,
     forward: async () => ({ status: 500, contentType: "application/json", body: Buffer.from("{\"error\":\"down\"}") }),
@@ -207,12 +292,59 @@ it("releases the reservation when the provider returns 500 and when usage is mis
   expect(await credit.usageCount("ws")).toBe(0);
   expect((await credit.summary("ws")).balanceMicroGbp).toBe(10);
   const missing = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "nousage", tier: "fast",
     rawBody: Buffer.from("{}"), parsed: { max_tokens: 4 }, prices: UNIT,
     forward: async () => ({ status: 200, contentType: "application/json", body: Buffer.from("{\"choices\":[]}") }),
   });
   expect(missing.status).toBe(200);
   expect(await credit.settledMicroGbp("ws")).toBe(4);
+});
+
+it("fails closed without a stable idempotency HMAC key for credit-enabled proxy", async () => {
+  await expect(startFizotProxy({
+    upstreamBase: "http://127.0.0.1:2",
+    credit: createMemoryCreditStore(),
+    idempotencySecret: "short",
+  })).rejects.toThrow("FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET");
+});
+
+it("rejects malformed request IDs and oversized request bodies before forwarding", async () => {
+  const credit = await seed(10);
+  const upstream = await startMockXai();
+  const proxy = await startFizotProxy({
+    upstreamBase: upstream.url, credit, prices: UNIT, idempotencySecret: TEST_SECRET,
+  });
+  try {
+    const minted = await fetch(`${proxy.url}/internal/mint`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instanceId: "ws", ttlSeconds: 600 }),
+    }).then((response) => response.json()) as { token: string };
+    const invalid = await fetch(`${proxy.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${minted.token}`,
+        "content-type": "application/json",
+        "x-request-id": "x".repeat(129),
+      },
+      body: JSON.stringify({ tier: "fast", max_tokens: 1 }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: "invalid_request_id" });
+
+    const oversized = await fetch(`${proxy.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${minted.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ tier: "fast", prompt: "p".repeat(1024 * 1024) }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toEqual({ error: "request_too_large" });
+    expect(upstream.calls.filter((call) => call.path === "/v1/chat/completions")).toHaveLength(0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
 });
 
 it("streams a mock completion, strips the provider key, and the kill switch forwards nothing", async () => {
@@ -222,6 +354,7 @@ it("streams a mock completion, strips the provider key, and the kill switch forw
   const lines: string[] = [];
   const alerts: SoftAlertEvent[] = [];
   const proxy = await startFizotProxy({
+    idempotencySecret: TEST_SECRET,
     upstreamBase: upstream.url,
     upstreamKey: fakeKey,
     credit,
@@ -279,6 +412,7 @@ it("streams a mock completion, strips the provider key, and the kill switch forw
   });
   const credit2 = await seed(100);
   const proxy2 = await startFizotProxy({
+    idempotencySecret: TEST_SECRET,
     upstreamBase: failing.url,
     upstreamKey: fakeKey,
     credit: credit2,
@@ -332,6 +466,7 @@ it("delivers the 80% alert on the webhook with hash and amounts only", async () 
   const credit = await seed(600, 600);
   const upstream = await startMockXai();
   const proxy = await startFizotProxy({
+    idempotencySecret: TEST_SECRET,
     upstreamBase: upstream.url,
     credit,
     prices: UNIT.map((row) => ({ ...row, outputMicroGbpPerMillion: 80_000_000 })),
