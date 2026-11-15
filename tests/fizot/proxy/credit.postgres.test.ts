@@ -238,7 +238,7 @@ it.runIf(Boolean(databaseUrl))("Postgres: undelivered reserved recovery releases
     await credit.ensureAccount(workspaceId, 8);
     await credit.grant({ workspaceId, amountMicroGbp: 8, requestId: `g-${workspaceId}`, nowMs: now });
     await credit.tryReserve({
-      workspaceId, requestId, amountMicroGbp: 3, requestFingerprint: "g".repeat(64), nowMs: now,
+      workspaceId, requestId, amountMicroGbp: 3, requestFingerprint: "9".repeat(64), nowMs: now,
     });
     const recovered = await credit.recoverStaleReservations({
       workspaceId, nowMs: now + 16 * 60_000, graceMs: 15 * 60_000,
@@ -266,7 +266,7 @@ it.runIf(Boolean(databaseUrl))("Postgres: later usage cannot consume expired gra
     expect((await credit.summary(workspaceId, Date.UTC(2025, 0, 1))).balanceMicroGbp).toBe(10);
     const requestId = `later-${workspaceId}`;
     await credit.tryReserve({
-      workspaceId, requestId, amountMicroGbp: 7, requestFingerprint: "h".repeat(64),
+      workspaceId, requestId, amountMicroGbp: 7, requestFingerprint: "a".repeat(64),
       nowMs: Date.UTC(2025, 0, 2),
     });
     await credit.settle({
