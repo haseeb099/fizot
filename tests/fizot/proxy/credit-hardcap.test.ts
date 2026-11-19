@@ -623,3 +623,86 @@ it("50 parallel unit reserves never over-allocate a 10-unit balance", async () =
   expect(grantIds.size).toBe(1);
   expect((await credit.summary("ws")).reservedMicroGbp).toBe(10);
 });
+
+it("released request ID reauth refreshes authorizedAt and funds a post-expiry grant", async () => {
+  const credit = createMemoryCreditStore();
+  await credit.ensureAccount("ws", 20);
+  const grantA = await credit.grant({
+    workspaceId: "ws", amountMicroGbp: 10, requestId: "gA", nowMs: Date.UTC(2024, 0, 1),
+  });
+  const beforeExpiry = Date.UTC(2024, 11, 15);
+  const expireA = Date.UTC(2025, 0, 1);
+  const reauthAt = Date.UTC(2025, 0, 2);
+  const first = await credit.tryReserve({
+    workspaceId: "ws", requestId: "R1", amountMicroGbp: 10, requestFingerprint: FP, nowMs: beforeExpiry,
+  });
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.reservation.funding).toEqual([{ grantId: grantA.id, amountMicroGbp: 10 }]);
+  const originalCreatedAt = first.reservation.createdAt;
+  expect(first.reservation.authorizedAt).toBe(new Date(beforeExpiry).toISOString());
+  await credit.release("ws", "R1", beforeExpiry + 1);
+
+  expect(await credit.expireDue("ws", expireA)).toBe(1);
+  const grantB = await credit.grant({
+    workspaceId: "ws", amountMicroGbp: 10, requestId: "gB", nowMs: reauthAt,
+  });
+  const again = await credit.tryReserve({
+    workspaceId: "ws", requestId: "R1", amountMicroGbp: 10, requestFingerprint: FP, nowMs: reauthAt,
+  });
+  expect(again.ok).toBe(true);
+  if (!again.ok) return;
+  expect(again.reservation.createdAt).toBe(originalCreatedAt);
+  expect(again.reservation.authorizedAt).toBe(new Date(reauthAt).toISOString());
+  expect(again.reservation.funding).toEqual([{ grantId: grantB.id, amountMicroGbp: 10 }]);
+
+  const usage = await credit.settle({
+    workspaceId: "ws", requestId: "R1", amountMicroGbp: 7,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 7, httpStatus: 200, nowMs: reauthAt + 1,
+  });
+  expect(usage.meta.fundingAuthorizedAtMs).toBe(reauthAt);
+  expect(usage.meta.funding).toEqual([{ grantId: grantB.id, amountMicroGbp: 7 }]);
+  expect(await credit.settledMicroGbp("ws")).toBe(7);
+  expect((await credit.summary("ws", reauthAt + 1)).balanceMicroGbp).toBe(3);
+
+  const replay = await credit.settle({
+    workspaceId: "ws", requestId: "R1", amountMicroGbp: 7,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 7, httpStatus: 200, nowMs: reauthAt + 2,
+  });
+  expect(replay.id).toBe(usage.id);
+  expect(await credit.usageCount("ws")).toBe(1);
+});
+
+it("released ID conflict rules and recovery-release retry stay fail-closed", async () => {
+  const credit = await seed(10);
+  const now = Date.UTC(2025, 6, 1);
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "reuse-1", amountMicroGbp: 4, requestFingerprint: FP, nowMs: now,
+  });
+  await credit.release("ws", "reuse-1", now + 1);
+  expect(await credit.tryReserve({
+    workspaceId: "ws", requestId: "reuse-1", amountMicroGbp: 4, requestFingerprint: "b".repeat(64), nowMs: now + 2,
+  })).toEqual({ ok: false, reason: "conflict" });
+  expect(await credit.tryReserve({
+    workspaceId: "other", requestId: "reuse-1", amountMicroGbp: 4, requestFingerprint: FP, nowMs: now + 2,
+  })).toEqual({ ok: false, reason: "conflict" });
+
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "recover-1", amountMicroGbp: 3, requestFingerprint: FP, nowMs: now,
+  });
+  const recovered = await credit.recoverStaleReservations({
+    workspaceId: "ws", nowMs: now + RESERVATION_RECOVERY_GRACE_MS + 1, graceMs: RESERVATION_RECOVERY_GRACE_MS,
+  });
+  expect(recovered.released).toBe(1);
+  const retried = await credit.tryReserve({
+    workspaceId: "ws", requestId: "recover-1", amountMicroGbp: 3, requestFingerprint: FP,
+    nowMs: now + RESERVATION_RECOVERY_GRACE_MS + 2,
+  });
+  expect(retried.ok).toBe(true);
+  if (retried.ok) {
+    expect(Date.parse(retried.reservation.authorizedAt))
+      .toBe(now + RESERVATION_RECOVERY_GRACE_MS + 2);
+  }
+});

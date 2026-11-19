@@ -48,7 +48,7 @@ const LINES: Record<string, number> = {
   "server/org-library.ts": 1003,
   "src/components/AttachmentPreview.tsx": 1044,
   // Memory + Postgres credit stores share one module for identical API/lifecycle.
-  "server/fizot/proxy/credit-store.ts": 1101,
+  "server/fizot/proxy/credit-store.ts": 1124,
 };
 
 function sourceFiles(): string[] {

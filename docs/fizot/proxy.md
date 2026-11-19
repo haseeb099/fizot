@@ -24,6 +24,8 @@ Settlement never debits more than the reservation. When provider-reported usage 
 
 ### Reservation recovery
 
+Released request IDs (same workspace, fingerprint and amount) may be reauthorized: created_at stays the first insert while uthorized_at becomes the new funding clock used for undingAuthorizedAtMs and open-hold expiry. Settled IDs remain replay-only.
+
 Lifecycle: `reserved` (held, not forwarded) → atomic checked `dispatched` (only then may the provider be called) → `settled` / `released`, or `uncertain` when the post-dispatch outcome is ambiguous, then `quarantined` after grace. `markDispatched` is a locked reserved→dispatched transition with `RETURNING` / status check; failure returns `409 reservation_unavailable` and **must not** forward. Recovery racing before dispatch can release a still-`reserved` hold; the meter then refuses the provider call.
 
 After dispatch, timeouts, transport/network errors, and HTTP `5xx` mark `uncertain` (hold/quarantine path) because the provider may still have billed — they are not released. Pre-dispatch failures never reach the provider. `recoverStaleReservations` after `RESERVATION_RECOVERY_GRACE_MS` from `updated_at`: undelivered `reserved` → **release** (no fabricated usage); `dispatched`/`uncertain` → **quarantine** (funds stay held; no usage debit). Quarantined rows may still settle idempotently when a late verified provider response arrives. Age-only settlement of unconfirmed work is intentionally not used. Operator/J4 reconcile is required before releasing quarantined holds when the provider outcome remains unknown.

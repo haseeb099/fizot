@@ -499,6 +499,105 @@ it.runIf(Boolean(databaseUrl))("Postgres: two connections cannot double-claim th
   }
 });
 
+it.runIf(Boolean(databaseUrl))("Postgres: released reauth refreshes authorized_at after grant expiry", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const requestId = `R1-${workspaceId}`;
+  const beforeExpiry = Date.UTC(2024, 11, 15);
+  const expireA = Date.UTC(2025, 0, 1);
+  const reauthAt = Date.UTC(2025, 0, 2);
+  try {
+    await credit.ensureAccount(workspaceId, 20);
+    const grantA = await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `gA-${workspaceId}`, nowMs: Date.UTC(2024, 0, 1),
+    });
+    const first = await credit.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 10, requestFingerprint: "a".repeat(64), nowMs: beforeExpiry,
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.reservation.funding).toEqual([{ grantId: grantA.id, amountMicroGbp: 10 }]);
+    const originalCreatedAt = first.reservation.createdAt;
+    expect(first.reservation.authorizedAt).toBe(new Date(beforeExpiry).toISOString());
+    await credit.release(workspaceId, requestId, beforeExpiry + 1);
+
+    expect(await credit.expireDue(workspaceId, expireA)).toBe(1);
+    const grantB = await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `gB-${workspaceId}`, nowMs: reauthAt,
+    });
+    const again = await credit.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 10, requestFingerprint: "a".repeat(64), nowMs: reauthAt,
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.reservation.createdAt).toBe(originalCreatedAt);
+    expect(again.reservation.authorizedAt).toBe(new Date(reauthAt).toISOString());
+    expect(again.reservation.funding).toEqual([{ grantId: grantB.id, amountMicroGbp: 10 }]);
+
+    const usage = await credit.settle({
+      workspaceId, requestId, amountMicroGbp: 7,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 7, httpStatus: 200, nowMs: reauthAt + 1,
+    });
+    expect(usage.meta.fundingAuthorizedAtMs).toBe(reauthAt);
+    expect(usage.meta.funding).toEqual([{ grantId: grantB.id, amountMicroGbp: 7 }]);
+    expect(await credit.settledMicroGbp(workspaceId)).toBe(7);
+    expect((await credit.summary(workspaceId, reauthAt + 1)).balanceMicroGbp).toBe(3);
+
+    const replay = await credit.settle({
+      workspaceId, requestId, amountMicroGbp: 7,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 7, httpStatus: 200, nowMs: reauthAt + 2,
+    });
+    expect(replay.id).toBe(usage.id);
+    expect(await credit.usageCount(workspaceId)).toBe(1);
+  } finally {
+    await credit.close();
+  }
+
+  const reopened = await createPostgresCreditStore(databaseUrl!);
+  try {
+    expect((await reopened.summary(workspaceId, reauthAt + 3)).balanceMicroGbp).toBe(3);
+    expect(await reopened.settledMicroGbp(workspaceId)).toBe(7);
+  } finally {
+    await reopened.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: concurrent released reauth is serialized under workspace lock", async () => {
+  const a = await createPostgresCreditStore(databaseUrl!);
+  const b = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const requestId = `reuse-${workspaceId}`;
+  const now = Date.UTC(2025, 8, 1);
+  try {
+    await a.ensureAccount(workspaceId, 10);
+    await a.grant({ workspaceId, amountMicroGbp: 10, requestId: `g-${workspaceId}`, nowMs: now });
+    await a.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 5, requestFingerprint: "a".repeat(64), nowMs: now,
+    });
+    await a.release(workspaceId, requestId, now + 1);
+    const [r1, r2] = await Promise.all([
+      a.tryReserve({
+        workspaceId, requestId, amountMicroGbp: 5, requestFingerprint: "a".repeat(64), nowMs: now + 2,
+      }),
+      b.tryReserve({
+        workspaceId, requestId, amountMicroGbp: 5, requestFingerprint: "a".repeat(64), nowMs: now + 3,
+      }),
+    ]);
+    const outcomes = [r1, r2];
+    const ok = outcomes.filter((row) => row.ok);
+    const conflicts = outcomes.filter((row) => !row.ok && row.reason === "in_flight");
+    // One wins reserved; the other sees in_flight (or both serialize cleanly to one reserved).
+    expect(ok.length + conflicts.length).toBe(2);
+    expect(ok.length).toBeGreaterThanOrEqual(1);
+    expect((await a.summary(workspaceId, now + 4)).reservedMicroGbp).toBe(5);
+  } finally {
+    await a.close();
+    await b.close();
+  }
+});
+
 it.runIf(Boolean(databaseUrl))("Postgres: foreign settle/release and restart-safe balance journey", async () => {
   const credit = await createPostgresCreditStore(databaseUrl!);
   const owner = `ws-${randomUUID()}`;
