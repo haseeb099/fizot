@@ -280,7 +280,7 @@ it("allows a charge that lands on exactly 100% and refuses the next one", async 
   expect(calls).toBe(1);
 });
 
-it("releases the reservation when the provider returns 500 and when usage is missing charges the reserve", async () => {
+it("holds uncertain on provider 500 after dispatch; missing usage still charges the reserve", async () => {
   const credit = await seed(10);
   const failed = await meterCompletion({
     idempotencySecret: TEST_SECRET,
@@ -291,6 +291,7 @@ it("releases the reservation when the provider returns 500 and when usage is mis
   expect(failed.status).toBe(500);
   expect(await credit.usageCount("ws")).toBe(0);
   expect((await credit.summary("ws")).balanceMicroGbp).toBe(10);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(1);
   const missing = await meterCompletion({
     idempotencySecret: TEST_SECRET,
     credit, workspaceId: "ws", requestId: "nousage", tier: "fast",

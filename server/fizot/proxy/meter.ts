@@ -1,6 +1,10 @@
 import { createHash, createHmac } from "node:crypto";
 import type { CreditStore } from "./credit-store.ts";
 import { periodKey } from "./credit-store.ts";
+import {
+  parseMaxOutputTokens,
+  sanitizeUsageTokens,
+} from "./credit-policy.ts";
 import { isTierId, quoteMicroGbp, tierPrice, type TierId, type TierPrice } from "./pricing.ts";
 
 export const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
@@ -13,24 +17,22 @@ export function estimateInputTokens(body: Buffer): number {
 }
 
 export function readMaxOutputTokens(parsed: { max_tokens?: unknown; max_completion_tokens?: unknown }): number {
-  const raw = parsed.max_tokens ?? parsed.max_completion_tokens;
-  if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) return raw;
-  return DEFAULT_MAX_OUTPUT_TOKENS;
+  const parsedMax = parseMaxOutputTokens(parsed.max_tokens ?? parsed.max_completion_tokens);
+  if (!parsedMax.ok) return DEFAULT_MAX_OUTPUT_TOKENS;
+  return parsedMax.tokens;
 }
 
 export function parseUsage(body: string, stream: boolean): UsageTokens | null {
   if (!stream) {
     try {
       const json = JSON.parse(body) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
-      const prompt = json.usage?.prompt_tokens;
-      const completion = json.usage?.completion_tokens;
-      if (typeof prompt === "number" && typeof completion === "number") {
-        return { inputTokens: prompt, outputTokens: completion };
-      }
+      return sanitizeUsageTokens({
+        inputTokens: json.usage?.prompt_tokens,
+        outputTokens: json.usage?.completion_tokens,
+      });
     } catch {
       return null;
     }
-    return null;
   }
   let found: UsageTokens | null = null;
   for (const line of body.split("\n")) {
@@ -40,9 +42,11 @@ export function parseUsage(body: string, stream: boolean): UsageTokens | null {
     if (!payload || payload === "[DONE]") continue;
     try {
       const json = JSON.parse(payload) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
-      if (typeof json.usage?.prompt_tokens === "number" && typeof json.usage?.completion_tokens === "number") {
-        found = { inputTokens: json.usage.prompt_tokens, outputTokens: json.usage.completion_tokens };
-      }
+      const sanitized = sanitizeUsageTokens({
+        inputTokens: json.usage?.prompt_tokens,
+        outputTokens: json.usage?.completion_tokens,
+      });
+      if (sanitized) found = sanitized;
     } catch {
       /* ignore non-json frames */
     }
@@ -138,10 +142,14 @@ export async function meterCompletion(input: {
   if (Buffer.byteLength(input.idempotencySecret, "utf8") < 32) {
     throw new Error("FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET must be at least 32 bytes");
   }
+  const maxParsed = parseMaxOutputTokens(input.parsed.max_tokens ?? input.parsed.max_completion_tokens);
+  if (!maxParsed.ok) {
+    return jsonOutcome(400, { error: maxParsed.reason }, headers);
+  }
   const requestFingerprint = createHmac("sha256", input.idempotencySecret)
     .update(input.workspaceId).update("\0").update(tier).update("\0").update(input.rawBody)
     .digest("hex");
-  const maxOutput = readMaxOutputTokens(input.parsed);
+  const maxOutput = maxParsed.tokens;
   const inputTokens = estimateInputTokens(input.rawBody);
   const reserve = quoteMicroGbp({
     tier,
@@ -155,6 +163,7 @@ export async function meterCompletion(input: {
     requestId: input.requestId,
     amountMicroGbp: reserve,
     requestFingerprint,
+    nowMs: now,
   });
   if (!reserved.ok && reserved.reason === "replay") {
     // Billing replay is idempotent, but model content is never cached in Admin.
@@ -170,17 +179,30 @@ export async function meterCompletion(input: {
     return jsonOutcome(402, { error: "insufficient_credit" }, headers);
   }
 
+  // Atomic reserved→dispatched under workspace lock. Never forward if recovery
+  // already released/settled/quarantined the hold.
+  const dispatchAt = Date.now();
+  const dispatched = await input.credit.markDispatched(input.workspaceId, input.requestId, dispatchAt);
+  if (!dispatched.ok) {
+    return jsonOutcome(409, { error: "reservation_unavailable", request_id: input.requestId }, headers);
+  }
+
   let upstream: { status: number; contentType: string; body: Buffer };
   try {
     const rewritten = rewriteModel(input.rawBody, price.model);
     upstream = await input.forward(rewritten, price.model);
-  } catch {
-    await input.credit.release(input.workspaceId, input.requestId);
-    return jsonOutcome(502, { error: "provider_unavailable" }, headers);
+  } catch (error) {
+    // After dispatch, provider billing is unknown for timeouts and transport errors.
+    const timedOut = error instanceof Error && /timeout|timed.?out|abort/i.test(error.message);
+    await input.credit.markUncertain(input.workspaceId, input.requestId, Date.now());
+    return jsonOutcome(timedOut ? 504 : 502, {
+      error: timedOut ? "provider_timeout" : "provider_unavailable",
+    }, headers);
   }
   const hide = input.redactBody ?? ((body: string) => body);
   if (upstream.status >= 500) {
-    await input.credit.release(input.workspaceId, input.requestId);
+    // HTTP 5xx after dispatch is ambiguous: provider may still have billed.
+    await input.credit.markUncertain(input.workspaceId, input.requestId, Date.now());
     return {
       status: upstream.status,
       body: hide(upstream.body.toString("utf8")),
@@ -192,6 +214,7 @@ export async function meterCompletion(input: {
 
   const text = upstream.body.toString("utf8");
   const usage = parseUsage(text, Boolean(input.parsed.stream));
+  // Missing/malformed usage cannot undercharge: settle the full reservation.
   const charge = usage
     ? quoteMicroGbp({
       tier,
@@ -211,7 +234,9 @@ export async function meterCompletion(input: {
     inputTokens: usage?.inputTokens ?? inputTokens,
     outputTokens: usage?.outputTokens ?? maxOutput,
     httpStatus: upstream.status,
-    meta: { charged: usage ? "usage" : "reserved" },
+    meta: {
+      charged: usage ? "usage" : "reserved_missing_usage",
+    },
   });
   await maybeAlert(input.credit, input.workspaceId, now, input.onSoftAlert);
   return {
