@@ -441,8 +441,9 @@ it.runIf(Boolean(databaseUrl))("Postgres: overlapping reserves bind distinct gra
       inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: at + 2,
     });
     expect(await credit.expireDue(workspaceId, expireA)).toBe(0);
+    // gB settled; gA residual is held by R1 and no longer spendable after expireA.
     expect((await credit.summary(workspaceId, expireA)).reservedMicroGbp).toBe(10);
-    expect((await credit.summary(workspaceId, expireA)).balanceMicroGbp).toBe(10);
+    expect((await credit.summary(workspaceId, expireA)).balanceMicroGbp).toBe(0);
     await credit.settle({
       workspaceId, requestId: `R1-${workspaceId}`, amountMicroGbp: 10,
       provider: "xai", model: "internal-fast", tier: "fast",
