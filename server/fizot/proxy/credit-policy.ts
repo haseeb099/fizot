@@ -17,6 +17,22 @@ export type CreditLotSource = {
   /** Null = legacy grandfathered grant; not auto-expired until an operator migrates it. */
   expiresAtMs: number | null;
   requestId: string | null;
+  /**
+   * For usage: when the reservation authorized funding. Lot validity uses this
+   * instant, while createdAtMs remains the ledger posting time.
+   */
+  fundingAuthorizedAtMs?: number | null;
+};
+
+/** Auditable FIFO slices bound to a reservation at authorize time. */
+export type FundingSlice = {
+  grantId: string;
+  amountMicroGbp: number;
+};
+
+export type OpenHold = {
+  authorizedAtMs: number;
+  funding: readonly FundingSlice[];
 };
 
 export type AllocatedLot = {
@@ -120,6 +136,13 @@ export function lotValidAt(expiresAtMs: number | null, atMs: number): boolean {
   return expiresAtMs > atMs;
 }
 
+function debitEffectiveAt(row: CreditLotSource): number {
+  if (row.kind === "usage" && row.fundingAuthorizedAtMs != null) {
+    return row.fundingAuthorizedAtMs;
+  }
+  return row.createdAtMs;
+}
+
 /** Same-ms ties: credits before debits so a settle cannot sort ahead of its grant. */
 function lotOrder(a: CreditLotSource, b: CreditLotSource): number {
   if (a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
@@ -131,8 +154,9 @@ function lotOrder(a: CreditLotSource, b: CreditLotSource): number {
 
 /**
  * Chronological allocation: each usage/negative adjust consumes FIFO among lots
- * still valid at the debit's createdAtMs. Expire audit rows are ignored.
- * Uncovered debit amounts are reported, never silently dropped from the ledger.
+ * still valid at the debit's effective funding time. Usage may carry
+ * fundingAuthorizedAtMs (reservation authorize time) while createdAtMs is the
+ * ledger posting time. Expire audit rows are ignored for consumption.
  */
 export function allocateCreditLots(sources: readonly CreditLotSource[]): AllocationResult {
   const lots: AllocatedLot[] = [];
@@ -152,10 +176,11 @@ export function allocateCreditLots(sources: readonly CreditLotSource[]): Allocat
     if (row.kind === "expire") continue;
     if (!isDebit(row)) continue;
     let need = Math.abs(row.amountMicroGbp);
+    const at = debitEffectiveAt(row);
     for (const lot of lots) {
       if (need <= 0) break;
       if (lot.remaining <= 0) continue;
-      if (!lotValidAt(lot.expiresAtMs, row.createdAtMs)) continue;
+      if (!lotValidAt(lot.expiresAtMs, at)) continue;
       const take = Math.min(lot.remaining, need);
       lot.remaining -= take;
       need -= take;
@@ -174,9 +199,52 @@ export function allocateCreditLots(sources: readonly CreditLotSource[]): Allocat
   return { lots, uncoveredDebits };
 }
 
+/** FIFO funding plan for a new reservation at authorize time. */
+export function planFundingSlices(
+  sources: readonly CreditLotSource[],
+  amountMicroGbp: number,
+  atMs: number,
+): FundingSlice[] | null {
+  if (!Number.isSafeInteger(amountMicroGbp) || amountMicroGbp < 0) {
+    throw new Error("amountMicroGbp must be a non-negative safe integer");
+  }
+  if (amountMicroGbp === 0) return [];
+  const { lots, uncoveredDebits } = allocateCreditLots(sources);
+  if (uncoveredDebits.length > 0) throw new Error("uncovered_debit");
+  let need = amountMicroGbp;
+  const slices: FundingSlice[] = [];
+  for (const lot of lots) {
+    if (need <= 0) break;
+    if (lot.remaining <= 0) continue;
+    if (!lotValidAt(lot.expiresAtMs, atMs)) continue;
+    const take = Math.min(lot.remaining, need);
+    slices.push({ grantId: lot.grantId, amountMicroGbp: take });
+    need -= take;
+  }
+  if (need > 0) return null;
+  return slices;
+}
+
+function applyOpenHolds(lots: AllocatedLot[], openHolds: readonly OpenHold[]): void {
+  for (const hold of openHolds) {
+    for (const slice of hold.funding) {
+      if (!Number.isSafeInteger(slice.amountMicroGbp) || slice.amountMicroGbp <= 0) {
+        throw new Error("invalid_funding_slice");
+      }
+      const lot = lots.find((item) => item.grantId === slice.grantId);
+      if (!lot) throw new Error("funding_slice_missing_lot");
+      if (!lotValidAt(lot.expiresAtMs, hold.authorizedAtMs)) {
+        throw new Error("funding_slice_expired_at_authorize");
+      }
+      if (lot.remaining < slice.amountMicroGbp) throw new Error("funding_slice_over_allocated");
+      lot.remaining -= slice.amountMicroGbp;
+    }
+  }
+}
+
 /**
  * Spendable residual at nowMs after time-aware FIFO. Throws if any historical
- * debit was not fully covered by lots valid at its timestamp (fail closed).
+ * debit was not fully covered by lots valid at its funding time (fail closed).
  */
 export function spendableMicroGbp(sources: readonly CreditLotSource[], nowMs: number): number {
   const { lots, uncoveredDebits } = allocateCreditLots(sources);
@@ -192,18 +260,11 @@ export function spendableMicroGbp(sources: readonly CreditLotSource[], nowMs: nu
   return spendable;
 }
 
-export type ExpirableGrant = {
-  id: string;
-  requestId: string;
-  amountMicroGbp: number;
-  createdAtMs: number;
-  expiresAtMs: number;
-};
-
-/** Residual still on an expired grant lot after time-aware FIFO usage/negative adjusts. */
+/** Residual still on an expired grant lot after usages and open reservation escrow. */
 export function expiredGrantResiduals(
   sources: readonly CreditLotSource[],
   nowMs: number,
+  openHolds: readonly OpenHold[] = [],
 ): Array<{ grantId: string; grantRequestId: string; residualMicroGbp: number }> {
   const alreadyExpired = new Set(
     sources
@@ -214,6 +275,7 @@ export function expiredGrantResiduals(
   if (uncoveredDebits.length > 0) {
     throw new Error("uncovered_debit");
   }
+  applyOpenHolds(lots, openHolds);
   const out: Array<{ grantId: string; grantRequestId: string; residualMicroGbp: number }> = [];
   for (const lot of lots) {
     if (lot.remaining <= 0) continue;
@@ -240,4 +302,20 @@ export function clampSettleToReservation(actualMicroGbp: number, reservedMicroGb
     return { settleMicroGbp: actualMicroGbp, exceeded: false };
   }
   return { settleMicroGbp: reservedMicroGbp, exceeded: true };
+}
+
+export function parseFundingSlices(raw: unknown): FundingSlice[] {
+  if (!Array.isArray(raw)) throw new Error("invalid_funding");
+  const out: FundingSlice[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") throw new Error("invalid_funding");
+    const grantId = (item as { grantId?: unknown }).grantId;
+    const amountMicroGbp = (item as { amountMicroGbp?: unknown }).amountMicroGbp;
+    if (typeof grantId !== "string" || grantId.length === 0) throw new Error("invalid_funding");
+    if (!Number.isSafeInteger(amountMicroGbp) || (amountMicroGbp as number) <= 0) {
+      throw new Error("invalid_funding");
+    }
+    out.push({ grantId, amountMicroGbp: amountMicroGbp as number });
+  }
+  return out;
 }

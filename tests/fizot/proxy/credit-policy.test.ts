@@ -140,3 +140,35 @@ it("expire audit rows do not double-consume after residuals are written", () => 
   expect(spendableMicroGbp(sources, Date.UTC(2025, 0, 3))).toBe(3);
   expect(expiredGrantResiduals(sources, Date.UTC(2025, 0, 3))).toEqual([]);
 });
+
+it("settle posted after expiry uses fundingAuthorizedAtMs and leaves no uncovered debit", () => {
+  const expireAt = Date.UTC(2025, 0, 1);
+  const sources: CreditLotSource[] = [
+    {
+      id: "g1", kind: "grant", amountMicroGbp: 10,
+      createdAtMs: Date.UTC(2024, 0, 1), expiresAtMs: expireAt, requestId: "g1",
+    },
+    {
+      id: "u1", kind: "usage", amountMicroGbp: -10,
+      createdAtMs: Date.UTC(2025, 0, 1, 0, 1), expiresAtMs: null, requestId: "u1",
+      fundingAuthorizedAtMs: Date.UTC(2024, 11, 31, 23, 59),
+    },
+  ];
+  expect(spendableMicroGbp(sources, Date.UTC(2025, 0, 2))).toBe(0);
+  expect(expiredGrantResiduals(sources, Date.UTC(2025, 0, 2))).toEqual([]);
+});
+
+it("open reservation escrow reduces expire residual", () => {
+  const expireAt = Date.UTC(2025, 0, 1);
+  const sources: CreditLotSource[] = [
+    {
+      id: "g1", kind: "grant", amountMicroGbp: 10,
+      createdAtMs: Date.UTC(2024, 0, 1), expiresAtMs: expireAt, requestId: "g1",
+    },
+  ];
+  const holds = [{
+    authorizedAtMs: Date.UTC(2024, 11, 31),
+    funding: [{ grantId: "g1", amountMicroGbp: 10 }],
+  }];
+  expect(expiredGrantResiduals(sources, expireAt, holds)).toEqual([]);
+});

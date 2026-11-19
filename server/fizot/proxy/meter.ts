@@ -179,27 +179,30 @@ export async function meterCompletion(input: {
     return jsonOutcome(402, { error: "insufficient_credit" }, headers);
   }
 
-  // Mark dispatched before the provider call so a crash-before-forward
-  // recovery can release without fabricating usage.
-  await input.credit.markDispatched(input.workspaceId, input.requestId, now);
+  // Atomic reserved→dispatched under workspace lock. Never forward if recovery
+  // already released/settled/quarantined the hold.
+  const dispatchAt = Date.now();
+  const dispatched = await input.credit.markDispatched(input.workspaceId, input.requestId, dispatchAt);
+  if (!dispatched.ok) {
+    return jsonOutcome(409, { error: "reservation_unavailable", request_id: input.requestId }, headers);
+  }
 
   let upstream: { status: number; contentType: string; body: Buffer };
   try {
     const rewritten = rewriteModel(input.rawBody, price.model);
     upstream = await input.forward(rewritten, price.model);
   } catch (error) {
+    // After dispatch, provider billing is unknown for timeouts and transport errors.
     const timedOut = error instanceof Error && /timeout|timed.?out|abort/i.test(error.message);
-    if (timedOut) {
-      // Grace for quarantine starts at the actual timeout, not request start.
-      await input.credit.markUncertain(input.workspaceId, input.requestId, Date.now());
-      return jsonOutcome(504, { error: "provider_timeout" }, headers);
-    }
-    await input.credit.release(input.workspaceId, input.requestId, Date.now());
-    return jsonOutcome(502, { error: "provider_unavailable" }, headers);
+    await input.credit.markUncertain(input.workspaceId, input.requestId, Date.now());
+    return jsonOutcome(timedOut ? 504 : 502, {
+      error: timedOut ? "provider_timeout" : "provider_unavailable",
+    }, headers);
   }
   const hide = input.redactBody ?? ((body: string) => body);
   if (upstream.status >= 500) {
-    await input.credit.release(input.workspaceId, input.requestId, Date.now());
+    // HTTP 5xx after dispatch is ambiguous: provider may still have billed.
+    await input.credit.markUncertain(input.workspaceId, input.requestId, Date.now());
     return {
       status: upstream.status,
       body: hide(upstream.body.toString("utf8")),

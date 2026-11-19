@@ -264,7 +264,7 @@ it("expired lot plus later usage does not inflate spendable balance", async () =
   expect((await credit.summary("ws", Date.UTC(2025, 0, 3))).balanceMicroGbp).toBe(3);
 });
 
-it("releases unused reservation after definite provider failure", async () => {
+it("holds uncertain after post-dispatch transport failure (provider may have billed)", async () => {
   const credit = await seed(10);
   const failed = await meterCompletion({
     idempotencySecret: TEST_SECRET,
@@ -275,10 +275,74 @@ it("releases unused reservation after definite provider failure", async () => {
     },
   });
   expect(failed.status).toBe(502);
-  expect((await credit.summary("ws")).reservedMicroGbp).toBe(0);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(2);
   expect(await credit.usageCount("ws")).toBe(0);
 });
 
+it("reserve before expiry and settle after posts usage without uncovered_debit", async () => {
+  const credit = createMemoryCreditStore();
+  await credit.ensureAccount("ws", 10);
+  await credit.grant({
+    workspaceId: "ws", amountMicroGbp: 10, requestId: "g-cross", kind: "grant",
+    nowMs: Date.UTC(2024, 0, 1),
+  });
+  const reserveAt = Date.UTC(2024, 11, 31, 23, 59);
+  const reserved = await credit.tryReserve({
+    workspaceId: "ws", requestId: "cross-1", amountMicroGbp: 10, requestFingerprint: FP, nowMs: reserveAt,
+  });
+  expect(reserved.ok).toBe(true);
+  if (reserved.ok) {
+    expect(reserved.reservation.funding).toEqual([{ grantId: expect.any(String), amountMicroGbp: 10 }]);
+  }
+  expect(await credit.expireDue("ws", Date.UTC(2025, 0, 1))).toBe(0);
+  await credit.settle({
+    workspaceId: "ws", requestId: "cross-1", amountMicroGbp: 10,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: Date.UTC(2025, 0, 1, 0, 1),
+  });
+  expect(await credit.settledMicroGbp("ws")).toBe(10);
+  expect((await credit.summary("ws", Date.UTC(2025, 0, 2))).balanceMicroGbp).toBe(0);
+  expect(await credit.expireDue("ws", Date.UTC(2025, 0, 2))).toBe(0);
+});
+
+it("atomic dispatch fails after recovery released the reservation; meter does not forward", async () => {
+  const credit = await seed(10);
+  const now = Date.UTC(2025, 6, 1);
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "race-dispatch", amountMicroGbp: 3, requestFingerprint: FP, nowMs: now,
+  });
+  const recovered = await credit.recoverStaleReservations({
+    workspaceId: "ws", nowMs: now + RESERVATION_RECOVERY_GRACE_MS + 1, graceMs: RESERVATION_RECOVERY_GRACE_MS,
+  });
+  expect(recovered.released).toBe(1);
+  const dispatch = await credit.markDispatched("ws", "race-dispatch", now + RESERVATION_RECOVERY_GRACE_MS + 2);
+  expect(dispatch).toEqual({ ok: false, reason: "not_reserved" });
+
+  // Inject recovery between reserve and dispatch inside meter by wrapping markDispatched.
+  const inner = credit.markDispatched.bind(credit);
+  credit.markDispatched = async (workspaceId, requestId, nowMs = Date.now()) => {
+    await credit.recoverStaleReservations({
+      workspaceId,
+      nowMs: (nowMs ?? Date.now()) + RESERVATION_RECOVERY_GRACE_MS + 1,
+      graceMs: RESERVATION_RECOVERY_GRACE_MS,
+    });
+    return inner(workspaceId, requestId, nowMs);
+  };
+  let forwarded = 0;
+  const blocked = await meterCompletion({
+    idempotencySecret: TEST_SECRET,
+    credit, workspaceId: "ws", requestId: "race-meter", tier: "fast",
+    rawBody: Buffer.from("{}"), parsed: { max_tokens: 2 }, prices: UNIT, now,
+    forward: async () => {
+      forwarded += 1;
+      return { status: 200, contentType: "application/json", body: completion(1) };
+    },
+  });
+  expect(forwarded).toBe(0);
+  expect(blocked.status).toBe(409);
+  expect(JSON.parse(blocked.body)).toEqual({ error: "reservation_unavailable", request_id: "race-meter" });
+  expect(await credit.usageCount("ws")).toBe(0);
+});
 it("repeated settlement of the same request id is idempotent", async () => {
   const credit = await seed(10);
   await credit.tryReserve({

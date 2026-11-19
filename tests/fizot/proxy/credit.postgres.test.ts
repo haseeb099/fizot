@@ -252,6 +252,74 @@ it.runIf(Boolean(databaseUrl))("Postgres: undelivered reserved recovery releases
   }
 });
 
+it.runIf(Boolean(databaseUrl))("Postgres: reserve before expiry settle after keeps funding attribution", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const requestId = `cross-${randomUUID()}`;
+  try {
+    await credit.ensureAccount(workspaceId, 10);
+    await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `g-${workspaceId}`, nowMs: Date.UTC(2024, 0, 1),
+    });
+    const reserved = await credit.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 10, requestFingerprint: "c".repeat(64),
+      nowMs: Date.UTC(2024, 11, 31, 23, 59),
+    });
+    expect(reserved.ok).toBe(true);
+    expect(await credit.expireDue(workspaceId, Date.UTC(2025, 0, 1))).toBe(0);
+    await credit.settle({
+      workspaceId, requestId, amountMicroGbp: 10,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: Date.UTC(2025, 0, 1, 0, 1),
+    });
+    expect(await credit.settledMicroGbp(workspaceId)).toBe(10);
+    expect((await credit.summary(workspaceId, Date.UTC(2025, 0, 2))).balanceMicroGbp).toBe(0);
+    expect(await credit.expireDue(workspaceId, Date.UTC(2025, 0, 2))).toBe(0);
+  } finally {
+    await credit.close();
+  }
+
+  const reopened = await createPostgresCreditStore(databaseUrl!);
+  try {
+    expect((await reopened.summary(workspaceId, Date.UTC(2025, 0, 2))).balanceMicroGbp).toBe(0);
+    expect(await reopened.settledMicroGbp(workspaceId)).toBe(10);
+  } finally {
+    await reopened.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: concurrent recovery release vs dispatch is atomic", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const requestId = `race-${randomUUID()}`;
+  const now = Date.UTC(2025, 7, 1);
+  try {
+    await credit.ensureAccount(workspaceId, 5);
+    await credit.grant({ workspaceId, amountMicroGbp: 5, requestId: `g-${workspaceId}`, nowMs: now });
+    await credit.tryReserve({
+      workspaceId, requestId, amountMicroGbp: 5, requestFingerprint: "d".repeat(64), nowMs: now,
+    });
+    const [recovery, dispatch] = await Promise.all([
+      credit.recoverStaleReservations({
+        workspaceId, nowMs: now + 16 * 60_000, graceMs: 15 * 60_000,
+      }),
+      credit.markDispatched(workspaceId, requestId, now + 16 * 60_000),
+    ]);
+    const released = recovery.released === 1;
+    const dispatched = dispatch.ok === true;
+    // Exactly one winner: either recovery released or dispatch succeeded.
+    expect(Number(released) + Number(dispatched)).toBe(1);
+    if (dispatched) {
+      expect(recovery.released).toBe(0);
+    } else {
+      expect(dispatch).toEqual({ ok: false, reason: "not_reserved" });
+    }
+    expect(await credit.usageCount(workspaceId)).toBe(0);
+  } finally {
+    await credit.close();
+  }
+});
+
 it.runIf(Boolean(databaseUrl))("Postgres: later usage cannot consume expired grant residual", async () => {
   const credit = await createPostgresCreditStore(databaseUrl!);
   const workspaceId = `ws-${randomUUID()}`;

@@ -3,9 +3,13 @@ import {
   assertLedgerAmount,
   defaultGrantExpiresAtMs,
   expiredGrantResiduals,
+  parseFundingSlices,
+  planFundingSlices,
   RESERVATION_RECOVERY_GRACE_MS,
   spendableMicroGbp,
   type CreditLotSource,
+  type FundingSlice,
+  type OpenHold,
 } from "./credit-policy.ts";
 
 export type LedgerKind = "grant" | "usage" | "refund" | "adjust" | "expire";
@@ -58,9 +62,15 @@ export type CreditReservation = {
   /** Keyed digest of the workspace, tier, and raw request. */
   requestFingerprint: string | null;
   httpStatus: number | null;
+  /** FIFO grant slices bound when the reservation was authorized. */
+  funding: FundingSlice[];
   createdAt: string;
   updatedAt: string;
 };
+
+export type DispatchResult =
+  | { ok: true; reservation: CreditReservation }
+  | { ok: false; reason: "not_reserved" | "ownership_mismatch" };
 
 export type RecoverStaleResult = {
   /** Undelivered `reserved` rows released (never dispatched). */
@@ -141,7 +151,8 @@ export type CreditStore = {
     requestFingerprint: string;
     nowMs?: number;
   }): Promise<ReserveResult>;
-  markDispatched(workspaceId: string, requestId: string, nowMs?: number): Promise<void>;
+  /** Atomic reserved→dispatched. Forward only when ok. */
+  markDispatched(workspaceId: string, requestId: string, nowMs?: number): Promise<DispatchResult>;
   settle(input: {
     workspaceId: string;
     requestId: string;
@@ -211,17 +222,34 @@ export function createMemoryCreditStore(): CreditStore {
   function lotsOf(workspaceId: string): CreditLotSource[] {
     return state.ledger
       .filter((row) => row.workspaceId === workspaceId)
-      .map((row) => ({
-        id: row.id,
-        kind: row.kind,
-        amountMicroGbp: row.amountMicroGbp,
-        createdAtMs: Date.parse(row.createdAt),
-        expiresAtMs: row.expiresAt == null ? null : Date.parse(row.expiresAt),
-        requestId: row.requestId,
-      }));
+      .map((row) => {
+        const fundingAuthorizedAtMs = row.kind === "usage" && typeof row.meta.fundingAuthorizedAtMs === "number"
+          ? row.meta.fundingAuthorizedAtMs
+          : null;
+        return {
+          id: row.id,
+          kind: row.kind,
+          amountMicroGbp: row.amountMicroGbp,
+          createdAtMs: Date.parse(row.createdAt),
+          expiresAtMs: row.expiresAt == null ? null : Date.parse(row.expiresAt),
+          requestId: row.requestId,
+          fundingAuthorizedAtMs,
+        };
+      });
+  }
+  function openHoldsOf(workspaceId: string): OpenHold[] {
+    const holds: OpenHold[] = [];
+    for (const row of state.reservations.values()) {
+      if (row.workspaceId !== workspaceId || !isHolding(row.status)) continue;
+      holds.push({
+        authorizedAtMs: Date.parse(row.createdAt),
+        funding: row.funding,
+      });
+    }
+    return holds;
   }
   function expireDueLocked(workspaceId: string, nowMs: number): number {
-    const due = expiredGrantResiduals(lotsOf(workspaceId), nowMs);
+    const due = expiredGrantResiduals(lotsOf(workspaceId), nowMs, openHoldsOf(workspaceId));
     let wrote = 0;
     for (const item of due) {
       const expireRequestId = `expire:${item.grantId}`;
@@ -324,8 +352,11 @@ export function createMemoryCreditStore(): CreditStore {
         if (existing && isHolding(existing.status)) {
           return { ok: false as const, reason: "in_flight" as const, reservation: existing };
         }
-        const available = spendableMicroGbp(lotsOf(input.workspaceId), nowMs) - reservedOf(input.workspaceId);
+        const lots = lotsOf(input.workspaceId);
+        const available = spendableMicroGbp(lots, nowMs) - reservedOf(input.workspaceId);
         if (available < input.amountMicroGbp) return { ok: false as const, reason: "insufficient" as const };
+        const funding = planFundingSlices(lots, input.amountMicroGbp, nowMs);
+        if (!funding) return { ok: false as const, reason: "insufficient" as const };
         const stamp = new Date(nowMs).toISOString();
         const reservation: CreditReservation = {
           requestId: input.requestId,
@@ -334,6 +365,7 @@ export function createMemoryCreditStore(): CreditStore {
           status: "reserved",
           requestFingerprint: input.requestFingerprint,
           httpStatus: null,
+          funding,
           createdAt: stamp,
           updatedAt: stamp,
         };
@@ -342,14 +374,22 @@ export function createMemoryCreditStore(): CreditStore {
       });
     },
     async markDispatched(workspaceId, requestId, nowMs = Date.now()) {
-      await lock(() => {
+      return lock(() => {
         const reservation = state.reservations.get(requestId);
-        if (!reservation || reservation.workspaceId !== workspaceId || reservation.status !== "reserved") return;
-        state.reservations.set(requestId, {
+        if (!reservation) return { ok: false as const, reason: "not_reserved" as const };
+        if (reservation.workspaceId !== workspaceId) {
+          return { ok: false as const, reason: "ownership_mismatch" as const };
+        }
+        if (reservation.status !== "reserved") {
+          return { ok: false as const, reason: "not_reserved" as const };
+        }
+        const next: CreditReservation = {
           ...reservation,
           status: "dispatched",
           updatedAt: new Date(nowMs).toISOString(),
-        });
+        };
+        state.reservations.set(requestId, next);
+        return { ok: true as const, reservation: next };
       });
     },
     async settle(input) {
@@ -370,6 +410,7 @@ export function createMemoryCreditStore(): CreditStore {
         }
         const charge = Math.min(Math.abs(input.amountMicroGbp), reservation.amountMicroGbp);
         const stamp = new Date(input.nowMs ?? Date.now()).toISOString();
+        const fundingAuthorizedAtMs = Date.parse(reservation.createdAt);
         const row: CreditLedgerRow = {
           id: randomUUID(),
           workspaceId: reservation.workspaceId,
@@ -388,6 +429,8 @@ export function createMemoryCreditStore(): CreditStore {
             reservedMicroGbp: reservation.amountMicroGbp,
             requestedSettleMicroGbp: Math.abs(input.amountMicroGbp),
             cappedToReservation: Math.abs(input.amountMicroGbp) > reservation.amountMicroGbp,
+            fundingAuthorizedAtMs,
+            funding: reservation.funding,
           }),
         };
         state.ledger.push(row);
@@ -539,6 +582,7 @@ function mapReservation(row: Record<string, unknown>): CreditReservation {
     status: row.status as ReservationStatus,
     requestFingerprint: row.request_fingerprint == null ? null : String(row.request_fingerprint),
     httpStatus: row.http_status == null ? null : num(row.http_status),
+    funding: parseFundingSlices(row.funding ?? []),
     createdAt: new Date(String(row.created_at)).toISOString(),
     updatedAt: new Date(String(row.updated_at ?? row.created_at)).toISOString(),
   };
@@ -547,6 +591,9 @@ function mapReservation(row: Record<string, unknown>): CreditReservation {
 function lotSourcesFromRows(rows: Array<Record<string, unknown>>): CreditLotSource[] {
   return rows.map((row) => {
     const mapped = mapLedger(row);
+    const fundingAuthorizedAtMs = mapped.kind === "usage" && typeof mapped.meta.fundingAuthorizedAtMs === "number"
+      ? mapped.meta.fundingAuthorizedAtMs
+      : null;
     return {
       id: mapped.id,
       kind: mapped.kind,
@@ -554,8 +601,23 @@ function lotSourcesFromRows(rows: Array<Record<string, unknown>>): CreditLotSour
       createdAtMs: Date.parse(mapped.createdAt),
       expiresAtMs: mapped.expiresAt == null ? null : Date.parse(mapped.expiresAt),
       requestId: mapped.requestId,
+      fundingAuthorizedAtMs,
     };
   });
+}
+
+const HOLDING_SQL = `'reserved','dispatched','uncertain','quarantined'`;
+
+async function openHoldsFromClient(client: PgClient, workspaceId: string): Promise<OpenHold[]> {
+  const result = await client.query(
+    `SELECT created_at, funding FROM fizot_credit_reservations
+      WHERE workspace_id = $1 AND status IN (${HOLDING_SQL})`,
+    [workspaceId],
+  );
+  return result.rows.map((row) => ({
+    authorizedAtMs: Date.parse(String(row.created_at)),
+    funding: parseFundingSlices(row.funding ?? []),
+  }));
 }
 
 async function expireDueOnClient(
@@ -564,7 +626,8 @@ async function expireDueOnClient(
   nowMs: number,
 ): Promise<number> {
   const ledger = await client.query(`SELECT * FROM fizot_credit_ledger WHERE workspace_id = $1`, [workspaceId]);
-  const due = expiredGrantResiduals(lotSourcesFromRows(ledger.rows), nowMs);
+  const holds = await openHoldsFromClient(client, workspaceId);
+  const due = expiredGrantResiduals(lotSourcesFromRows(ledger.rows), nowMs, holds);
   let wrote = 0;
   for (const item of due) {
     const expireRequestId = `expire:${item.grantId}`;
@@ -587,8 +650,6 @@ async function expireDueOnClient(
   }
   return wrote;
 }
-
-const HOLDING_SQL = `'reserved','dispatched','uncertain','quarantined'`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS fizot_credit_accounts (
@@ -622,11 +683,13 @@ CREATE TABLE IF NOT EXISTS fizot_credit_reservations (
   status TEXT NOT NULL,
   request_fingerprint TEXT,
   http_status INTEGER,
+  funding JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE fizot_credit_reservations ADD COLUMN IF NOT EXISTS request_fingerprint TEXT;
 ALTER TABLE fizot_credit_reservations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE fizot_credit_reservations ADD COLUMN IF NOT EXISTS funding JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE fizot_credit_reservations DROP CONSTRAINT IF EXISTS fizot_credit_reservations_status_check;
 ALTER TABLE fizot_credit_reservations ADD CONSTRAINT fizot_credit_reservations_status_check
   CHECK (status IN ('reserved','dispatched','uncertain','quarantined','settled','released'));
@@ -777,33 +840,56 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
             WHERE workspace_id = $1 AND status IN (${HOLDING_SQL})`,
           [input.workspaceId],
         );
-        const available = spendableMicroGbp(lotSourcesFromRows(ledger.rows), nowMs) - num(reserved.rows[0]?.reserved);
+        const lots = lotSourcesFromRows(ledger.rows);
+        const available = spendableMicroGbp(lots, nowMs) - num(reserved.rows[0]?.reserved);
         if (available < input.amountMicroGbp) return { ok: false as const, reason: "insufficient" as const };
+        const funding = planFundingSlices(lots, input.amountMicroGbp, nowMs);
+        if (!funding) return { ok: false as const, reason: "insufficient" as const };
         const stamp = new Date(nowMs).toISOString();
         const inserted = prior
           ? await client.query(
             `UPDATE fizot_credit_reservations
-               SET status = 'reserved', amount_micro_gbp = $2, request_fingerprint = $3, http_status = NULL, updated_at = $5::timestamptz
+               SET status = 'reserved', amount_micro_gbp = $2, request_fingerprint = $3, http_status = NULL,
+                   funding = $5::jsonb, updated_at = $6::timestamptz
              WHERE request_id = $1 AND workspace_id = $4 RETURNING *`,
-            [input.requestId, input.amountMicroGbp, input.requestFingerprint, input.workspaceId, stamp],
+            [input.requestId, input.amountMicroGbp, input.requestFingerprint, input.workspaceId, JSON.stringify(funding), stamp],
           )
           : await client.query(
             `INSERT INTO fizot_credit_reservations
-              (request_id, workspace_id, amount_micro_gbp, status, request_fingerprint, created_at, updated_at)
-              VALUES ($1, $2, $3, 'reserved', $4, $5::timestamptz, $5::timestamptz)
+              (request_id, workspace_id, amount_micro_gbp, status, request_fingerprint, funding, created_at, updated_at)
+              VALUES ($1, $2, $3, 'reserved', $4, $5::jsonb, $6::timestamptz, $6::timestamptz)
               ON CONFLICT (request_id) DO NOTHING RETURNING *`,
-            [input.requestId, input.workspaceId, input.amountMicroGbp, input.requestFingerprint, stamp],
+            [input.requestId, input.workspaceId, input.amountMicroGbp, input.requestFingerprint, JSON.stringify(funding), stamp],
           );
         if (!inserted.rows[0]) return { ok: false as const, reason: "conflict" as const };
         return { ok: true as const, reservation: mapReservation(inserted.rows[0]!) };
       });
     },
     async markDispatched(workspaceId, requestId, nowMs = Date.now()) {
-      await pool.query(
-        `UPDATE fizot_credit_reservations SET status = 'dispatched', updated_at = $3::timestamptz
-          WHERE request_id = $1 AND workspace_id = $2 AND status = 'reserved'`,
-        [requestId, workspaceId, new Date(nowMs).toISOString()],
-      );
+      return withLock(workspaceId, async (client) => {
+        const existing = await client.query(
+          `SELECT * FROM fizot_credit_reservations WHERE request_id = $1 FOR UPDATE`,
+          [requestId],
+        );
+        if (!existing.rows[0]) return { ok: false as const, reason: "not_reserved" as const };
+        const prior = mapReservation(existing.rows[0]);
+        if (prior.workspaceId !== workspaceId) {
+          return { ok: false as const, reason: "ownership_mismatch" as const };
+        }
+        if (prior.status !== "reserved") {
+          return { ok: false as const, reason: "not_reserved" as const };
+        }
+        const stamp = new Date(nowMs).toISOString();
+        const updated = await client.query(
+          `UPDATE fizot_credit_reservations
+             SET status = 'dispatched', updated_at = $3::timestamptz
+           WHERE request_id = $1 AND workspace_id = $2 AND status = 'reserved'
+           RETURNING *`,
+          [requestId, workspaceId, stamp],
+        );
+        if (!updated.rows[0]) return { ok: false as const, reason: "not_reserved" as const };
+        return { ok: true as const, reservation: mapReservation(updated.rows[0]) };
+      });
     },
     async settle(input) {
       assertInt("amountMicroGbp", input.amountMicroGbp);
@@ -826,6 +912,7 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         if (!isHolding(prior.status)) throw new Error("reservation_not_settleable");
         const charge = Math.min(Math.abs(input.amountMicroGbp), prior.amountMicroGbp);
         const stamp = new Date(input.nowMs ?? Date.now()).toISOString();
+        const fundingAuthorizedAtMs = Date.parse(prior.createdAt);
         const id = randomUUID();
         const inserted = await client.query(
           `INSERT INTO fizot_credit_ledger
@@ -848,6 +935,8 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
               reservedMicroGbp: prior.amountMicroGbp,
               requestedSettleMicroGbp: Math.abs(input.amountMicroGbp),
               cappedToReservation: Math.abs(input.amountMicroGbp) > prior.amountMicroGbp,
+              fundingAuthorizedAtMs,
+              funding: prior.funding,
             })),
           ],
         );
