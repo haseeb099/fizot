@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-62 Provider pricing verification + J4 reconcile tooling (P4.3 / FZ-26)
+
+- Why we changed it: P4.3 still lacked recorded provider price observations and a fail-closed provider↔ledger reconciler that separates provider cost from customer markup. Green CI and fixture totals alone cannot pass J4.
+- How it works: `pricing-verification.ts` records live xAI catalog observations (2026-11-19); internal `grok-4-fast` / `grok-4` / `grok-4-heavy` stay `mismatched_unverified` and customer `pricing.ts` placeholders are unchanged. `j4-reconcile.ts` + `scripts/fizot/j4-reconcile.mjs` match provider-cost rows to Fizot provider-cost rows (≤1% drift), report customer charges separately, flag unmatched/duplicates/uncertain holds, and exit `INSUFFICIENT_EVIDENCE` when evidence is incomplete. Operator runbook: `docs/fizot/j4-reconcile.md`.
+- Why it is necessary: Enable honest pricing review and repeatable J4 evidence gathering without silently changing margins or inventing a PASS.
+- Impact: Tooling and docs only for customer money paths. No production deploy, Stripe, migrations, or automatic hold release.
+- Rollback? Revert the CL-62 commit(s) on `fz-26-p43-pricing-j4-reconcile`.
+- Files / Patch IDs: PATCH-53.
+- Related tasks: FZ-26 (P4.3). J4 remains INSUFFICIENT EVIDENCE without real provider billing exports. P4.3 and G4 remain in progress.
+
 ## CL-61 Credit hard cap, reservation recovery and 12-month expiry (P4.3 WP2 / FZ-26)
 
 - Why we changed it: Concurrent reserves could race the soft balance check; actual provider usage could exceed the reserved estimate; interrupted requests lacked a durable recovery path; grants never expired. Review of PR #35 also found expired lots absorbing later usage, age-only settlement fabricating usage, unsigned grant/refund amounts, settle-after-expiry `uncovered_debit` when funding used settle time, silent no-op `markDispatched` after recovery release allowing unpaid provider forwards, and overlapping reservations attributing the same grant residual when only workspace-level `spendable − reserved` was checked.

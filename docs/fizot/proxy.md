@@ -24,7 +24,7 @@ Settlement never debits more than the reservation. When provider-reported usage 
 
 ### Reservation recovery
 
-Released request IDs (same workspace, fingerprint and amount) may be reauthorized: created_at stays the first insert while uthorized_at becomes the new funding clock used for undingAuthorizedAtMs and open-hold expiry. Settled IDs remain replay-only.
+Released request IDs (same workspace, fingerprint and amount) may be reauthorized: created_at stays the first insert while authorized_at becomes the new funding clock used for fundingAuthorizedAtMs and open-hold expiry. Settled IDs remain replay-only.
 
 Lifecycle: `reserved` (held, not forwarded) → atomic checked `dispatched` (only then may the provider be called) → `settled` / `released`, or `uncertain` when the post-dispatch outcome is ambiguous, then `quarantined` after grace. `markDispatched` is a locked reserved→dispatched transition with `RETURNING` / status check; failure returns `409 reservation_unavailable` and **must not** forward. Recovery racing before dispatch can release a still-`reserved` hold; the meter then refuses the provider call.
 
@@ -40,7 +40,19 @@ At 80% of included credit for the UTC month the proxy writes one alert for that 
 
 `FIZOT_PROXY_DISABLED=1` and `POST /admin/proxy/kill` (header `x-fizot-admin-secret`) stop provider traffic on the next request. `POST /admin/workspaces/:id/credit/grants` uses the same secret. `GET /admin/workspaces/:id/credit` is member+ and returns balance and period usage only.
 
-Ledger rows are append-only (trigger rejects `UPDATE` and `DELETE`). `scripts/fizot/ledger-reconcile.mjs` compares a ledger total with a provider fixture and fails when drift is over 1%.
+Ledger rows are append-only (trigger rejects `UPDATE` and `DELETE`). `scripts/fizot/ledger-reconcile.mjs` compares a ledger total with a provider fixture and fails when drift is over 1%. Row-level J4 reconciliation is `scripts/fizot/j4-reconcile.mjs` (provider cost vs Fizot provider cost; see `docs/fizot/j4-reconcile.md`). Customer markup charges are reported separately and must not be compared directly to provider USD.
+
+### Provider price verification (not yet customer pricing)
+
+Customer tier rates in the table above remain `placeholder_unverified`. Observations against the live xAI pricing page (2026-11-19) are recorded in `server/fizot/proxy/pricing-verification.ts`:
+
+| Internal model | Live catalog match | Status |
+| --- | --- | --- |
+| grok-4-fast | No live row; retired fast slugs redirect to grok-4.3 | mismatched_unverified |
+| grok-4 | No live row; retired grok-4-0709 redirects to grok-4.3 | mismatched_unverified |
+| grok-4-heavy | No live listing | mismatched_unverified |
+
+Observed short-context `grok-4.3` rates (USD / 1M tokens): input $1.25, cached input $0.20, output $2.50. Source: https://docs.x.ai/developers/pricing. Customer micro-GBP placeholders are **not** silently updated from these observations.
 
 ## Privacy and idempotency deployment requirements (P4.3 work package 1)
 
@@ -48,4 +60,4 @@ Ledger rows are append-only (trigger rejects `UPDATE` and `DELETE`). `scripts/fi
 - An HMAC-SHA-256 fingerprint binds each reservation to its originating workspace, selected tier and exact request body. Only the opaque fingerprint is stored. Raw request and completed response bodies are not saved in new credit reservation records. The proxy accepts bounded `x-request-id` values (1–128 characters: letters, digits, dot, underscore, colon and hyphen); absent IDs use a fresh UUID. Incoming request bodies are limited to 1 MiB.
 - **Behavior change:** a completed idempotent retry is monetarily safe, but does not replay the model response. Clients must treat `request_already_completed` as a terminal outcome, not retry with a different ID automatically. This may require a later short-lived encrypted replay cache at the proxy edge if transparent retries are required.
 - This PR deliberately does **not** drop the existing legacy `response_body`/`content_type` columns or purge historical response data in a live Admin Postgres database. It stops new writes and makes new databases omit these columns. Review any existing historical records and obtain operator approval for a privacy purge/migration before enabling production.
-- Work package 2 adds hard-cap settlement clamping, uncertain/stale reservation recovery, and append-only 12-month expiry (see above). Remaining before P4.3 / G4 close: verified provider pricing, real J4 reconciliation evidence, optional tenant-scoped request-ID namespace migration, and operator approval before any legacy `expires_at IS NULL` balance migration. Passing this PR alone does not close P4.3/G4.
+- Work package 2 adds hard-cap settlement clamping, uncertain/stale reservation recovery, and append-only 12-month expiry (see above). Remaining before P4.3 / G4 close: operator-approved verified customer prices (observations exist but tiers stay placeholder), real provider-billing J4 evidence (tooling exists; fixtures alone are insufficient), optional tenant-scoped request-ID namespace migration, and operator approval before any legacy `expires_at IS NULL` balance migration. Passing this PR alone does not close P4.3/G4.
