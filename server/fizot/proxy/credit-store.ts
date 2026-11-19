@@ -6,6 +6,7 @@ import {
   parseFundingSlices,
   planFundingSlices,
   RESERVATION_RECOVERY_GRACE_MS,
+  settleFundingSlices,
   spendableMicroGbp,
   type CreditLotSource,
   type FundingSlice,
@@ -226,6 +227,9 @@ export function createMemoryCreditStore(): CreditStore {
         const fundingAuthorizedAtMs = row.kind === "usage" && typeof row.meta.fundingAuthorizedAtMs === "number"
           ? row.meta.fundingAuthorizedAtMs
           : null;
+        const funding = row.kind === "usage" && row.meta.funding != null
+          ? parseFundingSlices(row.meta.funding)
+          : null;
         return {
           id: row.id,
           kind: row.kind,
@@ -234,6 +238,7 @@ export function createMemoryCreditStore(): CreditStore {
           expiresAtMs: row.expiresAt == null ? null : Date.parse(row.expiresAt),
           requestId: row.requestId,
           fundingAuthorizedAtMs,
+          funding,
         };
       });
   }
@@ -355,7 +360,7 @@ export function createMemoryCreditStore(): CreditStore {
         const lots = lotsOf(input.workspaceId);
         const available = spendableMicroGbp(lots, nowMs) - reservedOf(input.workspaceId);
         if (available < input.amountMicroGbp) return { ok: false as const, reason: "insufficient" as const };
-        const funding = planFundingSlices(lots, input.amountMicroGbp, nowMs);
+        const funding = planFundingSlices(lots, input.amountMicroGbp, nowMs, openHoldsOf(input.workspaceId));
         if (!funding) return { ok: false as const, reason: "insufficient" as const };
         const stamp = new Date(nowMs).toISOString();
         const reservation: CreditReservation = {
@@ -411,6 +416,7 @@ export function createMemoryCreditStore(): CreditStore {
         const charge = Math.min(Math.abs(input.amountMicroGbp), reservation.amountMicroGbp);
         const stamp = new Date(input.nowMs ?? Date.now()).toISOString();
         const fundingAuthorizedAtMs = Date.parse(reservation.createdAt);
+        const funding = settleFundingSlices(reservation.funding, charge);
         const row: CreditLedgerRow = {
           id: randomUUID(),
           workspaceId: reservation.workspaceId,
@@ -430,7 +436,7 @@ export function createMemoryCreditStore(): CreditStore {
             requestedSettleMicroGbp: Math.abs(input.amountMicroGbp),
             cappedToReservation: Math.abs(input.amountMicroGbp) > reservation.amountMicroGbp,
             fundingAuthorizedAtMs,
-            funding: reservation.funding,
+            funding,
           }),
         };
         state.ledger.push(row);
@@ -594,6 +600,9 @@ function lotSourcesFromRows(rows: Array<Record<string, unknown>>): CreditLotSour
     const fundingAuthorizedAtMs = mapped.kind === "usage" && typeof mapped.meta.fundingAuthorizedAtMs === "number"
       ? mapped.meta.fundingAuthorizedAtMs
       : null;
+    const funding = mapped.kind === "usage" && mapped.meta.funding != null
+      ? parseFundingSlices(mapped.meta.funding)
+      : null;
     return {
       id: mapped.id,
       kind: mapped.kind,
@@ -602,6 +611,7 @@ function lotSourcesFromRows(rows: Array<Record<string, unknown>>): CreditLotSour
       expiresAtMs: mapped.expiresAt == null ? null : Date.parse(mapped.expiresAt),
       requestId: mapped.requestId,
       fundingAuthorizedAtMs,
+      funding,
     };
   });
 }
@@ -843,7 +853,8 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         const lots = lotSourcesFromRows(ledger.rows);
         const available = spendableMicroGbp(lots, nowMs) - num(reserved.rows[0]?.reserved);
         if (available < input.amountMicroGbp) return { ok: false as const, reason: "insufficient" as const };
-        const funding = planFundingSlices(lots, input.amountMicroGbp, nowMs);
+        const openHolds = await openHoldsFromClient(client, input.workspaceId);
+        const funding = planFundingSlices(lots, input.amountMicroGbp, nowMs, openHolds);
         if (!funding) return { ok: false as const, reason: "insufficient" as const };
         const stamp = new Date(nowMs).toISOString();
         const inserted = prior
@@ -913,6 +924,7 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
         const charge = Math.min(Math.abs(input.amountMicroGbp), prior.amountMicroGbp);
         const stamp = new Date(input.nowMs ?? Date.now()).toISOString();
         const fundingAuthorizedAtMs = Date.parse(prior.createdAt);
+        const funding = settleFundingSlices(prior.funding, charge);
         const id = randomUUID();
         const inserted = await client.query(
           `INSERT INTO fizot_credit_ledger
@@ -936,7 +948,7 @@ export async function createPostgresCreditStore(databaseUrl: string): Promise<Cr
               requestedSettleMicroGbp: Math.abs(input.amountMicroGbp),
               cappedToReservation: Math.abs(input.amountMicroGbp) > prior.amountMicroGbp,
               fundingAuthorizedAtMs,
-              funding: prior.funding,
+              funding,
             })),
           ],
         );

@@ -444,3 +444,182 @@ it("complete request journey reconciles balance after settle", async () => {
   expect(summary.reservedMicroGbp).toBe(0);
   expect(await credit.settledMicroGbp("ws")).toBe(5);
 });
+
+async function twoGrantWorkspace() {
+  const credit = createMemoryCreditStore();
+  await credit.ensureAccount("ws", 20);
+  const grantA = await credit.grant({
+    workspaceId: "ws", amountMicroGbp: 10, requestId: "gA", kind: "grant",
+    nowMs: Date.UTC(2024, 0, 1),
+  });
+  const grantB = await credit.grant({
+    workspaceId: "ws", amountMicroGbp: 10, requestId: "gB", kind: "grant",
+    nowMs: Date.UTC(2024, 0, 2),
+  });
+  return { credit, grantA, grantB };
+}
+
+it("overlapping reservations bind distinct grant slices (no shared lot)", async () => {
+  const { credit, grantA, grantB } = await twoGrantWorkspace();
+  const at = Date.UTC(2024, 11, 15);
+  const r1 = await credit.tryReserve({
+    workspaceId: "ws", requestId: "R1", amountMicroGbp: 10, requestFingerprint: FP, nowMs: at,
+  });
+  const r2 = await credit.tryReserve({
+    workspaceId: "ws", requestId: "R2", amountMicroGbp: 10, requestFingerprint: "b".repeat(64), nowMs: at + 1,
+  });
+  expect(r1.ok && r2.ok).toBe(true);
+  if (!r1.ok || !r2.ok) return;
+  expect(r1.reservation.funding).toEqual([{ grantId: grantA.id, amountMicroGbp: 10 }]);
+  expect(r2.reservation.funding).toEqual([{ grantId: grantB.id, amountMicroGbp: 10 }]);
+  const denied = await credit.tryReserve({
+    workspaceId: "ws", requestId: "R3", amountMicroGbp: 1, requestFingerprint: "c".repeat(64), nowMs: at + 2,
+  });
+  expect(denied).toEqual({ ok: false, reason: "insufficient" });
+});
+
+it("settle R1 then expire leaves R2 funding intact; reverse settle order is safe", async () => {
+  const { credit, grantA, grantB } = await twoGrantWorkspace();
+  const at = Date.UTC(2024, 11, 15);
+  const expireA = Date.UTC(2025, 0, 1);
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "R1", amountMicroGbp: 10, requestFingerprint: FP, nowMs: at,
+  });
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "R2", amountMicroGbp: 10, requestFingerprint: "b".repeat(64), nowMs: at + 1,
+  });
+
+  await credit.settle({
+    workspaceId: "ws", requestId: "R1", amountMicroGbp: 10,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: at + 2,
+  });
+  expect(await credit.expireDue("ws", expireA)).toBe(0);
+  // Lot residual still shows gB; open R2 hold makes available credit zero.
+  expect((await credit.summary("ws", expireA)).balanceMicroGbp).toBe(10);
+  expect((await credit.summary("ws", expireA)).reservedMicroGbp).toBe(10);
+  const afterExpire = await credit.tryReserve({
+    workspaceId: "ws", requestId: "R3", amountMicroGbp: 1, requestFingerprint: "c".repeat(64), nowMs: expireA,
+  });
+  expect(afterExpire).toEqual({ ok: false, reason: "insufficient" });
+  await credit.settle({
+    workspaceId: "ws", requestId: "R2", amountMicroGbp: 10,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: expireA + 1,
+  });
+  expect(await credit.settledMicroGbp("ws")).toBe(20);
+  expect((await credit.summary("ws", expireA + 1)).balanceMicroGbp).toBe(0);
+  expect(await credit.expireDue("ws", expireA + 1)).toBe(0);
+
+  // Reverse order on a fresh workspace: settle R2 (gB) first, then expire gA under R1 hold.
+  const again = await twoGrantWorkspace();
+  await again.credit.tryReserve({
+    workspaceId: "ws", requestId: "R1b", amountMicroGbp: 10, requestFingerprint: FP, nowMs: at,
+  });
+  await again.credit.tryReserve({
+    workspaceId: "ws", requestId: "R2b", amountMicroGbp: 10, requestFingerprint: "b".repeat(64), nowMs: at + 1,
+  });
+  await again.credit.settle({
+    workspaceId: "ws", requestId: "R2b", amountMicroGbp: 10,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: at + 2,
+  });
+  expect(await again.credit.expireDue("ws", expireA)).toBe(0);
+  expect((await again.credit.summary("ws", expireA)).reservedMicroGbp).toBe(10);
+  await again.credit.settle({
+    workspaceId: "ws", requestId: "R1b", amountMicroGbp: 10,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: expireA + 1,
+  });
+  expect(await again.credit.settledMicroGbp("ws")).toBe(20);
+  expect(await again.credit.expireDue("ws", expireA + 1)).toBe(0);
+  void grantA;
+  void grantB;
+});
+
+it("partial settle releases unused funding; release reallocates to a later reserve", async () => {
+  const { credit, grantA, grantB } = await twoGrantWorkspace();
+  const at = Date.UTC(2024, 11, 15);
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "partial", amountMicroGbp: 10, requestFingerprint: FP, nowMs: at,
+  });
+  await credit.settle({
+    workspaceId: "ws", requestId: "partial", amountMicroGbp: 4,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 4, httpStatus: 200, nowMs: at + 1,
+  });
+  expect((await credit.summary("ws", at + 1)).balanceMicroGbp).toBe(16);
+  expect((await credit.summary("ws", at + 1)).reservedMicroGbp).toBe(0);
+
+  const rHold = await credit.tryReserve({
+    workspaceId: "ws", requestId: "hold-then-release", amountMicroGbp: 10, requestFingerprint: "b".repeat(64), nowMs: at + 2,
+  });
+  expect(rHold.ok).toBe(true);
+  if (rHold.ok) {
+    expect(rHold.reservation.funding).toEqual([
+      { grantId: grantA.id, amountMicroGbp: 6 },
+      { grantId: grantB.id, amountMicroGbp: 4 },
+    ]);
+  }
+  await credit.release("ws", "hold-then-release", at + 3);
+  const reused = await credit.tryReserve({
+    workspaceId: "ws", requestId: "reallocated", amountMicroGbp: 10, requestFingerprint: "c".repeat(64), nowMs: at + 4,
+  });
+  expect(reused.ok).toBe(true);
+  if (reused.ok) {
+    expect(reused.reservation.funding).toEqual([
+      { grantId: grantA.id, amountMicroGbp: 6 },
+      { grantId: grantB.id, amountMicroGbp: 4 },
+    ]);
+  }
+});
+
+it("quarantined reservation keeps funding through expiry of its grant", async () => {
+  const { credit, grantA, grantB } = await twoGrantWorkspace();
+  const at = Date.UTC(2024, 11, 15);
+  await credit.tryReserve({
+    workspaceId: "ws", requestId: "q1", amountMicroGbp: 10, requestFingerprint: FP, nowMs: at,
+  });
+  await credit.markDispatched("ws", "q1", at + 1);
+  await credit.markUncertain("ws", "q1", at + 2);
+  const recovered = await credit.recoverStaleReservations({
+    workspaceId: "ws", nowMs: at + RESERVATION_RECOVERY_GRACE_MS + 3, graceMs: RESERVATION_RECOVERY_GRACE_MS,
+  });
+  expect(recovered.quarantined).toBe(1);
+  expect(await credit.expireDue("ws", Date.UTC(2025, 0, 1))).toBe(0);
+  expect((await credit.summary("ws", Date.UTC(2025, 0, 1))).reservedMicroGbp).toBe(10);
+  expect((await credit.summary("ws", Date.UTC(2025, 0, 1))).balanceMicroGbp).toBe(10);
+  await credit.settle({
+    workspaceId: "ws", requestId: "q1", amountMicroGbp: 10,
+    provider: "xai", model: "internal-fast", tier: "fast",
+    inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: Date.UTC(2025, 0, 1, 1),
+  });
+  expect(await credit.settledMicroGbp("ws")).toBe(10);
+  expect((await credit.summary("ws", Date.UTC(2025, 0, 1, 1))).balanceMicroGbp).toBe(10);
+  void grantA;
+  void grantB;
+});
+
+it("50 parallel unit reserves never over-allocate a 10-unit balance", async () => {
+  const credit = await seed(10);
+  const results = await Promise.all(Array.from({ length: 50 }, (_, index) => credit.tryReserve({
+    workspaceId: "ws",
+    requestId: `p-${index}`,
+    amountMicroGbp: 1,
+    requestFingerprint: FP,
+  })));
+  const ok = results.filter((row) => row.ok);
+  expect(ok).toHaveLength(10);
+  const grantIds = new Set<string>();
+  let total = 0;
+  for (const row of ok) {
+    if (!row.ok) continue;
+    for (const slice of row.reservation.funding) {
+      total += slice.amountMicroGbp;
+      grantIds.add(slice.grantId);
+    }
+  }
+  expect(total).toBe(10);
+  expect(grantIds.size).toBe(1);
+  expect((await credit.summary("ws")).reservedMicroGbp).toBe(10);
+});

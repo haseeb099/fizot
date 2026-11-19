@@ -410,6 +410,94 @@ it.runIf(Boolean(databaseUrl))("Postgres: 12-month expiry is append-only and ide
   }
 });
 
+it.runIf(Boolean(databaseUrl))("Postgres: overlapping reserves bind distinct grants; reverse settle + expiry", async () => {
+  const credit = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const at = Date.UTC(2024, 11, 15);
+  const expireA = Date.UTC(2025, 0, 1);
+  try {
+    await credit.ensureAccount(workspaceId, 20);
+    const grantA = await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `gA-${workspaceId}`, nowMs: Date.UTC(2024, 0, 1),
+    });
+    const grantB = await credit.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `gB-${workspaceId}`, nowMs: Date.UTC(2024, 0, 2),
+    });
+    const r1 = await credit.tryReserve({
+      workspaceId, requestId: `R1-${workspaceId}`, amountMicroGbp: 10, requestFingerprint: "a".repeat(64), nowMs: at,
+    });
+    const r2 = await credit.tryReserve({
+      workspaceId, requestId: `R2-${workspaceId}`, amountMicroGbp: 10, requestFingerprint: "b".repeat(64), nowMs: at + 1,
+    });
+    expect(r1.ok && r2.ok).toBe(true);
+    if (!r1.ok || !r2.ok) return;
+    expect(r1.reservation.funding).toEqual([{ grantId: grantA.id, amountMicroGbp: 10 }]);
+    expect(r2.reservation.funding).toEqual([{ grantId: grantB.id, amountMicroGbp: 10 }]);
+
+    // Settle newer reservation first, then expire while older hold remains.
+    await credit.settle({
+      workspaceId, requestId: `R2-${workspaceId}`, amountMicroGbp: 10,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: at + 2,
+    });
+    expect(await credit.expireDue(workspaceId, expireA)).toBe(0);
+    expect((await credit.summary(workspaceId, expireA)).reservedMicroGbp).toBe(10);
+    expect((await credit.summary(workspaceId, expireA)).balanceMicroGbp).toBe(10);
+    await credit.settle({
+      workspaceId, requestId: `R1-${workspaceId}`, amountMicroGbp: 10,
+      provider: "xai", model: "internal-fast", tier: "fast",
+      inputTokens: 0, outputTokens: 10, httpStatus: 200, nowMs: expireA + 1,
+    });
+    expect(await credit.settledMicroGbp(workspaceId)).toBe(20);
+    expect(await credit.expireDue(workspaceId, expireA + 1)).toBe(0);
+  } finally {
+    await credit.close();
+  }
+
+  const reopened = await createPostgresCreditStore(databaseUrl!);
+  try {
+    expect((await reopened.summary(workspaceId, expireA + 2)).balanceMicroGbp).toBe(0);
+    expect(await reopened.settledMicroGbp(workspaceId)).toBe(20);
+  } finally {
+    await reopened.close();
+  }
+});
+
+it.runIf(Boolean(databaseUrl))("Postgres: two connections cannot double-claim the same grant residual", async () => {
+  const a = await createPostgresCreditStore(databaseUrl!);
+  const b = await createPostgresCreditStore(databaseUrl!);
+  const workspaceId = `ws-${randomUUID()}`;
+  const at = Date.UTC(2024, 11, 15);
+  try {
+    await a.ensureAccount(workspaceId, 20);
+    const grantA = await a.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `gA-${workspaceId}`, nowMs: Date.UTC(2024, 0, 1),
+    });
+    const grantB = await a.grant({
+      workspaceId, amountMicroGbp: 10, requestId: `gB-${workspaceId}`, nowMs: Date.UTC(2024, 0, 2),
+    });
+    const [r1, r2] = await Promise.all([
+      a.tryReserve({
+        workspaceId, requestId: `c1-${workspaceId}`, amountMicroGbp: 10, requestFingerprint: "a".repeat(64), nowMs: at,
+      }),
+      b.tryReserve({
+        workspaceId, requestId: `c2-${workspaceId}`, amountMicroGbp: 10, requestFingerprint: "b".repeat(64), nowMs: at,
+      }),
+    ]);
+    expect(r1.ok && r2.ok).toBe(true);
+    if (!r1.ok || !r2.ok) return;
+    const ids = [
+      r1.reservation.funding.map((slice) => slice.grantId).join(","),
+      r2.reservation.funding.map((slice) => slice.grantId).join(","),
+    ].sort();
+    expect(ids).toEqual([grantA.id, grantB.id].sort());
+    expect(r1.reservation.funding[0]?.grantId).not.toBe(r2.reservation.funding[0]?.grantId);
+  } finally {
+    await a.close();
+    await b.close();
+  }
+});
+
 it.runIf(Boolean(databaseUrl))("Postgres: foreign settle/release and restart-safe balance journey", async () => {
   const credit = await createPostgresCreditStore(databaseUrl!);
   const owner = `ws-${randomUUID()}`;

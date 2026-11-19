@@ -5,8 +5,10 @@ import {
   clampSettleToReservation,
   defaultGrantExpiresAtMs,
   expiredGrantResiduals,
+  planFundingSlices,
   parseMaxOutputTokens,
   sanitizeUsageTokens,
+  settleFundingSlices,
   spendableMicroGbp,
   type CreditLotSource,
 } from "../../../server/fizot/proxy/credit-policy.ts";
@@ -171,4 +173,71 @@ it("open reservation escrow reduces expire residual", () => {
     funding: [{ grantId: "g1", amountMicroGbp: 10 }],
   }];
   expect(expiredGrantResiduals(sources, expireAt, holds)).toEqual([]);
+});
+
+it("overlapping open holds cannot claim the same grant residual", () => {
+  const expireA = Date.UTC(2025, 0, 1);
+  const sources: CreditLotSource[] = [
+    {
+      id: "gA", kind: "grant", amountMicroGbp: 10,
+      createdAtMs: Date.UTC(2024, 0, 1), expiresAtMs: expireA, requestId: "gA",
+    },
+    {
+      id: "gB", kind: "grant", amountMicroGbp: 10,
+      createdAtMs: Date.UTC(2024, 0, 2), expiresAtMs: Date.UTC(2026, 0, 1), requestId: "gB",
+    },
+  ];
+  const at = Date.UTC(2024, 11, 15);
+  const r1 = planFundingSlices(sources, 10, at);
+  expect(r1).toEqual([{ grantId: "gA", amountMicroGbp: 10 }]);
+  const r2 = planFundingSlices(sources, 10, at, [{
+    authorizedAtMs: at,
+    funding: r1!,
+  }]);
+  expect(r2).toEqual([{ grantId: "gB", amountMicroGbp: 10 }]);
+  expect(planFundingSlices(sources, 1, at, [
+    { authorizedAtMs: at, funding: r1! },
+    { authorizedAtMs: at + 1, funding: r2! },
+  ])).toBeNull();
+});
+
+it("settled usage consumes authorize-time funding slices not a fresh FIFO pass", () => {
+  const expireA = Date.UTC(2025, 0, 1);
+  const sources: CreditLotSource[] = [
+    {
+      id: "gA", kind: "grant", amountMicroGbp: 10,
+      createdAtMs: Date.UTC(2024, 0, 1), expiresAtMs: expireA, requestId: "gA",
+    },
+    {
+      id: "gB", kind: "grant", amountMicroGbp: 10,
+      createdAtMs: Date.UTC(2024, 0, 2), expiresAtMs: Date.UTC(2026, 0, 1), requestId: "gB",
+    },
+    {
+      id: "uB", kind: "usage", amountMicroGbp: -10,
+      createdAtMs: Date.UTC(2025, 0, 2), expiresAtMs: null, requestId: "uB",
+      fundingAuthorizedAtMs: Date.UTC(2024, 11, 15),
+      funding: [{ grantId: "gB", amountMicroGbp: 10 }],
+    },
+  ];
+  // gA still fully residual/expired; gB consumed by the attributed settle.
+  expect(spendableMicroGbp(sources, Date.UTC(2025, 0, 2))).toBe(0);
+  expect(expiredGrantResiduals(sources, Date.UTC(2025, 0, 2))).toEqual([
+    { grantId: "gA", grantRequestId: "gA", residualMicroGbp: 10 },
+  ]);
+});
+
+it("settleFundingSlices scales partial charges within authorize slices", () => {
+  expect(settleFundingSlices(
+    [{ grantId: "gA", amountMicroGbp: 6 }, { grantId: "gB", amountMicroGbp: 4 }],
+    5,
+  )).toEqual([{ grantId: "gA", amountMicroGbp: 5 }]);
+  expect(settleFundingSlices(
+    [{ grantId: "gA", amountMicroGbp: 6 }, { grantId: "gB", amountMicroGbp: 4 }],
+    8,
+  )).toEqual([
+    { grantId: "gA", amountMicroGbp: 6 },
+    { grantId: "gB", amountMicroGbp: 2 },
+  ]);
+  expect(() => settleFundingSlices([{ grantId: "gA", amountMicroGbp: 3 }], 4))
+    .toThrow(/funding_insufficient_for_settle/);
 });

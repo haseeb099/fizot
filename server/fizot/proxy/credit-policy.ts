@@ -22,6 +22,12 @@ export type CreditLotSource = {
    * instant, while createdAtMs remains the ledger posting time.
    */
   fundingAuthorizedAtMs?: number | null;
+  /**
+   * For usage: authorize-time slices actually charged. When present, allocation
+   * consumes these lots (not a fresh FIFO pass) so concurrent reservations
+   * cannot silently reattribute settled spend.
+   */
+  funding?: readonly FundingSlice[] | null;
 };
 
 /** Auditable FIFO slices bound to a reservation at authorize time. */
@@ -177,13 +183,27 @@ export function allocateCreditLots(sources: readonly CreditLotSource[]): Allocat
     if (!isDebit(row)) continue;
     let need = Math.abs(row.amountMicroGbp);
     const at = debitEffectiveAt(row);
-    for (const lot of lots) {
-      if (need <= 0) break;
-      if (lot.remaining <= 0) continue;
-      if (!lotValidAt(lot.expiresAtMs, at)) continue;
-      const take = Math.min(lot.remaining, need);
-      lot.remaining -= take;
-      need -= take;
+    if (row.kind === "usage" && row.funding && row.funding.length > 0) {
+      for (const slice of row.funding) {
+        if (need <= 0) break;
+        if (!Number.isSafeInteger(slice.amountMicroGbp) || slice.amountMicroGbp <= 0) {
+          throw new Error("invalid_funding_slice");
+        }
+        const lot = lots.find((item) => item.grantId === slice.grantId);
+        if (!lot || !lotValidAt(lot.expiresAtMs, at) || lot.remaining <= 0) continue;
+        const take = Math.min(lot.remaining, slice.amountMicroGbp, need);
+        lot.remaining -= take;
+        need -= take;
+      }
+    } else {
+      for (const lot of lots) {
+        if (need <= 0) break;
+        if (lot.remaining <= 0) continue;
+        if (!lotValidAt(lot.expiresAtMs, at)) continue;
+        const take = Math.min(lot.remaining, need);
+        lot.remaining -= take;
+        need -= take;
+      }
     }
     if (need > 0) {
       uncoveredDebits.push({
@@ -199,11 +219,43 @@ export function allocateCreditLots(sources: readonly CreditLotSource[]): Allocat
   return { lots, uncoveredDebits };
 }
 
-/** FIFO funding plan for a new reservation at authorize time. */
+/**
+ * Scale reservation funding to the settled charge (FIFO within the authorize
+ * slices). Unused reserved capacity is not written to the usage row.
+ */
+export function settleFundingSlices(
+  funding: readonly FundingSlice[],
+  chargeMicroGbp: number,
+): FundingSlice[] {
+  if (!Number.isSafeInteger(chargeMicroGbp) || chargeMicroGbp < 0) {
+    throw new Error("chargeMicroGbp must be a non-negative safe integer");
+  }
+  if (chargeMicroGbp === 0) return [];
+  let need = chargeMicroGbp;
+  const out: FundingSlice[] = [];
+  for (const slice of funding) {
+    if (need <= 0) break;
+    if (!Number.isSafeInteger(slice.amountMicroGbp) || slice.amountMicroGbp <= 0) {
+      throw new Error("invalid_funding_slice");
+    }
+    const take = Math.min(slice.amountMicroGbp, need);
+    out.push({ grantId: slice.grantId, amountMicroGbp: take });
+    need -= take;
+  }
+  if (need > 0) throw new Error("funding_insufficient_for_settle");
+  return out;
+}
+
+/**
+ * FIFO funding plan for a new reservation at authorize time. Open holds from
+ * other active reservations are applied so two holds cannot claim the same
+ * grant residual even when workspace spendable − reserved still admits both.
+ */
 export function planFundingSlices(
   sources: readonly CreditLotSource[],
   amountMicroGbp: number,
   atMs: number,
+  openHolds: readonly OpenHold[] = [],
 ): FundingSlice[] | null {
   if (!Number.isSafeInteger(amountMicroGbp) || amountMicroGbp < 0) {
     throw new Error("amountMicroGbp must be a non-negative safe integer");
@@ -211,6 +263,7 @@ export function planFundingSlices(
   if (amountMicroGbp === 0) return [];
   const { lots, uncoveredDebits } = allocateCreditLots(sources);
   if (uncoveredDebits.length > 0) throw new Error("uncovered_debit");
+  applyOpenHolds(lots, openHolds);
   let need = amountMicroGbp;
   const slices: FundingSlice[] = [];
   for (const lot of lots) {
