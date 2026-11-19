@@ -1,0 +1,53 @@
+{
+  "period": "2026-11-synthetic",
+  "provider": "xai",
+  "evidenceComplete": true,
+  "comparisonBasis": "provider_cost_vs_fizot_provider_cost",
+  "providerRows": [
+    {
+      "providerRequestId": "prov-1",
+      "fizotRequestId": "req-1",
+      "workspaceIdHash": "ws-a",
+      "model": "grok-4.3",
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "providerCostMicro": 2500,
+      "currency": "USD"
+    },
+    {
+      "providerRequestId": "prov-2",
+      "fizotRequestId": "req-2",
+      "workspaceIdHash": "ws-a",
+      "model": "grok-4.3",
+      "inputTokens": 2000,
+      "outputTokens": 1000,
+      "providerCostMicro": 5000,
+      "currency": "USD"
+    }
+  ],
+  "ledgerRows": [
+    {
+      "requestId": "req-1",
+      "workspaceIdHash": "ws-a",
+      "tier": "fast",
+      "model": "grok-4-fast",
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "customerChargeMicroGbp": 1200,
+      "providerCostMicro": 2500,
+      "currency": "USD"
+    },
+    {
+      "requestId": "req-2",
+      "workspaceIdHash": "ws-a",
+      "tier": "balanced",
+      "model": "grok-4",
+      "inputTokens": 2000,
+      "outputTokens": 1000,
+      "customerChargeMicroGbp": 4800,
+      "providerCostMicro": 5000,
+      "currency": "USD"
+    }
+  ],
+  "openHolds": []
+}

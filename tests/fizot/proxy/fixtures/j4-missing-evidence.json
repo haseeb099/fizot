@@ -1,0 +1,9 @@
+{
+  "period": "2026-11-synthetic",
+  "provider": "xai",
+  "evidenceComplete": false,
+  "comparisonBasis": "provider_cost_vs_fizot_provider_cost",
+  "providerRows": [],
+  "ledgerRows": [],
+  "openHolds": []
+}
