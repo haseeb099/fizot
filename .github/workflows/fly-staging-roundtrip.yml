@@ -15,7 +15,7 @@ on:
         default: lhr
         type: string
       mode:
-        description: home (sleep/wake), team (J10), or erase (J8 GDPR erasure)
+        description: home (sleep/wake), team (J10), erase (J8 GDPR erasure), or isolation (P4.7 SE-I two-tenant)
         required: false
         default: home
         type: choice
@@ -23,6 +23,7 @@ on:
           - home
           - team
           - erase
+          - isolation
 
 permissions:
   contents: read

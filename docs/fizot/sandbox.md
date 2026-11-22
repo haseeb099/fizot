@@ -36,6 +36,7 @@ Prompt-injected shells are the main threat on a hosted workspace. Application UR
 | Address classes | `electron/egress-addresses.mjs` |
 | Browser / box refusal rules | `server/browser/egress/policy.ts`, `server/bot-box/egress-gate.ts` |
 | Shared Fizot Cloud decide | `server/fizot/sandbox/policy.ts` (`fizotCloudRefusal` / `fizotCloudNameRefusal`) |
+| SE-I isolation harness | `server/fizot/sandbox/isolation-harness.ts` + `FIZOT_ROUNDTRIP_MODE=isolation` |
 | Box wiring | `server/fizot/sandbox/egress.ts` |
 | Browser SOCKS Cloud wiring | `server/browser/egress/registry.ts` |
 | Slack relay fail-closed | `server/fizot/sandbox/service-relay.ts` → `request-auth.ts` |
@@ -45,7 +46,7 @@ Prompt-injected shells are the main threat on a hosted workspace. Application UR
 ## Operator notes
 
 - Set `OMB_SLACK_RELAY_TOKEN` (≥16 chars) on Cloud homes that run a Slack worker; without it, mutating service routes stay closed (fail closed).
-- SE-U is unit-covered (box + browser SOCKS). SE-I (TC28/TC59 two-tenant Fly, live self-address) needs Fly staging credentials — do not mark pass without a green run.
+- SE-U is unit-covered (box + browser SOCKS). SE-I harness + `mode=isolation` are implemented; a green owner Fly staging run is still required — do not mark pass without evidence.
 - Staging acceptance checklist: `docs/fizot/p47-staging-acceptance.md`.
 
 ## Residual / deferred

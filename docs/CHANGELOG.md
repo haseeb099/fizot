@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-65 Fly staging isolation acceptance harness (P4.7 SE-I / FZ-30)
+
+- Why we changed it: SE-I needed a safe, repeatable two-tenant staging harness for TC28/TC52/TC54/TC59 without treating timeouts as policy refusals or assuming `fizot-net-*` names prove isolation.
+- How it works: `isolation-harness.ts` classifies destinations, interprets policy/network observations as PASS/FAIL/INCONCLUSIVE, guards against production targets, builds redacted evidence, and cleans up both apps. `FIZOT_ROUNDTRIP_MODE=isolation` provisions disposable A/B staging workspaces, runs policy decide plus `flyctl ssh` TCP probes from A, writes `artifacts/fly-staging/isolation-evidence.json`. Workflow choice `isolation` added. Unit tests cover expected denial, unexpected connect, timeout, provisioning/config/production guards, and partial cleanup.
+- Why it is necessary: SE-I/SE-E and P4.7/G4 must not be marked done without machine-readable staging evidence; owners need an authorized, cost-capped path.
+- Impact: No production deploy. No live Fly run in this change. Matrix SE-I remains `planned` until an owner green run.
+- Rollback? Revert the CL-65 commit(s) on `fz-30-p47-sei-fly-isolation`.
+- Files / Patch IDs: PATCH-56.
+- Related tasks: FZ-30 (P4.7). P4.7 / G4 still incomplete.
+
 ## CL-64 Browser SOCKS Cloud decide + Chrome resolver/DoH flags (P4.7 / FZ-30)
 
 - Why we changed it: PR #37 hardened the box CONNECT gate, but Cloud browser SOCKS still used plain `refusalFor` and Chrome could still perform local DNS / Secure DNS upgrades beside the proxy.
