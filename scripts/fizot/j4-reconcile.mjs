@@ -17,17 +17,23 @@ if (!file) {
 }
 
 const input = JSON.parse(readFileSync(file, "utf8"));
-const report = reconcileJ4({
-  period: String(input.period ?? ""),
-  provider: String(input.provider ?? "unknown"),
-  comparisonBasis: input.comparisonBasis ?? "provider_cost_vs_fizot_provider_cost",
-  evidenceComplete: input.evidenceComplete,
-  evidence: input.evidence ?? null,
-  providerRows: Array.isArray(input.providerRows) ? input.providerRows : [],
-  ledgerRows: Array.isArray(input.ledgerRows) ? input.ledgerRows : [],
-  openHolds: Array.isArray(input.openHolds) ? input.openHolds : [],
-  maxDrift: input.maxDrift,
-});
+let report;
+try {
+  report = reconcileJ4({
+    period: String(input.period ?? ""),
+    provider: String(input.provider ?? "unknown"),
+    comparisonBasis: input.comparisonBasis ?? "provider_cost_vs_fizot_provider_cost",
+    evidenceComplete: input.evidenceComplete,
+    evidence: input.evidence ?? null,
+    providerRows: Array.isArray(input.providerRows) ? input.providerRows : [],
+    ledgerRows: Array.isArray(input.ledgerRows) ? input.ledgerRows : [],
+    openHolds: Array.isArray(input.openHolds) ? input.openHolds : [],
+    maxDrift: input.maxDrift,
+  });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(2);
+}
 
 console.log(formatJ4Report(report));
 console.log(JSON.stringify({

@@ -8,7 +8,7 @@ J4 aggregate drift uses **provider cost vs Fizot-computed provider cost** (same 
 
 `aggregateDrift = abs(sum(fizotProviderCost) − sum(providerBilledCost)) / abs(sum(providerBilledCost))`
 
-Acceptance threshold for that aggregate metric: **≤ 1%** (`RECONCILE_MAX_DRIFT`).
+Acceptance threshold for that aggregate metric: **≤ 1%** (`RECONCILE_MAX_DRIFT`). An optional `maxDrift` override on the export must be a finite number in `[0, RECONCILE_MAX_DRIFT]`; the reconciler and CLI reject NaN, Infinity, negatives, and values above 1%. Omitted → default 1%.
 
 **Do not** compare provider USD cost directly to customer micro-GBP ledger debits. Customer charges include markup (`markupBps` in `pricing.ts`) and use placeholder GBP rates until prices are verified and FX is operator-approved.
 

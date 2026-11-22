@@ -117,8 +117,32 @@ export type J4ReconcileInput = {
    */
   evidenceComplete?: boolean;
   evidence?: J4EvidencePackage | null;
+  /**
+   * Optional aggregate/per-request drift threshold override.
+   * Must be a finite number in `[0, RECONCILE_MAX_DRIFT]` (documented max 1%).
+   * Omitted → `RECONCILE_MAX_DRIFT`.
+   */
   maxDrift?: number;
 };
+
+/**
+ * Resolve the J4 drift threshold. Defaults to `RECONCILE_MAX_DRIFT` (1%).
+ * Rejects NaN, Infinity, negatives, and values above the documented maximum.
+ */
+export function resolveMaxDrift(maxDrift?: number): number {
+  if (maxDrift === undefined) return RECONCILE_MAX_DRIFT;
+  if (typeof maxDrift !== "number" || !Number.isFinite(maxDrift)) {
+    throw new Error(
+      `maxDrift must be a finite number between 0 and ${RECONCILE_MAX_DRIFT} inclusive`,
+    );
+  }
+  if (maxDrift < 0 || maxDrift > RECONCILE_MAX_DRIFT) {
+    throw new Error(
+      `maxDrift must be between 0 and ${RECONCILE_MAX_DRIFT} inclusive`,
+    );
+  }
+  return maxDrift;
+}
 
 export type J4MatchMismatchReason =
   | "workspace_identity_unavailable"
@@ -421,7 +445,7 @@ export function reconcileJ4(input: J4ReconcileInput): J4ReconcileReport {
   if (input.comparisonBasis === "customer_ledger_vs_provider_cost_disallowed") {
     throw new Error("customer_ledger_vs_provider_cost_disallowed");
   }
-  const maxDrift = input.maxDrift ?? RECONCILE_MAX_DRIFT;
+  const maxDrift = resolveMaxDrift(input.maxDrift);
   const reasons: string[] = [];
   const openHolds = [...(input.openHolds ?? [])];
 

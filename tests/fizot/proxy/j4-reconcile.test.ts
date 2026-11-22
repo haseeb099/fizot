@@ -1,9 +1,14 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { RECONCILE_MAX_DRIFT } from "../../../server/fizot/proxy/reconcile.ts";
 import {
   formatJ4Report,
   reconcileJ4,
+  resolveMaxDrift,
   syntheticEvidence,
   type J4LedgerUsageRow,
   type J4ProviderUsageRow,
@@ -334,6 +339,46 @@ it("is deterministic across repeated runs", () => {
   expect(first).toEqual(second);
 });
 
+it("defaults maxDrift to RECONCILE_MAX_DRIFT and accepts the documented [0, max] bounds", () => {
+  expect(resolveMaxDrift()).toBe(RECONCILE_MAX_DRIFT);
+  expect(resolveMaxDrift(undefined)).toBe(RECONCILE_MAX_DRIFT);
+  expect(resolveMaxDrift(0)).toBe(0);
+  expect(resolveMaxDrift(RECONCILE_MAX_DRIFT)).toBe(RECONCILE_MAX_DRIFT);
+  expect(resolveMaxDrift(0.005)).toBe(0.005);
+
+  const defaulted = reconcileJ4(base());
+  expect(defaulted.maxDrift).toBe(RECONCILE_MAX_DRIFT);
+
+  const zero = reconcileJ4(base({
+    maxDrift: 0,
+    ledgerRows: [ledger({ requestId: "r1", providerCostMicro: 1000 })],
+  }));
+  expect(zero.maxDrift).toBe(0);
+  expect(zero.verdict).toBe("PASS");
+
+  const tighterFail = reconcileJ4(base({
+    maxDrift: 0,
+    ledgerRows: [ledger({ requestId: "r1", providerCostMicro: 1001 })],
+  }));
+  expect(tighterFail.verdict).toBe("FAIL");
+  expect(tighterFail.materialPerRequestPolicyTriggered).toBe(true);
+
+  const atMax = reconcileJ4(base({
+    maxDrift: RECONCILE_MAX_DRIFT,
+    ledgerRows: [ledger({ requestId: "r1", providerCostMicro: 1010 })],
+  }));
+  expect(atMax.maxDrift).toBe(RECONCILE_MAX_DRIFT);
+  expect(atMax.verdict).toBe("PASS");
+});
+
+it("rejects invalid maxDrift overrides (NaN, Infinity, negative, above 1%)", () => {
+  const invalid = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0.001, -1, 0.0100001, 0.02, 1, 100];
+  for (const maxDrift of invalid) {
+    expect(() => resolveMaxDrift(maxDrift)).toThrow(/maxDrift/);
+    expect(() => reconcileJ4(base({ maxDrift }))).toThrow(/maxDrift/);
+  }
+});
+
 it("CLI exits 0 on exact synthetic fixture, 3 on boolean-only missing evidence", () => {
   const passed = execFileSync(process.execPath, ["--experimental-strip-types", script, exact], {
     encoding: "utf8",
@@ -352,4 +397,37 @@ it("CLI exits 0 on exact synthetic fixture, 3 on boolean-only missing evidence",
   }
   expect(code).toBe(3);
   expect(stdout).toContain("verdict=INSUFFICIENT_EVIDENCE");
+});
+
+it("CLI rejects invalid maxDrift with exit 2 and cannot bypass reconciler validation", () => {
+  const dir = mkdtempSync(join(tmpdir(), "j4-maxdrift-"));
+  const bad = join(dir, "bad-maxdrift.json");
+  const payload = {
+    period: "2026-11-synthetic",
+    provider: "xai",
+    comparisonBasis: "provider_cost_vs_fizot_provider_cost",
+    maxDrift: 0.05,
+    evidence: syntheticEvidence({
+      providerExportRecordCount: 1,
+      ledgerExportRecordCount: 1,
+      providerExportTotalBilledMicro: 1000,
+    }),
+    providerRows: [provider({ fizotRequestId: "r1" })],
+    ledgerRows: [ledger({ requestId: "r1" })],
+  };
+  writeFileSync(bad, JSON.stringify(payload));
+
+  let code = 0;
+  let stderr = "";
+  try {
+    execFileSync(process.execPath, ["--experimental-strip-types", script, bad], {
+      encoding: "utf8",
+    });
+  } catch (error) {
+    const err = error as { status?: number; stderr?: string };
+    code = err.status ?? 0;
+    stderr = String(err.stderr ?? "");
+  }
+  expect(code).toBe(2);
+  expect(stderr).toMatch(/maxDrift/);
 });
