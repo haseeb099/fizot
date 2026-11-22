@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+/**
+ * Read-only J4 reconciliation CLI.
+ * Compares provider-cost evidence to Fizot-computed provider cost.
+ * Never charges, refunds, or releases holds. Prints no prompts or keys.
+ *
+ * Requires a structured `evidence` package for tool PASS. Legacy
+ * `evidenceComplete: true` alone yields INSUFFICIENT_EVIDENCE.
+ */
+import { readFileSync } from "node:fs";
+import { formatJ4Report, reconcileJ4 } from "../../server/fizot/proxy/j4-reconcile.ts";
+
+const file = process.argv[2];
+if (!file) {
+  console.error("usage: node --experimental-strip-types scripts/fizot/j4-reconcile.mjs <export.json>");
+  process.exit(2);
+}
+
+const input = JSON.parse(readFileSync(file, "utf8"));
+let report;
+try {
+  report = reconcileJ4({
+    period: String(input.period ?? ""),
+    provider: String(input.provider ?? "unknown"),
+    comparisonBasis: input.comparisonBasis ?? "provider_cost_vs_fizot_provider_cost",
+    evidenceComplete: input.evidenceComplete,
+    evidence: input.evidence ?? null,
+    providerRows: Array.isArray(input.providerRows) ? input.providerRows : [],
+    ledgerRows: Array.isArray(input.ledgerRows) ? input.ledgerRows : [],
+    openHolds: Array.isArray(input.openHolds) ? input.openHolds : [],
+    maxDrift: input.maxDrift,
+  });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(2);
+}
+
+console.log(formatJ4Report(report));
+console.log(JSON.stringify({
+  verdict: report.verdict,
+  drift: report.drift,
+  withinThreshold: report.withinThreshold,
+  aggregateSignedVarianceMicro: report.aggregateSignedVarianceMicro,
+  aggregateAbsoluteVarianceMicro: report.aggregateAbsoluteVarianceMicro,
+  maxPerRequestDrift: report.maxPerRequestDrift,
+  materialPerRequestCount: report.materialPerRequestCount,
+  discrepancyExposureMicro: report.discrepancyExposureMicro,
+  materialPerRequestPolicyTriggered: report.materialPerRequestPolicyTriggered,
+  matched: report.matched.length,
+  mismatched: report.mismatched.length,
+  unmatchedProvider: report.unmatchedProvider.length,
+  unmatchedLedger: report.unmatchedLedger.length,
+  duplicateProviderIds: report.duplicateProviderIds,
+  duplicateLedgerIds: report.duplicateLedgerIds,
+  openHolds: report.openHolds.length,
+  providerCostTotalMicro: report.providerCostTotalMicro,
+  fizotProviderCostTotalMicro: report.fizotProviderCostTotalMicro,
+  customerChargeTotalMicroGbp: report.customerChargeTotalMicroGbp,
+  evidenceAssessment: report.evidenceAssessment,
+  reasons: report.reasons,
+}, null, 2));
+
+if (report.verdict === "PASS") process.exit(0);
+if (report.verdict === "INSUFFICIENT_EVIDENCE") process.exit(3);
+process.exit(1);
