@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-64 Browser SOCKS Cloud decide + Chrome resolver/DoH flags (P4.7 / FZ-30)
+
+- Why we changed it: PR #37 hardened the box CONNECT gate, but Cloud browser SOCKS still used plain `refusalFor` and Chrome could still perform local DNS / Secure DNS upgrades beside the proxy.
+- How it works: Cloud `BrowserEgress` shares `fizotCloudRefusal` / `fizotCloudNameRefusal` with the box gate (DNS/DoT 53/853, metadata hostnames, self-address, private/6PN/rebinding). Chrome adds `--dns-over-https-mode=off` (MAP `~NOTFOUND` host-resolver rules deferred after renderer smoke `ERR_PROXY_CONNECTION_FAILED`). DoH over HTTPS to public hosts on 443 remains residual; ADR proposed in `docs/fizot/adr-egress-hostname-allowlist.md`. Staging plan: `docs/fizot/p47-staging-acceptance.md`.
+- Why it is necessary: Browser and box must not diverge; otherwise a prompt-injected page path bypasses SE-U controls the shell already has.
+- Impact: No production deploy. No hostname allow-list shipped. Legitimate public HTTPS still allowed.
+- Rollback? Revert the CL-64 commit(s) on `fz-30-p47-browser-socks-doh`.
+- Files / Patch IDs: PATCH-55.
+- Related tasks: FZ-30 (P4.7). P4.7 / G4 still incomplete until SE-I/SE-E evidence exists.
+
 ## CL-63 Sandbox and egress hardening SE-U (P4.7 / FZ-30)
 
 - Why we changed it: P4.7 was not started; hosted workspaces need fail-closed egress policy, DNS/self-address refusals, Slack loopback write closure, env strip proof and Chrome background-network flags before multi-tenant hosting.

@@ -44,6 +44,17 @@ export function credentialStoreFlags(platform: NodeJS.Platform = process.platfor
   return platform === "darwin" ? ["--use-mock-keychain"] : platform === "linux" ? ["--password-store=basic"] : [];
 }
 
+/**
+ * Secure DNS / DoH upgrades for lookups Chrome still makes locally. Page CONNECT goes through SOCKS
+ * with proxy-side resolution; public HTTPS DoH endpoints on :443 remain a residual risk without a
+ * hostname policy (docs/fizot/sandbox.md). `--host-resolver-rules=MAP * ~NOTFOUND` was tried and
+ * broke gated Chrome in renderer smoke (`ERR_PROXY_CONNECTION_FAILED`); do not re-add without a
+ * green control-omb ui run that proves the SOCKS loopback proxy still connects.
+ */
+export function gateChromeResolverFlags(): string[] {
+  return ["--dns-over-https-mode=off"];
+}
+
 /** How a whole Chrome goes through the gate on `port`. */
 export function gateChromeSettings(port: number, platform: NodeJS.Platform = process.platform): { proxy: string; bypass: string; args: string[] } {
   return {
@@ -61,6 +72,7 @@ export function gateChromeSettings(port: number, platform: NodeJS.Platform = pro
       "--disable-sync",
       "--disable-default-apps",
       "--disable-domain-reliability",
+      ...gateChromeResolverFlags(),
       ...credentialStoreFlags(platform),
     ],
   };

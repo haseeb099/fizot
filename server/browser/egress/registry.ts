@@ -6,6 +6,8 @@ import { agentBrowserDevToolsPorts, agentBrowserStreamPorts } from "../../browse
 import { sanitizePageText } from "../../browser-page-health.ts";
 import { FLEET_FIRST_PORT, FLEET_PORT_STRIDE } from "../../fleet.ts";
 import { botEngineSessions } from "../../procs.ts";
+import { instanceSelfAddresses } from "../../fizot/sandbox/egress.ts";
+import { fizotCloudNameRefusal, fizotCloudRefusal } from "../../fizot/sandbox/policy.ts";
 import { openGate, resolveTarget, type EgressGate, type GateTarget, type GateUpstream, type ResolvedAddress } from "./gate.ts";
 import { opensFromHome } from "./home-sites.ts";
 import { ListenerOwnership } from "./ownership.ts";
@@ -95,6 +97,8 @@ export interface EgressSetup {
    * none of the person's computers shares it; null where this browser may not use a computer's connection. Only the
    * sites that turn away data centres (home-sites.ts) go through it. */
   device?(session: string): GateUpstream | { away: string } | { unshared: true } | null;
+  /** Fizot Cloud TC54: this instance's interface / 6PN addresses; defaults to live interfaces. */
+  selfAddresses?(): ReadonlySet<string>;
 }
 
 interface Blocked { target: string; reason: Refusal }
@@ -108,7 +112,7 @@ export const UNSHARED_NOTICE = `Sites that turn away data centres, such as Insta
 
 /** One gate per browser session for the life of the server, so a Chrome keeps the port it launched with. */
 export class BrowserEgress {
-  private setup: Required<Omit<EgressSetup, "device">> & Pick<EgressSetup, "device"> | null = null;
+  private setup: Required<Omit<EgressSetup, "device" | "selfAddresses">> & Pick<EgressSetup, "device" | "selfAddresses"> | null = null;
   private readonly gates = new Map<string, Promise<EgressGate>>();
   private readonly blocked = new Map<string, Blocked[]>();
   /** Sessions told those sites load from My Cloud's own connection, until the computer is back. */
@@ -124,9 +128,17 @@ export class BrowserEgress {
     };
   }
 
-  /** Why a destination is refused by its name alone on this host: Reddit, from Fizot Cloud. */
-  nameRefusal(name: string): Refusal | null {
-    return this.setup && refusesReddit(this.setup.host, name) ? "reddit" : null;
+  /** Why a destination is refused by its name alone: Reddit on Cloud, plus Fizot Cloud DNS/DoT and metadata aliases. */
+  nameRefusal(target: GateTarget | string): Refusal | null {
+    if (!this.setup) return null;
+    const host = typeof target === "string" ? target : target.host;
+    const port = typeof target === "string" ? 443 : target.port;
+    if (refusesReddit(this.setup.host, host)) return "reddit";
+    if (this.setup.host === "cloud") {
+      const cloud = fizotCloudNameRefusal({ host, port });
+      if (cloud === "dns-exfil" || cloud === "metadata") return cloud;
+    }
+    return null;
   }
 
   /** What a browser tool call that would open Reddit from Fizot Cloud is told instead of running, or null. */
@@ -164,11 +176,18 @@ export class BrowserEgress {
     if (!this.setup) return Promise.reject(new Error("The browser's network gate is not set up."));
     let gate = this.gates.get(session);
     if (!gate) {
+      const setup = this.setup;
       gate = openGate({
-        refuseName: (target) => this.nameRefusal(target.host),
-        decide: (target, addresses) => refusalFor(target, addresses, this.rules()),
+        refuseName: (target) => this.nameRefusal(target),
+        decide: async (target, addresses) => {
+          if (setup.host === "cloud") {
+            const selfAddresses = setup.selfAddresses?.() ?? instanceSelfAddresses();
+            return fizotCloudRefusal(target, addresses, { selfAddresses });
+          }
+          return refusalFor(target, addresses, this.rules());
+        },
         onRefusal: (target, reason) => this.note(session, target, reason as Refusal),
-        resolve: this.setup.resolve,
+        resolve: setup.resolve,
         upstream: (target) => opensFromHome(target.host) ? this.through(session) : null,
       });
       this.gates.set(session, gate);
