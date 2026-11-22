@@ -9,7 +9,7 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 ## CL-64 Browser SOCKS Cloud decide + Chrome resolver/DoH flags (P4.7 / FZ-30)
 
 - Why we changed it: PR #37 hardened the box CONNECT gate, but Cloud browser SOCKS still used plain `refusalFor` and Chrome could still perform local DNS / Secure DNS upgrades beside the proxy.
-- How it works: Cloud `BrowserEgress` shares `fizotCloudRefusal` / `fizotCloudNameRefusal` with the box gate (DNS/DoT 53/853, metadata hostnames, self-address, private/6PN/rebinding). Chrome adds `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1` and `--dns-over-https-mode=off`. DoH over HTTPS to public hosts on 443 remains residual; ADR proposed in `docs/fizot/adr-egress-hostname-allowlist.md`. Staging plan: `docs/fizot/p47-staging-acceptance.md`.
+- How it works: Cloud `BrowserEgress` shares `fizotCloudRefusal` / `fizotCloudNameRefusal` with the box gate (DNS/DoT 53/853, metadata hostnames, self-address, private/6PN/rebinding). Chrome adds `--dns-over-https-mode=off` (MAP `~NOTFOUND` host-resolver rules deferred after renderer smoke `ERR_PROXY_CONNECTION_FAILED`). DoH over HTTPS to public hosts on 443 remains residual; ADR proposed in `docs/fizot/adr-egress-hostname-allowlist.md`. Staging plan: `docs/fizot/p47-staging-acceptance.md`.
 - Why it is necessary: Browser and box must not diverge; otherwise a prompt-injected page path bypasses SE-U controls the shell already has.
 - Impact: No production deploy. No hostname allow-list shipped. Legitimate public HTTPS still allowed.
 - Rollback? Revert the CL-64 commit(s) on `fz-30-p47-browser-socks-doh`.

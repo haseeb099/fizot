@@ -17,7 +17,7 @@ Prompt-injected shells are the main threat on a hosted workspace. Application UR
 | Slack Full-access via session-less loopback | Mutating `SERVICE_ALLOW` routes require `OMB_SLACK_RELAY_TOKEN`; token is on `BOX_ENV_NEVER` + `CONTROL_PLANE_ENV` so boxed shells cannot inherit it |
 | Server env secrets in the box | `boxEnvironment` allow-list + never-list; BoxRunner strip on wrap |
 | Chrome background phones-home | `gateChromeFlags` includes `--disable-background-networking` and related |
-| Chrome local DNS / Secure DNS upgrades | `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1` and `--dns-over-https-mode=off` |
+| Chrome Secure DNS / DoH upgrades | `--dns-over-https-mode=off` (MAP `~NOTFOUND` host-resolver rules deferred: broke gated Chrome smoke with `ERR_PROXY_CONNECTION_FAILED`) |
 
 ## Where enforcement lives
 

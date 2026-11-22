@@ -45,17 +45,14 @@ export function credentialStoreFlags(platform: NodeJS.Platform = process.platfor
 }
 
 /**
- * Chrome must not resolve names itself beside the SOCKS proxy: prefetch and Secure DNS would otherwise
- * bypass the gate. MAP * ~NOTFOUND blocks local lookups; EXCLUDE 127.0.0.1 keeps the loopback SOCKS
- * proxy reachable. `--dns-over-https-mode=off` stops Chrome upgrading remaining local lookups to DoH
- * providers — page CONNECT still goes through SOCKS, so public HTTPS DoH endpoints remain a residual
- * risk without a hostname policy (see docs/fizot/sandbox.md).
+ * Secure DNS / DoH upgrades for lookups Chrome still makes locally. Page CONNECT goes through SOCKS
+ * with proxy-side resolution; public HTTPS DoH endpoints on :443 remain a residual risk without a
+ * hostname policy (docs/fizot/sandbox.md). `--host-resolver-rules=MAP * ~NOTFOUND` was tried and
+ * broke gated Chrome in renderer smoke (`ERR_PROXY_CONNECTION_FAILED`); do not re-add without a
+ * green control-omb ui run that proves the SOCKS loopback proxy still connects.
  */
 export function gateChromeResolverFlags(): string[] {
-  return [
-    "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
-    "--dns-over-https-mode=off",
-  ];
+  return ["--dns-over-https-mode=off"];
 }
 
 /** How a whole Chrome goes through the gate on `port`. */
