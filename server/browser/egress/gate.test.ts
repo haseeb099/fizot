@@ -247,10 +247,16 @@ describe("egress gate", () => {
       "--proxy-bypass-list=<-loopback>",
       "--webrtc-ip-handling-policy=disable_non_proxied_udp",
       "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-sync",
+      "--disable-default-apps",
+      "--disable-domain-reliability",
       "--use-mock-keychain",
     ]);
     expect(gateChromeFlags(4321, "linux").at(-1)).toBe("--password-store=basic");
-    expect(gateChromeFlags(4321, "win32")).toHaveLength(4);
+    expect(gateChromeFlags(4321, "win32")).toContain("--disable-background-networking");
+    expect(gateChromeFlags(4321, "win32")).toHaveLength(9);
   });
 });
 

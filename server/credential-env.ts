@@ -38,7 +38,11 @@ export const WORKSPACE_CREDENTIAL_ENV = [
 ] as const;
 
 /** Operator secrets only this process reads, plus every `OMB_CLOUD_` var (the underscore leaves out OMB_CLOUDFLARED_PATH). */
-export const CONTROL_PLANE_ENV = ["OMB_LICENSE_KEY", "OMB_INSTALLATION_CREDENTIAL"] as const;
+export const CONTROL_PLANE_ENV = [
+  "OMB_LICENSE_KEY",
+  "OMB_INSTALLATION_CREDENTIAL",
+  "OMB_SLACK_RELAY_TOKEN",
+] as const;
 export const CONTROL_PLANE_ENV_PREFIX = "OMB_CLOUD_";
 
 /** Names compare case-insensitively because Windows environments do. */

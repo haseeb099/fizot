@@ -554,11 +554,21 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
   let sessions: SessionRegistry;
   const cookieName = "omb_session_8799_env";
   const local = { host: "127.0.0.1:8799" };
-  const check = (method: string, path: string, options: { trust?: "owner" | "service"; headers?: Record<string, string>; desktopToken?: string } = {}) =>
+  const RELAY = "fizot-relay-token-32chars-min!!";
+  const check = (method: string, path: string, options: {
+    trust?: "owner" | "service";
+    headers?: Record<string, string>;
+    desktopToken?: string;
+    relay?: string | null;
+  } = {}) =>
     resolveRequestAuth(request({ ...local, ...options.headers }, method), {
       sessions, cookieName, streamPath: "/api/events", url: new URL(path, "http://x"),
       ...(options.trust ? { loopbackTrust: options.trust } : {}),
       ...(options.desktopToken !== undefined ? { loopbackMutationToken: options.desktopToken } : {}),
+      // P4.7: mutating SERVICE_ALLOW routes need the worker relay; tests that exercise them pass RELAY.
+      ...(options.trust === "service"
+        ? { slackRelayToken: options.relay === undefined ? RELAY : options.relay }
+        : {}),
     });
 
   beforeEach(() => {
@@ -608,7 +618,11 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
 
   it("lets a service reach only its routes, as a client without admin", () => {
     for (const [method, path] of SERVICE_CALLS) {
-      expect(check(method, path, { trust: "service" }).auth, `${method} ${path}`).toEqual({ kind: "loopback", scopes: ["client"], trust: "service" });
+      const mutating = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())
+        && !path.startsWith("/api/internal/")
+        && !path.startsWith("/api/testing/");
+      const headers = mutating ? { authorization: `Bearer ${RELAY}` } : undefined;
+      expect(check(method, path, { trust: "service", headers }).auth, `${method} ${path}`).toEqual({ kind: "loopback", scopes: ["client"], trust: "service" });
     }
     for (const [method, path] of ADMIN_CALLS) {
       const denied = check(method, path, { trust: "service" });
@@ -616,6 +630,16 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
       expect(denied.status).toBe(403);
       expect(denied.error).toMatch(/shared server.*sign in/);
     }
+  });
+
+  it("refuses mutating service routes when the Slack relay token is absent (P4.7)", () => {
+    const denied = check("POST", "/api/bots/bot-1/tasks", { trust: "service", relay: null });
+    expect(denied.auth).toBeNull();
+    expect(denied.status).toBe(403);
+    expect(denied.error).toMatch(/relay token/);
+    expect(check("GET", "/api/health", { trust: "service", relay: null }).auth).toEqual({
+      kind: "loopback", scopes: ["client"], trust: "service",
+    });
   });
 
   it("still admits a real session with its own scopes on a service-trust server", () => {
