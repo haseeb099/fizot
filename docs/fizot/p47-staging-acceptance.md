@@ -45,13 +45,14 @@ pnpm exec vitest run tests/fizot/sandbox/
 #   inputs: fly_org=<staging-org>  mode=isolation  fly_region=lhr (optional)
 #
 # Or locally (never production):
-#   FLY_API_TOKEN=… FLY_ORG=… FIZOT_MACHINE_IMAGE=… FIZOT_ROUNDTRIP_MODE=isolation \
-#   node --experimental-strip-types scripts/fizot/fly-staging-roundtrip.mjs
+#   FLY_API_TOKEN=… FLY_ORG=… FIZOT_MACHINE_IMAGE=… \
+#   node --experimental-strip-types scripts/fizot/fly-staging-isolation.mjs
+#   # equivalent: FIZOT_ROUNDTRIP_MODE=isolation node …/fly-staging-roundtrip.mjs
 # Always-on leftover sweep:
 #   FLY_STAGING_MAX_AGE_MS=0 node --experimental-strip-types scripts/fizot/fly-staging-cleanup.mjs
 ```
 
-## What `mode=isolation` does
+## What `mode=isolation` / `fly-staging-isolation.mjs` does
 
 1. Creates disposable staging workspaces A and B (`fizot-cm-*` only).
 2. Waits for health; reads each machine’s `privateIp` and per-workspace Fly `network`.

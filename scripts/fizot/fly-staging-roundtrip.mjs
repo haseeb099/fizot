@@ -6,8 +6,7 @@
  * isolation → sleep refused → remove member deletes private chat → destroy.
  * mode=erase (J8): create workspace + data → delete → assert Fly 404, volume gone,
  * DB rows gone, receipt complete, remainingCount 0; also user-level erase with two workspaces.
- * mode=isolation (P4.7 SE-I): two disposable tenants A/B; policy + network probes for
- * TC28/TC52/TC54/TC59; machine-readable evidence; cleanup both apps.
+ * mode=isolation (P4.7 SE-I): delegates to fly-staging-isolation.mjs (two tenants A/B).
  * Uses FLY_API_TOKEN from the environment only. Never prints the token or bootstrap secret.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -26,18 +25,8 @@ import {
   DEFAULT_FLY_ORG,
   resolveFlyOrg,
   MAX_PROBE_MACHINE_SECONDS,
-  MAX_STAGING_MACHINES,
   describeFetchError,
 } from "../../server/fizot/admin/index.ts";
-import {
-  assertStagingTargetSafe,
-  buildIsolationCases,
-  buildIsolationEvidence,
-  cleanupIsolationTenants,
-  networkProbeGuestScript,
-  parseNetworkProbeOutput,
-  runIsolationCases,
-} from "../../server/fizot/sandbox/isolation-harness.ts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ARTIFACTS = path.join(ROOT, "artifacts", "fly-staging");
@@ -58,12 +47,22 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+if (MODE === "isolation") {
+  const isolationScript = fileURLToPath(new URL("./fly-staging-isolation.mjs", import.meta.url));
+  const child = spawnSync(process.execPath, ["--experimental-strip-types", isolationScript], {
+    stdio: "inherit",
+    env: process.env,
+    cwd: ROOT,
+  });
+  process.exit(child.status ?? 1);
+}
+
 const token = process.env.FLY_API_TOKEN?.trim() ?? "";
 const org = resolveFlyOrg();
 const region = process.env.FLY_REGION?.trim() ?? "lhr";
 const image = process.env.FIZOT_MACHINE_IMAGE?.trim() ?? "";
 
-if (MODE !== "home" && MODE !== "team" && MODE !== "erase" && MODE !== "isolation") {
+if (MODE !== "home" && MODE !== "team" && MODE !== "erase") {
   console.error(`FIZOT_ROUNDTRIP_MODE must be home, team, erase, or isolation (got ${MODE})`);
   process.exit(2);
 }
@@ -98,9 +97,7 @@ let workspaceId = "";
 let appName = "";
 let flyMachineId = "";
 let sessionCookie = "";
-/** Extra staging apps to force-destroy on failure (isolation tracks A+B). */
-const trackedAppNames = new Set();
-const report = { mode: MODE, steps: [], ok: false, negatives: {}, flyCost: null, j10: null, isolation: null };
+const report = { mode: MODE, steps: [], ok: false, negatives: {}, flyCost: null, j10: null };
 
 function cookieHeader(cookie = sessionCookie) {
   if (!cookie) throw new Error("session cookie missing; sign-in first");
@@ -318,234 +315,8 @@ async function eraseWorkspaceAndAssert(wsId, app, cookie) {
   return receipt;
 }
 
-function gitSha() {
-  const fromEnv = process.env.GITHUB_SHA?.trim() || process.env.FIZOT_GIT_SHA?.trim();
-  if (fromEnv) return fromEnv;
-  const r = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", cwd: ROOT });
-  return r.status === 0 ? r.stdout.trim() : "unknown";
-}
-
-function workflowRunUrl() {
-  const server = process.env.GITHUB_SERVER_URL?.trim();
-  const repo = process.env.GITHUB_REPOSITORY?.trim();
-  const runId = process.env.GITHUB_RUN_ID?.trim();
-  if (server && repo && runId) return `${server}/${repo}/actions/runs/${runId}`;
-  return null;
-}
-
-function networkProbeOnMachine(app, machineId, host, port, timeoutMs) {
-  const script = networkProbeGuestScript(host, port, timeoutMs);
-  const args = [
-    "ssh",
-    "console",
-    "-a",
-    app,
-    "-C",
-    `node -e ${JSON.stringify(script)}`,
-  ];
-  if (machineId) {
-    args.push("--machine", machineId);
-  }
-  const r = spawnSync("flyctl", args, {
-    encoding: "utf8",
-    timeout: timeoutMs + 20_000,
-    env: process.env,
-  });
-  if (r.error && r.error.code === "ENOENT") {
-    return {
-      kind: "error",
-      layer: "network",
-      message: "flyctl not installed; network probe skipped",
-      class: "unrelated",
-    };
-  }
-  return parseNetworkProbeOutput({
-    stdout: r.stdout ?? "",
-    stderr: r.stderr ?? "",
-    exitCode: r.status,
-    timeoutMs,
-  });
-}
-
 try {
-  if (MODE === "isolation") {
-    // ——— P4.7 SE-I two-tenant isolation ———
-    assertStagingTargetSafe({ org, env: process.env });
-    const NETWORK_TIMEOUT_MS = Number(process.env.FIZOT_ISOLATION_PROBE_TIMEOUT_MS ?? "3000");
-    const projection = projectDailyCost({});
-    log("isolation_begin", {
-      maxStagingMachines: MAX_STAGING_MACHINES,
-      probeTimeoutMs: NETWORK_TIMEOUT_MS,
-      note: "two disposable fizot-cm-* apps; never production",
-    });
-
-    const ownerA = "isolation-a@fizot.test";
-    const ownerB = "isolation-b@fizot.test";
-    const signedA = await signIn(ownerA);
-    sessionCookie = signedA.cookie;
-    report.steps.push(log("sign_in", { email: ownerA }));
-
-    async function createTenant(label, cookie, email) {
-      const created = await fetch(`${admin.url}/admin/workspaces`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({
-          plan: "home",
-          ownerEmail: email,
-          requestId: `iso-${label}-${Date.now().toString(36)}`,
-        }),
-      });
-      const body = await created.json().catch(() => ({}));
-      if (!created.ok) {
-        throw new Error(`create tenant ${label} failed: ${created.status} ${JSON.stringify(body)}`);
-      }
-      workspaceId = body.workspace.id;
-      appName = body.workspace.appName;
-      flyMachineId = body.workspace.flyMachineId ?? "";
-      trackedAppNames.add(appName);
-      assertStagingTargetSafe({ org, appNames: [appName], env: process.env });
-      const stored = await admin.services.store.get(workspaceId);
-      if (!stored) throw new Error(`tenant ${label} missing from store after create`);
-      flyMachineId = stored.flyMachineId || flyMachineId;
-      await waitForHealth();
-      const machine = await fly.getMachine(appName, flyMachineId).catch(async () => {
-        const list = await fly.listMachines(appName);
-        return list[0] ?? null;
-      });
-      const privateIp = machine?.privateIp?.trim() ?? "";
-      if (!privateIp) {
-        throw new Error(`tenant ${label} machine missing privateIp (cannot prove TC28/TC54/TC59)`);
-      }
-      report.steps.push(log("tenant_ready", {
-        label,
-        workspaceId,
-        appName,
-        flyMachineId: machine?.id ?? flyMachineId,
-        privateIp,
-        network: stored.network,
-      }));
-      return {
-        label,
-        workspaceId,
-        appName,
-        flyMachineId: machine?.id ?? flyMachineId,
-        privateIp,
-        network: stored.network,
-        cookie,
-      };
-    }
-
-    const tenantA = await createTenant("A", signedA.cookie, ownerA);
-    const signedB = await signIn(ownerB);
-    const tenantB = await createTenant("B", signedB.cookie, ownerB);
-
-    // Clear globals so finally does not double-destroy before structured cleanup.
-    workspaceId = "";
-    appName = "";
-    flyMachineId = "";
-
-    const cases = buildIsolationCases({
-      selfPrivateIp: tenantA.privateIp,
-      peerPrivateIp: tenantB.privateIp,
-    });
-    const caseResults = await runIsolationCases({
-      cases,
-      selfAddresses: new Set([tenantA.privateIp]),
-      networkProbe: async (target) => networkProbeOnMachine(
-        tenantA.appName,
-        tenantA.flyMachineId,
-        target.host,
-        target.port,
-        NETWORK_TIMEOUT_MS,
-      ),
-    });
-    report.steps.push(log("isolation_cases", {
-      results: caseResults.map((r) => ({
-        id: r.id,
-        layer: r.layer,
-        verdict: r.verdict,
-        refusalReason: r.refusalReason,
-        destinationClass: r.destinationClass,
-      })),
-    }));
-
-    const cleanup = await cleanupIsolationTenants({
-      appNames: [tenantA.appName, tenantB.appName],
-      destroyApp: async (name) => {
-        // Prefer Admin deletion job when we still have a session; fall back to Fly destroy.
-        const row = [tenantA, tenantB].find((t) => t.appName === name);
-        if (row) {
-          try {
-            await eraseWorkspaceAndAssert(row.workspaceId, row.appName, row.cookie);
-            trackedAppNames.delete(name);
-            return;
-          } catch (error) {
-            log("isolation_erase_fallback", {
-              appName: name,
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-        await fly.destroyApp(name);
-        trackedAppNames.delete(name);
-      },
-      listStagingApps: async () => (await fly.listApps(org))
-        .filter((a) => a.name.startsWith(FLY_STAGING_APP_PREFIX))
-        .map((a) => a.name),
-    });
-
-    const evidence = buildIsolationEvidence({
-      gitSha: gitSha(),
-      environmentType: "staging-fly",
-      flyOrg: org,
-      workflowRunUrl: workflowRunUrl(),
-      tenants: [
-        {
-          label: "A",
-          workspaceId: tenantA.workspaceId,
-          appName: tenantA.appName,
-          flyMachineId: tenantA.flyMachineId,
-          privateIp: tenantA.privateIp,
-          network: tenantA.network,
-        },
-        {
-          label: "B",
-          workspaceId: tenantB.workspaceId,
-          appName: tenantB.appName,
-          flyMachineId: tenantB.flyMachineId,
-          privateIp: tenantB.privateIp,
-          network: tenantB.network,
-        },
-      ],
-      cases: caseResults,
-      cleanup,
-      costGuard: {
-        maxStagingMachines: MAX_STAGING_MACHINES,
-        projectedDailyUsd: projection.totalUsdPerDay,
-        note: "two concurrent staging machines at Gate G0b cap; destroy both before exit",
-      },
-    });
-    writeFileSync(
-      path.join(ARTIFACTS, "isolation-evidence.json"),
-      `${JSON.stringify(evidence, null, 2)}\n`,
-    );
-    report.isolation = {
-      summary: evidence.summary,
-      cleanup: evidence.cleanup.outcome,
-      evidencePath: "artifacts/fly-staging/isolation-evidence.json",
-    };
-    report.flyCost = {
-      note: "isolation mode: two machines for bounded probe window",
-      projectedDaily: projection,
-    };
-    report.ok = evidence.summary.overall === "PASS" && cleanup.outcome === "ok";
-    if (evidence.summary.overall !== "PASS") {
-      throw new Error(`isolation overall=${evidence.summary.overall} (see isolation-evidence.json)`);
-    }
-    if (cleanup.outcome !== "ok") {
-      throw new Error(`isolation cleanup ${cleanup.outcome}: ${cleanup.error ?? "remaining apps"}`);
-    }
-  } else if (MODE === "erase") {
+  if (MODE === "erase") {
     // ——— J8 erasure ———
     const OWNER = "erase-j8@fizot.test";
     log("sign_in_begin", { mode: "erase" });
@@ -1083,20 +854,15 @@ try {
     };
   }
 } finally {
-  const forceDestroy = new Set(trackedAppNames);
-  if (appName) forceDestroy.add(appName);
-  for (const name of forceDestroy) {
+  if (appName) {
     try {
-      const still = await fly.getApp(name);
+      const still = await fly.getApp(appName);
       if (still) {
-        log("cleanup_force_destroy", { appName: name });
-        await fly.destroyApp(name);
+        log("cleanup_force_destroy", { appName });
+        await fly.destroyApp(appName);
       }
     } catch (error) {
-      log("cleanup_error", {
-        appName: name,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      log("cleanup_error", { message: error instanceof Error ? error.message : String(error) });
     }
   }
   try {
