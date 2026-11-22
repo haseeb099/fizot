@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
+import { BOX_DENY_ENV } from "../../../server/bot-box/boot.ts";
 import { BoxRunner, BOX_EGRESS_PORT } from "../../../server/bot-box/box.ts";
 import type { BridgeTools } from "../../../server/bot-box/bridge.ts";
+import { boxEnvironmentAllows } from "../../../server/bot-box/env.ts";
+import { stripControlPlaneEnv } from "../../../server/credential-env.ts";
 
 const bridge: BridgeTools = { socat: null, bridgeScript: "/bin/true", node: process.execPath };
 const setup = {
@@ -14,12 +17,14 @@ const setup = {
   ],
 };
 
+const RELAY = "fizot-relay-token-32chars-min!!";
+
 it("BoxRunner wrap strips Admin/proxy/billing secrets on the real launch path (P4.7)", () => {
   const runner = new BoxRunner({
     bwrap: "/usr/bin/bwrap",
     bridge,
     setup,
-    denyEnv: new Set(["COMPOSIO_API_KEY", "XAI_API_KEY"]),
+    denyEnv: BOX_DENY_ENV,
   });
   const wrapped = runner.wrap({
     command: "/usr/bin/x",
@@ -32,6 +37,7 @@ it("BoxRunner wrap strips Admin/proxy/billing secrets on the real launch path (P
       OMB_LICENSE_KEY: "lic",
       OMB_DATA_DIR: "/data/.openmausbot",
       OMB_PORT: "8799",
+      OMB_SLACK_RELAY_TOKEN: RELAY,
       FLY_API_TOKEN: "fly",
       STRIPE_API_KEY: "sk_test",
       FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET: "hmac-secret-at-least-32-bytes-long",
@@ -49,6 +55,7 @@ it("BoxRunner wrap strips Admin/proxy/billing secrets on the real launch path (P
     "OMB_LICENSE_KEY",
     "OMB_DATA_DIR",
     "OMB_PORT",
+    "OMB_SLACK_RELAY_TOKEN",
     "FLY_API_TOKEN",
     "STRIPE_API_KEY",
     "FIZOT_PROXY_IDEMPOTENCY_HMAC_SECRET",
@@ -58,4 +65,14 @@ it("BoxRunner wrap strips Admin/proxy/billing secrets on the real launch path (P
   ]) {
     expect(wrapped.env[name], name).toBeUndefined();
   }
+});
+
+it("never-list and control-plane strip refuse OMB_SLACK_RELAY_TOKEN even against the OMB_ prefix", () => {
+  expect(boxEnvironmentAllows("OMB_SLACK_RELAY_TOKEN")).toBe(false);
+  expect(boxEnvironmentAllows("OMB_SLACK_RELAY_TOKEN", new Set(), new Set(["OMB_SLACK_RELAY_TOKEN"]))).toBe(false);
+  expect(BOX_DENY_ENV.has("OMB_SLACK_RELAY_TOKEN")).toBe(true);
+  const env: Record<string, string | undefined> = { OMB_SLACK_RELAY_TOKEN: RELAY, PATH: "/usr/bin" };
+  stripControlPlaneEnv(env);
+  expect(env.OMB_SLACK_RELAY_TOKEN).toBeUndefined();
+  expect(env.PATH).toBe("/usr/bin");
 });

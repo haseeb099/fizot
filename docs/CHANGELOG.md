@@ -9,9 +9,9 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 ## CL-63 Sandbox and egress hardening SE-U (P4.7 / FZ-30)
 
 - Why we changed it: P4.7 was not started; hosted workspaces need fail-closed egress policy, DNS/self-address refusals, Slack loopback write closure, env strip proof and Chrome background-network flags before multi-tenant hosting.
-- How it works: `server/fizot/sandbox/` wraps the upstream box CONNECT gate with Fizot cloud decide (DNS/DoT ports 53/853, metadata hostnames, interface self-address). BotBox opens that gate. Mutating `SERVICE_ALLOW` routes under service trust require `OMB_SLACK_RELAY_TOKEN` (≥16 chars) or stay closed. `gateChromeFlags` adds `--disable-background-networking` and related. Unit suite covers allow-list, private/metadata/6PN, rebinding, TC53/TC54, relay auth and BoxRunner secret strip. SE-I (TC28/TC59 Fly) remains planned.
+- How it works: `server/fizot/sandbox/` wraps the upstream box CONNECT gate with Fizot cloud decide (DNS/DoT ports 53/853, metadata hostnames, interface self-address). BotBox opens that gate. Mutating `SERVICE_ALLOW` routes under service trust require `OMB_SLACK_RELAY_TOKEN` (≥16 chars) or stay closed. That token is on `BOX_ENV_NEVER` and `CONTROL_PLANE_ENV` so a boxed shell cannot inherit and replay it. `gateChromeFlags` adds `--disable-background-networking` and related. Unit suite covers allow-list, private/metadata/6PN, rebinding, TC53/TC54, relay auth and BoxRunner secret strip. SE-I (TC28/TC59 Fly) remains planned.
 - Why it is necessary: Core security promise against prompt-injected shells; closes the documented Slack Full-access loopback risk.
-- Impact: No production deploy, Stripe, or visibility changes. Slack worker must set `OMB_SLACK_RELAY_TOKEN` before mutating service routes work on Cloud homes.
+- Impact: No production deploy, Stripe, or visibility changes. Slack worker must set `OMB_SLACK_RELAY_TOKEN` before mutating service routes work on Cloud homes; the token must stay out of box env.
 - Rollback? Revert the CL-63 commit(s) on `fz-30-p47-sandbox-egress`.
 - Files / Patch IDs: PATCH-54.
 - Related tasks: FZ-30 (P4.7). P4.7 and G4 remain incomplete until SE-I/SE-E evidence exists.

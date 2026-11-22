@@ -14,7 +14,7 @@ Prompt-injected shells are the main threat on a hosted workspace. Application UR
 | Sandbox → own instance private address (TC54) | `selfAddresses` refusal on interface / 6PN addresses |
 | Cross-tenant network (TC28 / TC59) | Per-workspace Fly network `fizot-net-*` (SE-I on staging) |
 | SSRF / redirect bypass | Resolve once, pin connect to checked addresses; no follow of unchecked redirects at the gate |
-| Slack Full-access via session-less loopback | Mutating `SERVICE_ALLOW` routes require `OMB_SLACK_RELAY_TOKEN` |
+| Slack Full-access via session-less loopback | Mutating `SERVICE_ALLOW` routes require `OMB_SLACK_RELAY_TOKEN`; token is on `BOX_ENV_NEVER` + `CONTROL_PLANE_ENV` so boxed shells cannot inherit it |
 | Server env secrets in the box | `boxEnvironment` allow-list + never-list; BoxRunner strip on wrap |
 | Chrome background phones-home | `gateChromeFlags` includes `--disable-background-networking` and related |
 
