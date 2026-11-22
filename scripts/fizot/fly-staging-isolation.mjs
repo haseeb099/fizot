@@ -17,7 +17,6 @@ import {
   formatCostProjection,
   projectDailyCost,
   FLY_STAGING_APP_PREFIX,
-  DEFAULT_FLY_ORG,
   resolveFlyOrg,
   MAX_STAGING_MACHINES,
   describeFetchError,
