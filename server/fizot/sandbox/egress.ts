@@ -6,7 +6,7 @@
 import { networkInterfaces } from "node:os";
 
 import { openBoxEgressGate, type BoxEgressGate, type EgressGateOptions } from "../../bot-box/egress-gate.ts";
-import { fizotBoxRefusal, type FizotEgressDecideOptions } from "./policy.ts";
+import { fizotCloudRefusal, type FizotEgressDecideOptions } from "./policy.ts";
 
 /** Collect this machine's interface addresses for TC54 self-address refusal. */
 export function instanceSelfAddresses(
@@ -32,6 +32,6 @@ export function openFizotBoxEgressGate(options: FizotBoxEgressOptions): Promise<
   const decideOptions: FizotEgressDecideOptions = { ...options.decideOptions, selfAddresses };
   return openBoxEgressGate({
     ...options,
-    decide: (target, addresses) => fizotBoxRefusal(target, addresses, decideOptions),
+    decide: (target, addresses) => fizotCloudRefusal(target, addresses, decideOptions),
   });
 }

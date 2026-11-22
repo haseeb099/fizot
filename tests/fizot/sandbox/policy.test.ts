@@ -5,6 +5,8 @@ import {
   classifyAddress,
   fizotBoxRefusal,
   fizotCloudEgressRules,
+  fizotCloudNameRefusal,
+  fizotCloudRefusal,
   isDnsExfilPort,
   isLiteralIp,
   isMetadataHostname,
@@ -57,10 +59,12 @@ it("refuses DNS/DoT exfil ports even when the destination address is public", as
   expect(isDnsExfilPort(53)).toBe(true);
   expect(isDnsExfilPort(853)).toBe(true);
   expect(isDnsExfilPort(443)).toBe(false);
+  expect(fizotCloudNameRefusal({ host: "8.8.8.8", port: 53 })).toBe("dns-exfil");
+  expect(fizotCloudNameRefusal({ host: "dns.google", port: 853 })).toBe("dns-exfil");
   const publicAddr = [{ address: "8.8.8.8", family: 4 }];
-  expect(await fizotBoxRefusal({ host: "8.8.8.8", port: 53 }, publicAddr)).toBe("dns-exfil");
+  expect(await fizotCloudRefusal({ host: "8.8.8.8", port: 53 }, publicAddr)).toBe("dns-exfil");
   expect(await fizotBoxRefusal({ host: "8.8.8.8", port: 853 }, publicAddr)).toBe("dns-exfil");
-  expect(await fizotBoxRefusal({ host: "8.8.8.8", port: 443 }, publicAddr)).toBeNull();
+  expect(await fizotCloudRefusal({ host: "8.8.8.8", port: 443 }, publicAddr)).toBeNull();
 });
 
 it("refuses metadata hostnames before relying on resolve", async () => {

@@ -252,11 +252,14 @@ describe("egress gate", () => {
       "--disable-sync",
       "--disable-default-apps",
       "--disable-domain-reliability",
+      "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+      "--dns-over-https-mode=off",
       "--use-mock-keychain",
     ]);
     expect(gateChromeFlags(4321, "linux").at(-1)).toBe("--password-store=basic");
     expect(gateChromeFlags(4321, "win32")).toContain("--disable-background-networking");
-    expect(gateChromeFlags(4321, "win32")).toHaveLength(9);
+    expect(gateChromeFlags(4321, "win32")).toContain("--dns-over-https-mode=off");
+    expect(gateChromeFlags(4321, "win32")).toHaveLength(11);
   });
 });
 

@@ -64,17 +64,28 @@ export function classifyAddress(address: string): AddressClass {
 }
 
 /**
- * Why a Fizot cloud box must refuse `target` given resolved `addresses`, or null to allow.
+ * Name-only Fizot Cloud refusals (before DNS lookup): DNS/DoT exfil ports and metadata host aliases.
+ * Used by both the box CONNECT gate and the browser SOCKS gate.
+ */
+export function fizotCloudNameRefusal(target: FizotEgressTarget): FizotEgressRefusal | null {
+  if (isDnsExfilPort(target.port)) return "dns-exfil";
+  if (isMetadataHostname(target.host)) return "metadata";
+  return null;
+}
+
+/**
+ * Why a Fizot Cloud egress path must refuse `target` given resolved `addresses`, or null to allow.
+ * Shared by the box CONNECT gate and the browser SOCKS gate so the two paths cannot drift.
  * Refuses when any address is non-public, when DNS/DoT ports are used, when the name is a
  * metadata alias, or when any address is this instance's own private address.
  */
-export async function fizotBoxRefusal(
+export async function fizotCloudRefusal(
   target: FizotEgressTarget,
   addresses: readonly ResolvedAddress[],
   options: FizotEgressDecideOptions = {},
 ): Promise<FizotEgressRefusal | null> {
-  if (isDnsExfilPort(target.port)) return "dns-exfil";
-  if (isMetadataHostname(target.host)) return "metadata";
+  const named = fizotCloudNameRefusal(target);
+  if (named) return named;
 
   const self = options.selfAddresses;
   if (self && self.size > 0) {
@@ -87,6 +98,8 @@ export async function fizotBoxRefusal(
   const base = await boxRefusal(target, addresses).catch(() => "error" as const);
   return base as FizotEgressRefusal | null;
 }
+
+export const fizotBoxRefusal = fizotCloudRefusal;
 
 /** Cloud box rules: public internet only; no local-network allow-list. */
 export function fizotCloudEgressRules() {

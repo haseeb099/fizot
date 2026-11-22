@@ -10,8 +10,21 @@ export { addressClass, ownAddresses, type AddressClass };
 /** `desktop`: the app on someone's computer. `server`: self-hosted (Docker, npm). `cloud`: a Fizot Cloud home. */
 export type EgressHost = "desktop" | "server" | "cloud";
 
-/** `home-network` and `port` come from the person's own computer when My Cloud's browsing goes out through it. */
-export type Refusal = "omb" | "this-computer" | "local-network" | "link-local" | "metadata" | "reserved" | "rebinding" | "reddit" | "home-network" | "port";
+/** `home-network` and `port` come from the person's own computer when My Cloud's browsing goes out through it.
+ * `dns-exfil` and `self-address` are Fizot Cloud extras applied on the browser SOCKS path (and the box CONNECT gate). */
+export type Refusal =
+  | "omb"
+  | "this-computer"
+  | "local-network"
+  | "link-local"
+  | "metadata"
+  | "reserved"
+  | "rebinding"
+  | "reddit"
+  | "home-network"
+  | "port"
+  | "dns-exfil"
+  | "self-address";
 
 /** How a refusal reads in the page-health line. */
 export const REFUSAL_TEXT: Record<Refusal, string> = {
@@ -25,6 +38,8 @@ export const REFUSAL_TEXT: Record<Refusal, string> = {
   reddit: "Reddit",
   "home-network": "the person's own computer or home network",
   port: "a port other than 80 and 443, which the person's computer does not open for bots",
+  "dns-exfil": "a DNS or DoT resolver through the egress gate",
+  "self-address": "this instance's own private address",
 };
 
 const family = (address: string) => (isIP(address) === 6 ? "ipv6" : "ipv4");

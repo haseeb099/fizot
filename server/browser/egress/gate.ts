@@ -44,6 +44,20 @@ export function credentialStoreFlags(platform: NodeJS.Platform = process.platfor
   return platform === "darwin" ? ["--use-mock-keychain"] : platform === "linux" ? ["--password-store=basic"] : [];
 }
 
+/**
+ * Chrome must not resolve names itself beside the SOCKS proxy: prefetch and Secure DNS would otherwise
+ * bypass the gate. MAP * ~NOTFOUND blocks local lookups; EXCLUDE 127.0.0.1 keeps the loopback SOCKS
+ * proxy reachable. `--dns-over-https-mode=off` stops Chrome upgrading remaining local lookups to DoH
+ * providers — page CONNECT still goes through SOCKS, so public HTTPS DoH endpoints remain a residual
+ * risk without a hostname policy (see docs/fizot/sandbox.md).
+ */
+export function gateChromeResolverFlags(): string[] {
+  return [
+    "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+    "--dns-over-https-mode=off",
+  ];
+}
+
 /** How a whole Chrome goes through the gate on `port`. */
 export function gateChromeSettings(port: number, platform: NodeJS.Platform = process.platform): { proxy: string; bypass: string; args: string[] } {
   return {
@@ -61,6 +75,7 @@ export function gateChromeSettings(port: number, platform: NodeJS.Platform = pro
       "--disable-sync",
       "--disable-default-apps",
       "--disable-domain-reliability",
+      ...gateChromeResolverFlags(),
       ...credentialStoreFlags(platform),
     ],
   };

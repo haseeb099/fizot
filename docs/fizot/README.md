@@ -1,6 +1,6 @@
 # Fizot developer commands
 
-Sandbox and egress: [`sandbox.md`](sandbox.md). Proxy credit metering: [`proxy.md`](proxy.md). J4 provider↔ledger reconcile (read-only): [`j4-reconcile.md`](j4-reconcile.md).
+Sandbox and egress: [`sandbox.md`](sandbox.md). Staging acceptance: [`p47-staging-acceptance.md`](p47-staging-acceptance.md). Hostname allow-list ADR (proposed): [`adr-egress-hostname-allowlist.md`](adr-egress-hostname-allowlist.md). Proxy credit metering: [`proxy.md`](proxy.md). J4 provider↔ledger reconcile (read-only): [`j4-reconcile.md`](j4-reconcile.md).
 
 From page 03 Cursor setup and rules. Node 24 or newer, pnpm 10.33, about 7 GB of heap for the full typecheck, on Linux or macOS.
 
