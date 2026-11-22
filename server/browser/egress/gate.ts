@@ -55,6 +55,12 @@ export function gateChromeSettings(port: number, platform: NodeJS.Platform = pro
       // chrome-headless-shell 153 the second; each ignores the other.
       "--webrtc-ip-handling-policy=disable_non_proxied_udp",
       "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+      // Spike A / P4.7: stop Chrome background phones-home that would need a wildcard google.com allow.
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-sync",
+      "--disable-default-apps",
+      "--disable-domain-reliability",
       ...credentialStoreFlags(platform),
     ],
   };

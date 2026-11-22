@@ -11,7 +11,8 @@ import { bridgedCommand, type BridgeTools } from "./bridge.ts";
 import { brokerRewrite } from "./broker-env.ts";
 import { openCredentialBroker, type BrokerGrant, type CredentialBroker } from "./broker.ts";
 import { detectBox, type BoxDetection, type BoxKind } from "./detect.ts";
-import { openBoxEgressGate, type BoxEgressGate } from "./egress-gate.ts";
+import type { BoxEgressGate } from "./egress-gate.ts";
+import { openFizotBoxEgressGate } from "../fizot/sandbox/egress.ts";
 import { boxEnvironment } from "./env.ts";
 import { openHarnessGate, type HarnessGate } from "./harness-gate.ts";
 import { DENIED_SYSCALLS, seccompBytes, seccompSupported } from "./seccomp.ts";
@@ -205,7 +206,8 @@ export class BotBox {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const egressSocket = join(dir, "egress.sock"), harnessSocket = join(dir, "harness.sock"), brokerSocket = join(dir, "broker.sock");
     for (const socket of [egressSocket, harnessSocket, brokerSocket]) rmSync(socket, { force: true });
-    this.egress = await openBoxEgressGate({ socketPath: egressSocket });
+    // Fizot cloud decide: public-only plus DNS/DoT port and self-address refusals (P4.7).
+    this.egress = await openFizotBoxEgressGate({ socketPath: egressSocket });
     this.harness = await openHarnessGate({ socketPath: harnessSocket, port: options.port });
     this.credentials = await openCredentialBroker({ socketPath: brokerSocket });
     this.seccompFile = writeSeccompFile(dir);

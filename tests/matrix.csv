@@ -23,8 +23,8 @@ SW-E,Sleep and wake,e2e,A chat after idle sleep (add this step to J2),J2,G4,plan
 PL-U,"Proxy, ledger and billing",unit,"Append-only ledger, 12-month expiry, idempotency key, metering, caps at 80% and 100%, VAT, one-hour virtual keys",none,G4,implemented,P4.3
 PL-I,"Proxy, ledger and billing",integration,"Stripe test mode with duplicate and out-of-order webhooks; proxy on a mock provider plus a small real xAI canary; ledger within 1% of proxy usage",none,G4,planned,P4.4
 PL-E,"Proxy, ledger and billing",e2e,"J4, J9","J4; J9",G4,planned,P4.4
-SE-U,Sandbox and egress,unit,Allow-list matcher; private-range and metadata blocks,none,"G2, G4",planned,P4.7
-SE-I,Sandbox and egress,integration,"Private ranges and metadata fail; DNS exfiltration blocked; sandbox cannot reach its own instance's private address; instance A cannot reach instance B","TC52; TC28; TC59","G2, G4",planned,P4.7
+SE-U,Sandbox and egress,unit,"Allow-list matcher; private/metadata/6PN/loopback blocks; DNS/DoT port refuse (TC53); self-address refuse (TC54); Slack relay fail-closed; BoxRunner env strip; Chrome background-network flags",none,"G2, G4",implemented,P4.7
+SE-I,Sandbox and egress,integration,"Private ranges and metadata fail; DNS exfiltration blocked; sandbox cannot reach its own instance's private address; instance A cannot reach instance B (Fly staging)","TC52; TC28; TC59","G2, G4",planned,P4.7
 SE-E,Sandbox and egress,e2e,"J2, J6","J2; J6","G2, G4",planned,P4.7
 PB-U,Permission broker and Ask mode,unit,"Payments, outgoing email, deletion and account changes are never auto-approved",none,G4,planned,PI3.1
 PB-I,Permission broker and Ask mode,integration,An unapproved action expires in 24 hours,none,G4,planned,PI3.1

@@ -7,6 +7,7 @@ import { isIP } from "node:net";
 import { BOT_PROFILE_PATCH_FIELDS } from "./bot-profile.ts";
 import type { Scope, SessionRecord, SessionRegistry } from "./sessions.ts";
 import { denyReason as companionDenial, isCompanionNotice } from "../companion/src/routes.ts";
+import { serviceRelayDenial, slackRelayTokenFromEnv } from "./fizot/sandbox/service-relay.ts";
 
 /** `owner`: the machine's owner. `service`: a shared server where every bot's shell is a loopback caller too,
  * so loopback without a session may reach only SERVICE_ALLOW. */
@@ -32,10 +33,8 @@ const SERVICE_SCOPES: readonly Scope[] = ["client"];
 /** What a `service`-trust loopback caller may reach: health and identity, the cloud Slack worker's routes (it
  * shares the workspace's network namespace), and the turn-scoped capability routes, whose bearer the handler checks.
  *
- * Open risk: a bot's shell is a loopback caller too, so it can do everything the Slack worker does: post into any
- * bot's thread through the guarded route, including an existing Full-access thread, open new Full-access threads
- * while the operator's shared Full access is on, stop a request and decline a card. Planned fix: a relay token only
- * the Slack worker holds, so these routes stop answering session-less loopback. */
+ * Mutating entries require `OMB_SLACK_RELAY_TOKEN` (P4.7): a bot's shell is a loopback caller too and must not
+ * post into Full-access threads without the worker-only relay bearer. */
 export const SERVICE_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/health$/ },
   { methods: ["GET"], path: /^\/api\/auth\/session$/ },
@@ -472,6 +471,11 @@ export interface ResolveOptions {
   cliOwnerToken?: string;
   /** resolveLoopbackTrust's `localBrowsers`: a development server lets this machine's browsers use loopback trust. */
   trustLocalBrowser?: boolean;
+  /**
+   * Worker-only bearer for mutating SERVICE_ALLOW routes under service trust (P4.7).
+   * Omit to read `OMB_SLACK_RELAY_TOKEN`; missing/short → fail closed on those writes.
+   */
+  slackRelayToken?: string | null;
   /** Why a session made for one task may not make this request (a Team Cloud's sign-in that moves one bot in), else null. */
   restricted?(session: SessionRecord, method: string, path: string, url: URL): string | null;
 }
@@ -585,6 +589,16 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
       if (!serviceAllowed(method, path)) {
         return deny(403, "forbidden: on this shared server a local request without a session may only use the service routes; sign in to change settings, people or access");
       }
+      const relayToken = options.slackRelayToken !== undefined
+        ? options.slackRelayToken
+        : slackRelayTokenFromEnv();
+      const relayDenied = serviceRelayDenial({
+        method,
+        path,
+        bearer: bearerToken(req.headers.authorization),
+        relayToken,
+      });
+      if (relayDenied) return deny(403, relayDenied);
       return { auth: { kind: "loopback", scopes: SERVICE_SCOPES, trust: "service" }, status: 401, error: "" };
     }
     return { auth: { kind: "loopback", scopes: LOOPBACK_SCOPES }, status: 401, error: "" };
