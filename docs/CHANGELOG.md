@@ -8,13 +8,13 @@ Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR
 
 ## CL-62 Provider pricing verification + J4 reconcile tooling (P4.3 / FZ-26)
 
-- Why we changed it: P4.3 still lacked recorded provider price observations and a fail-closed provider↔ledger reconciler that separates provider cost from customer markup. Green CI and fixture totals alone cannot pass J4.
-- How it works: `pricing-verification.ts` records live xAI catalog observations (2026-11-19); internal `grok-4-fast` / `grok-4` / `grok-4-heavy` stay `mismatched_unverified` and customer `pricing.ts` placeholders are unchanged. `j4-reconcile.ts` + `scripts/fizot/j4-reconcile.mjs` match provider-cost rows to Fizot provider-cost rows (≤1% drift), report customer charges separately, flag unmatched/duplicates/uncertain holds, and exit `INSUFFICIENT_EVIDENCE` when evidence is incomplete. Operator runbook: `docs/fizot/j4-reconcile.md`.
-- Why it is necessary: Enable honest pricing review and repeatable J4 evidence gathering without silently changing margins or inventing a PASS.
+- Why we changed it: P4.3 still lacked recorded provider price observations and a fail-closed provider↔ledger reconciler that separates provider cost from customer markup. Review of PR #36 also found request-id-only matching, aggregate drift that could hide offsetting per-request errors, and a boolean `evidenceComplete` flag that could not substantiate acceptance-grade evidence.
+- How it works: `pricing-verification.ts` records live xAI catalog observations (2026-11-19); internal `grok-4-fast` / `grok-4` / `grok-4-heavy` stay `mismatched_unverified` and customer `pricing.ts` placeholders are unchanged. `assertAllTierObserved` rejects verified observations that leave customer placeholders. `j4-reconcile.ts` matches on request id **plus** workspace, provider model, currency, tokens and provider request id; reports aggregate ≤1% drift and a blocking per-request material-discrepancy exception; requires a structured evidence package (legacy boolean alone → `INSUFFICIENT_EVIDENCE`); never claims independent verification. Operator runbook: `docs/fizot/j4-reconcile.md`.
+- Why it is necessary: Enable honest pricing review and repeatable J4 evidence gathering without silently changing margins, inventing joins, or marking J4 PASS from fixtures/boolean flags.
 - Impact: Tooling and docs only for customer money paths. No production deploy, Stripe, migrations, or automatic hold release.
 - Rollback? Revert the CL-62 commit(s) on `fz-26-p43-pricing-j4-reconcile`.
 - Files / Patch IDs: PATCH-53.
-- Related tasks: FZ-26 (P4.3). J4 remains INSUFFICIENT EVIDENCE without real provider billing exports. P4.3 and G4 remain in progress.
+- Related tasks: FZ-26 (P4.3). J4 remains INSUFFICIENT EVIDENCE without real independently verified provider billing exports. P4.3 and G4 remain in progress.
 
 ## CL-61 Credit hard cap, reservation recovery and 12-month expiry (P4.3 WP2 / FZ-26)
 

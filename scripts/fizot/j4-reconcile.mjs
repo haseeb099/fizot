@@ -4,16 +4,8 @@
  * Compares provider-cost evidence to Fizot-computed provider cost.
  * Never charges, refunds, or releases holds. Prints no prompts or keys.
  *
- * Input JSON:
- * {
- *   "period": "2026-11",
- *   "provider": "xai",
- *   "evidenceComplete": false,
- *   "comparisonBasis": "provider_cost_vs_fizot_provider_cost",
- *   "providerRows": [...],
- *   "ledgerRows": [...],
- *   "openHolds": [...]
- * }
+ * Requires a structured `evidence` package for tool PASS. Legacy
+ * `evidenceComplete: true` alone yields INSUFFICIENT_EVIDENCE.
  */
 import { readFileSync } from "node:fs";
 import { formatJ4Report, reconcileJ4 } from "../../server/fizot/proxy/j4-reconcile.ts";
@@ -29,7 +21,8 @@ const report = reconcileJ4({
   period: String(input.period ?? ""),
   provider: String(input.provider ?? "unknown"),
   comparisonBasis: input.comparisonBasis ?? "provider_cost_vs_fizot_provider_cost",
-  evidenceComplete: Boolean(input.evidenceComplete),
+  evidenceComplete: input.evidenceComplete,
+  evidence: input.evidence ?? null,
   providerRows: Array.isArray(input.providerRows) ? input.providerRows : [],
   ledgerRows: Array.isArray(input.ledgerRows) ? input.ledgerRows : [],
   openHolds: Array.isArray(input.openHolds) ? input.openHolds : [],
@@ -41,7 +34,14 @@ console.log(JSON.stringify({
   verdict: report.verdict,
   drift: report.drift,
   withinThreshold: report.withinThreshold,
+  aggregateSignedVarianceMicro: report.aggregateSignedVarianceMicro,
+  aggregateAbsoluteVarianceMicro: report.aggregateAbsoluteVarianceMicro,
+  maxPerRequestDrift: report.maxPerRequestDrift,
+  materialPerRequestCount: report.materialPerRequestCount,
+  discrepancyExposureMicro: report.discrepancyExposureMicro,
+  materialPerRequestPolicyTriggered: report.materialPerRequestPolicyTriggered,
   matched: report.matched.length,
+  mismatched: report.mismatched.length,
   unmatchedProvider: report.unmatchedProvider.length,
   unmatchedLedger: report.unmatchedLedger.length,
   duplicateProviderIds: report.duplicateProviderIds,
@@ -50,6 +50,7 @@ console.log(JSON.stringify({
   providerCostTotalMicro: report.providerCostTotalMicro,
   fizotProviderCostTotalMicro: report.fizotProviderCostTotalMicro,
   customerChargeTotalMicroGbp: report.customerChargeTotalMicroGbp,
+  evidenceAssessment: report.evidenceAssessment,
   reasons: report.reasons,
 }, null, 2));
 

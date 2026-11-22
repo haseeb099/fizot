@@ -99,14 +99,40 @@ export function observationForTier(tier: TierId): ProviderPriceObservation {
   return row;
 }
 
-export function assertAllTierObserved(table: readonly TierPrice[] = TIER_PRICES): void {
+export function assertAllTierObserved(
+  table: readonly TierPrice[] = TIER_PRICES,
+  observations: readonly ProviderPriceObservation[] = PROVIDER_PRICE_OBSERVATIONS,
+): void {
   for (const price of table) {
-    const observed = observationForTier(price.tier);
+    const observed = observations.find((item) => item.tier === price.tier);
+    if (!observed) throw new Error(`no price observation for ${price.tier}`);
     if (observed.internalModel !== price.model) {
       throw new Error(`observation model mismatch for ${price.tier}`);
     }
-    if (observed.status === "verified" && price.priceStatus !== "placeholder_unverified") {
-      // reserved for a future verified customer table
+    if (observed.status === "verified") {
+      if (observed.observedProviderModel == null) {
+        throw new Error(`tier ${price.tier} verified observation missing provider model`);
+      }
+      if (
+        observed.observedInputUsdPerMillion == null
+        || observed.observedOutputUsdPerMillion == null
+      ) {
+        throw new Error(`tier ${price.tier} verified observation missing rates`);
+      }
+      if (price.priceStatus === "placeholder_unverified") {
+        throw new Error(
+          `tier ${price.tier} observation is verified but customer price remains placeholder_unverified`,
+        );
+      }
+    }
+  }
+  for (const observed of observations) {
+    if (
+      observed.status !== "verified"
+      && observed.status !== "mismatched_unverified"
+      && observed.status !== "placeholder_unverified"
+    ) {
+      throw new Error(`tier ${observed.tier} has unknown observation status`);
     }
   }
 }

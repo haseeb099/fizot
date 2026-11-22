@@ -40,7 +40,7 @@ At 80% of included credit for the UTC month the proxy writes one alert for that 
 
 `FIZOT_PROXY_DISABLED=1` and `POST /admin/proxy/kill` (header `x-fizot-admin-secret`) stop provider traffic on the next request. `POST /admin/workspaces/:id/credit/grants` uses the same secret. `GET /admin/workspaces/:id/credit` is member+ and returns balance and period usage only.
 
-Ledger rows are append-only (trigger rejects `UPDATE` and `DELETE`). `scripts/fizot/ledger-reconcile.mjs` compares a ledger total with a provider fixture and fails when drift is over 1%. Row-level J4 reconciliation is `scripts/fizot/j4-reconcile.mjs` (provider cost vs Fizot provider cost; see `docs/fizot/j4-reconcile.md`). Customer markup charges are reported separately and must not be compared directly to provider USD.
+Ledger rows are append-only (trigger rejects `UPDATE` and `DELETE`). `scripts/fizot/ledger-reconcile.mjs` compares a ledger total with a provider fixture and fails when drift is over 1%. Row-level J4 reconciliation is `scripts/fizot/j4-reconcile.mjs` (provider cost vs Fizot provider cost; multi-dimension match; per-request material drift exception; structured evidence package — see `docs/fizot/j4-reconcile.md`). Customer markup charges are reported separately and must not be compared directly to provider USD. Legacy `evidenceComplete: true` alone cannot produce an acceptance-grade PASS.
 
 ### Provider price verification (not yet customer pricing)
 

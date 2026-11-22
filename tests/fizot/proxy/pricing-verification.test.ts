@@ -62,3 +62,18 @@ it("rounds currency conversion boundaries deterministically", () => {
   expect(tokensToMicroUsd(1, 0.5)).toBe(1);
   expect(tokensToMicroUsd(2, 0.5)).toBe(1);
 });
+
+it("rejects verified observations that still leave customer prices as placeholders", () => {
+  const verifiedObs = PROVIDER_PRICE_OBSERVATIONS.map((row) =>
+    row.tier === "fast"
+      ? {
+        ...row,
+        status: "verified" as const,
+        observedProviderModel: "grok-4.3",
+        observedInputUsdPerMillion: 1.25,
+        observedOutputUsdPerMillion: 2.5,
+      }
+      : row
+  );
+  expect(() => assertAllTierObserved(TIER_PRICES, verifiedObs)).toThrow(/placeholder_unverified/);
+});
