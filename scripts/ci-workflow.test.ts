@@ -339,7 +339,7 @@ describe("CI concurrency", () => {
             required: false,
             default: "home",
             type: "choice",
-            options: ["home", "team", "erase"],
+            options: ["home", "team", "erase", "isolation"],
           },
         },
       },

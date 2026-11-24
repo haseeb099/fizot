@@ -6,6 +6,7 @@
  * isolation → sleep refused → remove member deletes private chat → destroy.
  * mode=erase (J8): create workspace + data → delete → assert Fly 404, volume gone,
  * DB rows gone, receipt complete, remainingCount 0; also user-level erase with two workspaces.
+ * mode=isolation (P4.7 SE-I): delegates to fly-staging-isolation.mjs (two tenants A/B).
  * Uses FLY_API_TOKEN from the environment only. Never prints the token or bootstrap secret.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -46,13 +47,23 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+if (MODE === "isolation") {
+  const isolationScript = fileURLToPath(new URL("./fly-staging-isolation.mjs", import.meta.url));
+  const child = spawnSync(process.execPath, ["--experimental-strip-types", isolationScript], {
+    stdio: "inherit",
+    env: process.env,
+    cwd: ROOT,
+  });
+  process.exit(child.status ?? 1);
+}
+
 const token = process.env.FLY_API_TOKEN?.trim() ?? "";
 const org = resolveFlyOrg();
 const region = process.env.FLY_REGION?.trim() ?? "lhr";
 const image = process.env.FIZOT_MACHINE_IMAGE?.trim() ?? "";
 
 if (MODE !== "home" && MODE !== "team" && MODE !== "erase") {
-  console.error(`FIZOT_ROUNDTRIP_MODE must be home, team, or erase (got ${MODE})`);
+  console.error(`FIZOT_ROUNDTRIP_MODE must be home, team, erase, or isolation (got ${MODE})`);
   process.exit(2);
 }
 if (!token) {
