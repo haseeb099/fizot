@@ -37,6 +37,7 @@ Prompt-injected shells are the main threat on a hosted workspace. Application UR
 | Browser / box refusal rules | `server/browser/egress/policy.ts`, `server/bot-box/egress-gate.ts` |
 | Shared Fizot Cloud decide | `server/fizot/sandbox/policy.ts` (`fizotCloudRefusal` / `fizotCloudNameRefusal`) |
 | SE-I isolation harness | `server/fizot/sandbox/isolation-harness.ts` + `FIZOT_ROUNDTRIP_MODE=isolation` |
+| Staging safety | `server/fizot/admin/staging-safety.ts` (run manifest, preflight, run-scoped cleanup) |
 | Box wiring | `server/fizot/sandbox/egress.ts` |
 | Browser SOCKS Cloud wiring | `server/browser/egress/registry.ts` |
 | Slack relay fail-closed | `server/fizot/sandbox/service-relay.ts` → `request-auth.ts` |

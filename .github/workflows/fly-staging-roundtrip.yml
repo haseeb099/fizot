@@ -1,5 +1,8 @@
-# S2.11 real Fly staging round trip + S2.10 cost probe hooks.
+# S2.11 real Fly staging round trip + S2.10 cost probe hooks + P4.7 isolation.
 # Manual only. Not on the daily gate. Requires repo secret FLY_API_TOKEN.
+# Concurrency: one staging run per Fly org. cancel-in-progress=false so an
+# in-flight job can still reach its always() run-scoped cleanup.
+# Limitation: does not protect against local flyctl or other repos/operators.
 name: Fizot Fly staging roundtrip
 
 on:
@@ -25,6 +28,10 @@ on:
           - erase
           - isolation
 
+concurrency:
+  group: fizot-fly-staging-${{ inputs.fly_org }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -40,6 +47,7 @@ jobs:
       FLY_REGION: ${{ inputs.fly_region }}
       FIZOT_ROUNDTRIP_MODE: ${{ inputs.mode }}
       FLY_IMAGE_APP: fizot-home-image
+      FLY_STAGING_RUN_MANIFEST: artifacts/fly-staging/run-manifest.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,6 +78,9 @@ jobs:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Read-only staging preflight
+        run: node --experimental-strip-types scripts/fizot/fly-staging-preflight.mjs
+
       - name: Ensure image app and push cloud-home
         run: |
           set -euo pipefail
@@ -84,14 +95,14 @@ jobs:
           docker push "registry.fly.io/${FLY_IMAGE_APP}:staging"
           echo "FIZOT_MACHINE_IMAGE=registry.fly.io/${FLY_IMAGE_APP}:staging" >> "$GITHUB_ENV"
 
-      - name: Staging round trip (home or team/J10)
+      - name: Staging round trip (home / team / erase / isolation)
         run: node --experimental-strip-types scripts/fizot/fly-staging-roundtrip.mjs
 
-      - name: Force cleanup leftover staging apps from this run
+      - name: Run-scoped cleanup for this workflow run
         if: always()
         run: node --experimental-strip-types scripts/fizot/fly-staging-cleanup.mjs
         env:
-          FLY_STAGING_MAX_AGE_MS: "0"
+          FLY_STAGING_CLEANUP_MODE: run-scoped
 
       - name: Upload Fly staging + S2.10 artifacts
         if: always()

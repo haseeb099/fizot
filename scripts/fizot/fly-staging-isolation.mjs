@@ -31,10 +31,30 @@ import {
   parseNetworkProbeOutput,
   runIsolationCases,
 } from "../../server/fizot/sandbox/isolation-harness.ts";
+import {
+  createEmptyRunManifest,
+  isolationAcceptanceOk,
+  recordCreatedApp,
+  resolveRunManifestPath,
+  writeRunManifestFile,
+} from "../../server/fizot/admin/staging-safety.ts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ARTIFACTS = path.join(ROOT, "artifacts", "fly-staging");
 mkdirSync(ARTIFACTS, { recursive: true });
+const MANIFEST_PATH = resolveRunManifestPath(process.env, ROOT);
+let runManifest = createEmptyRunManifest({
+  flyOrg: resolveFlyOrg(),
+  mode: "isolation",
+  workflowRunId: process.env.GITHUB_RUN_ID?.trim() || null,
+});
+writeRunManifestFile(MANIFEST_PATH, runManifest);
+
+function persistCreatedApp(name) {
+  runManifest = recordCreatedApp(runManifest, name);
+  writeRunManifestFile(MANIFEST_PATH, runManifest);
+  log("run_manifest_recorded", { appName: name, appNames: runManifest.appNames });
+}
 
 const HEALTH_DEADLINE_MS = 8 * 60_000;
 const EARLY_FAIL_MS = 3 * 60_000;
@@ -270,6 +290,7 @@ try {
     appName = body.workspace.appName;
     flyMachineId = body.workspace.flyMachineId ?? "";
     trackedAppNames.add(appName);
+    persistCreatedApp(appName);
     assertStagingTargetSafe({ org, appNames: [appName], env: process.env });
     const stored = await admin.services.store.get(workspaceId);
     if (!stored) throw new Error(`tenant ${label} missing from store after create`);
@@ -404,7 +425,10 @@ try {
     note: "isolation mode: two machines for bounded probe window",
     projectedDaily: projection,
   };
-  report.ok = evidence.summary.overall === "PASS" && cleanup.outcome === "ok";
+  report.ok = isolationAcceptanceOk({
+    probeOverall: evidence.summary.overall,
+    cleanupOutcome: cleanup.outcome,
+  });
   if (evidence.summary.overall !== "PASS") {
     throw new Error(`isolation overall=${evidence.summary.overall} (see isolation-evidence.json)`);
   }

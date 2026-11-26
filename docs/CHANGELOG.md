@@ -6,6 +6,16 @@ Notion assigns the CL number. This file uses those ids. The pin entry was first 
 
 Patch titles in `docs/PATCH_REGISTRY.md` are PATCH-n. Notion's auto-increment PR column differs: PATCH-1 is Notion PR 10, PATCH-2 is PR 11, PATCH-3 is PR 12, PATCH-4 is PR 13, PATCH-5 is PR 14, PATCH-6 is PR 15, PATCH-7 is PR 16, PATCH-8 is PR 17, PATCH-9 is PR 18, PATCH-10 is PR 19, PATCH-11 is PR 20, PATCH-12 is PR 21, PATCH-13 is PR 22, PATCH-14 is PR 23, PATCH-15 is PR 24, PATCH-16 is PR 25, PATCH-17 is PR 26, PATCH-18 is PR 27, PATCH-19 is PR 28, PATCH-20 is PR 29, PATCH-21 is PR 30, PATCH-22 is PR 31, PATCH-23 is PR 32, PATCH-24 is PR 33, PATCH-25 is PR 34, PATCH-26 is PR 35, PATCH-27 is PR 36, PATCH-28 is PR 37, PATCH-29 is PR 38, PATCH-30 is PR 39, PATCH-31 is PR 40, PATCH-32 is PR 41.
 
+## CL-66 Fly staging run-scoped cleanup, preflight, concurrency (P4.7 / FZ-30)
+
+- Why we changed it: Roundtrip leftover cleanup used `FLY_STAGING_MAX_AGE_MS=0`, which could destroy every `fizot-cm-*` app in the org, including another run’s resources.
+- How it works: `staging-safety.ts` owns run manifests, preflight inventory fail-closed, run-scoped destroy selection, and refuses age cleanup with maxAge 0. Workflows gain org concurrency (`cancel-in-progress: false`), a read-only preflight before image build, and `always()` run-scoped cleanup. Scheduled cleanup stays age/24h with the same concurrency group. Isolation acceptance requires probe PASS **and** cleanup ok.
+- Why it is necessary: First live SE-I run must not race or wipe sibling staging apps; failed cleanup must not look like acceptance.
+- Impact: No production deploy. No live Fly run in this change. SE-I remains planned.
+- Rollback? Revert the CL-66 commit(s) on `fz-30-p47-staging-safety`.
+- Files / Patch IDs: PATCH-57.
+- Related tasks: FZ-30 (P4.7). P4.7 / G4 still incomplete.
+
 ## CL-65 Fly staging isolation acceptance harness (P4.7 SE-I / FZ-30)
 
 - Why we changed it: SE-I needed a safe, repeatable two-tenant staging harness for TC28/TC52/TC54/TC59 without treating timeouts as policy refusals or assuming `fizot-net-*` names prove isolation.

@@ -344,11 +344,33 @@ describe("CI concurrency", () => {
         },
       },
     });
+    expect(roundtrip.concurrency).toEqual({
+      group: "fizot-fly-staging-${{ inputs.fly_org }}",
+      "cancel-in-progress": false,
+    });
     expect(roundtrip.jobs["fly-staging-roundtrip"].env.FIZOT_ROUNDTRIP_MODE).toBe("${{ inputs.mode }}");
+    expect(roundtrip.jobs["fly-staging-roundtrip"].env.FLY_STAGING_RUN_MANIFEST).toBe(
+      "artifacts/fly-staging/run-manifest.json",
+    );
+    const roundtripSteps = JSON.stringify(roundtrip.jobs["fly-staging-roundtrip"].steps);
+    expect(roundtripSteps).toContain("fly-staging-preflight.mjs");
+    expect(roundtripSteps).toContain('"FLY_STAGING_CLEANUP_MODE":"run-scoped"');
+    expect(roundtripSteps).not.toContain("FLY_STAGING_MAX_AGE_MS");
+    const cleanupStep = roundtrip.jobs["fly-staging-roundtrip"].steps.find(
+      (s: { name?: string }) => s.name === "Run-scoped cleanup for this workflow run",
+    );
+    expect(cleanupStep?.if).toBe("always()");
+    expect(cleanupStep?.env?.FLY_STAGING_CLEANUP_MODE).toBe("run-scoped");
     expect(Object.keys(workflow.jobs)).not.toContain("fly-staging-roundtrip");
     const cleanup = parse(readFileSync(new URL("../.github/workflows/fly-staging-cleanup.yml", import.meta.url), "utf8"));
     expect(cleanup.on).toHaveProperty("workflow_dispatch");
     expect(cleanup.on).toHaveProperty("schedule");
+    expect(cleanup.concurrency).toEqual({
+      group: "fizot-fly-staging-${{ inputs.fly_org || vars.FLY_ORG || 'fizot' }}",
+      "cancel-in-progress": false,
+    });
+    expect(cleanup.jobs.cleanup.env.FLY_STAGING_CLEANUP_MODE).toBe("age");
+    expect(cleanup.jobs.cleanup.env.FLY_STAGING_MAX_AGE_MS).toBe("86400000");
     expect(Object.keys(workflow.jobs)).not.toContain("cleanup");
     expect(cleanup.jobs.cleanup.env.FLY_ORG).toContain("fizot");
     expect(cleanup.jobs.cleanup.env.FLY_ORG).not.toContain("fizot-staging");

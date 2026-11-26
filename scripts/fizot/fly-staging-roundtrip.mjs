@@ -27,10 +27,17 @@ import {
   MAX_PROBE_MACHINE_SECONDS,
   describeFetchError,
 } from "../../server/fizot/admin/index.ts";
+import {
+  createEmptyRunManifest,
+  recordCreatedApp,
+  resolveRunManifestPath,
+  writeRunManifestFile,
+} from "../../server/fizot/admin/staging-safety.ts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ARTIFACTS = path.join(ROOT, "artifacts", "fly-staging");
 mkdirSync(ARTIFACTS, { recursive: true });
+const MANIFEST_PATH = resolveRunManifestPath(process.env, ROOT);
 
 const HEALTH_DEADLINE_MS = 8 * 60_000;
 const EARLY_FAIL_MS = 3 * 60_000;
@@ -81,6 +88,20 @@ if (!image) {
 
 console.log(formatCostProjection(projectDailyCost({})));
 log("cost_projection_printed", { mode: MODE });
+
+let runManifest = createEmptyRunManifest({
+  flyOrg: org,
+  mode: MODE,
+  workflowRunId: process.env.GITHUB_RUN_ID?.trim() || null,
+});
+writeRunManifestFile(MANIFEST_PATH, runManifest);
+
+function persistCreatedApp(name) {
+  if (!name) return;
+  runManifest = recordCreatedApp(runManifest, name);
+  writeRunManifestFile(MANIFEST_PATH, runManifest);
+  log("run_manifest_recorded", { appName: name, appNames: runManifest.appNames });
+}
 
 const fly = createFlyMachinesClient({ token, org });
 const admin = await createAdminServer({
@@ -335,6 +356,7 @@ try {
     workspaceId = createdBody.workspace.id;
     appName = createdBody.workspace.appName;
     flyMachineId = createdBody.workspace.flyMachineId ?? "";
+    persistCreatedApp(appName);
     report.steps.push(log("create", { status: created.status, workspaceId, appName, flyMachineId }));
 
     const stored = await admin.services.store.get(workspaceId);
@@ -386,6 +408,7 @@ try {
     const idA = wsABody.workspace.id;
     appName = wsABody.workspace.appName;
     workspaceId = idA;
+    persistCreatedApp(appName);
     await waitForHealth();
 
     const other = await signIn("other-j8@fizot.test");
@@ -402,6 +425,7 @@ try {
     const wsBBody = await wsB.json();
     if (!wsB.ok) throw new Error(`wsB create failed: ${wsB.status}`);
     const idB = wsBBody.workspace.id;
+    persistCreatedApp(wsBBody.workspace.appName);
     // Invite OWNER as member of B so erase leaves B intact.
     const inv = await fetch(`${admin.url}/admin/workspaces/${idB}/invites`, {
       method: "POST",
@@ -454,6 +478,7 @@ try {
     sessionCookie = other.cookie;
     workspaceId = idB;
     appName = bStill.appName;
+    persistCreatedApp(appName);
     await eraseWorkspaceAndAssert(idB, bStill.appName, other.cookie);
     workspaceId = "";
     appName = "";
@@ -495,6 +520,7 @@ try {
     workspaceId = createdBody.workspace.id;
     appName = createdBody.workspace.appName;
     flyMachineId = createdBody.workspace.flyMachineId ?? "";
+    persistCreatedApp(appName);
     report.steps.push(log("create", {
       status: created.status,
       workspaceId,
@@ -667,6 +693,7 @@ try {
     workspaceId = createdBody.workspace.id;
     appName = createdBody.workspace.appName;
     flyMachineId = createdBody.workspace.flyMachineId ?? "";
+    persistCreatedApp(appName);
     report.steps.push(log("create", { status: created.status, workspaceId, appName, flyMachineId }));
 
     const stored = await admin.services.store.get(workspaceId);
