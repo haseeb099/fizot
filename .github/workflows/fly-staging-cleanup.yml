@@ -1,4 +1,7 @@
-# 24-hour cleanup for Fizot staging Fly apps (Gate G0b). Manual or daily.
+# 24-hour orphan cleanup for Fizot staging Fly apps (Gate G0b). Manual or daily.
+# Age mode only (never MAX_AGE_MS=0). Shares concurrency with roundtrip so an
+# in-flight staging run is not cleaned underfoot. cancel-in-progress=false.
+# Limitation: does not protect against local flyctl or other repos/operators.
 # Not on the daily gate. Requires repo secret FLY_API_TOKEN.
 name: Fizot Fly staging cleanup (24h)
 
@@ -13,6 +16,10 @@ on:
     # Once a day — destroy fizot-cm-* apps older than 24 hours.
     - cron: "17 4 * * *"
 
+concurrency:
+  group: fizot-fly-staging-${{ inputs.fly_org || vars.FLY_ORG || 'fizot' }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   issues: write
@@ -26,6 +33,8 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       # Prefer dispatch input → repo variable → real org slug "fizot".
       FLY_ORG: ${{ inputs.fly_org || vars.FLY_ORG || 'fizot' }}
+      FLY_STAGING_CLEANUP_MODE: age
+      FLY_STAGING_MAX_AGE_MS: "86400000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
